@@ -90,7 +90,7 @@ fn spawn_terrain(
     chunks: &[progressus_app::ChunkSnapshot],
     origin: WorldCell,
 ) -> Entity {
-    let mut root = commands.spawn((TerrainRoot, Transform::default()));
+    let mut root = commands.spawn((TerrainRoot, Transform::default(), Visibility::default()));
     let root_id = root.id();
     root.with_children(|parent| {
         for chunk in chunks {
@@ -234,5 +234,38 @@ pub(crate) fn camera_controls(
             orthographic.scale = (orthographic.scale * 0.9_f32.powf(scroll))
                 .clamp(MIN_CAMERA_SCALE, MAX_CAMERA_SCALE);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::ecs::world::{CommandQueue, World};
+    use bevy::prelude::Visibility;
+    use progressus_app::{ChunkSnapshot, Terrain};
+
+    use super::{CHUNK_SIDE, LocalCell, spawn_terrain};
+
+    #[test]
+    fn terrain_root_has_visibility_for_sprite_children() {
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        let chunks = [ChunkSnapshot {
+            coordinate: progressus_app::ChunkCoord::new(0, 0),
+            side: CHUNK_SIDE,
+            cells: vec![Terrain::Grass; usize::from(CHUNK_SIDE) * usize::from(CHUNK_SIDE)],
+        }];
+        let root = {
+            let mut commands = bevy::prelude::Commands::new(&mut queue, &world);
+            spawn_terrain(
+                &mut commands,
+                &chunks,
+                progressus_app::ChunkCoord::new(0, 0)
+                    .world_cell(LocalCell::new(0, 0))
+                    .unwrap(),
+            )
+        };
+        queue.apply(&mut world);
+
+        assert!(world.entity(root).contains::<Visibility>());
     }
 }
