@@ -6,7 +6,7 @@
 
 **Architecture:** `progressus-sim` owns a single persistent direction per character and applies at most one checked, terrain-validated step per tick. `progressus-app` validates and accepts commands before mutating the state and publishes detached movement snapshots. `progressus-headless` remains an external controller: its bounded deterministic walker observes snapshots, picks one adjacent grass cell, and issues ordinary commands without giving simulation a route or a pathfinding algorithm.
 
-**Tech Stack:** Rust 2024 workspace, Rust standard library only, `BTreeMap` authoritative character storage, `BTreeSet` walker-local visited cells, integration tests, Bash dependency-boundary guard.
+**Tech Stack:** Rust 2024 workspace, Rust standard library only, `BTreeMap` authoritative character storage and walker-local visit counts, integration tests, Bash dependency-boundary guard.
 
 ## Global Constraints
 
@@ -31,7 +31,7 @@
 - Modify `crates/progressus-app/src/lib.rs`: add movement commands and forward them without exposing simulation storage.
 - Modify `crates/progressus-app/src/read_model.rs`: copy movement into `CharacterSnapshot`.
 - Modify `crates/progressus-app/tests/client_boundary.rs`: test the command/read-model contract through `Application`.
-- Modify `crates/progressus-headless/src/main.rs`: parse `--travel-chunks N` and implement the bounded external walker.
+- Modify `crates/progressus-headless/src/main.rs`: parse `--travel-chunks N` and implement the bounded least-visited external walker.
 - Modify `crates/progressus-headless/tests/cli.rs`: test the deterministic long-travel CLI scenario and argument validation.
 - Modify `README.md`, `docs/architecture/overview.md`, and `docs/milestones/prototype-01.md`: document the exact bootstrap status without claiming full navigation or residency.
 
@@ -247,8 +247,8 @@ Keep the existing `--seed --ticks` smoke test. Add:
 ```rust
 #[test]
 fn travel_chunks_crosses_many_boundaries_deterministically() {
-    let first = headless_command().args(["--seed", "42", "--travel-chunks", "64"]).output().unwrap();
-    let second = headless_command().args(["--seed", "42", "--travel-chunks", "64"]).output().unwrap();
+    let first = headless_command().args(["--seed", "0", "--travel-chunks", "64"]).output().unwrap();
+    let second = headless_command().args(["--seed", "0", "--travel-chunks", "64"]).output().unwrap();
     assert!(first.status.success());
     assert_eq!(first.stdout, second.stdout);
     let stdout = String::from_utf8(first.stdout).unwrap();
@@ -264,7 +264,7 @@ fn travel_chunks_requires_a_positive_count() {
 }
 ```
 
-If seed 42 cannot meet the bounded walker criterion, use a deterministic fixed seed discovered by a test-only probe, record it in this test, and do not add any seed search to the binary or simulation.
+Use seed 0 as the fixed long-traversal fixture. It crosses 64 boundaries in 5,213 steps under the 32,768-step bound. Do not add seed search to the binary or simulation.
 
 - [ ] **Step 2: Run the CLI tests and observe the red state**
 
@@ -276,15 +276,15 @@ Expected: the travel scenario is rejected as an unknown argument.
 
 Extend `Config` with `travel_chunks: Option<u64>`; preserve `--ticks` as required only when travel mode is absent. In travel mode, reject zero and checked-multiplication overflow with explicit `CliError`s. Derive the target character once from the initial detached snapshot by stable ID 3.
 
-For each step, obtain the four candidate neighbor cells with `Direction::adjacent`; query precisely the unique `ChunkCoord`s returned by `WorldCell::split`; locate terrain by matching the queried chunk coordinate and calling `ChunkSnapshot::terrain_at`. Choose the first grass candidate in fixed `[East, North, South, West]` order whose `WorldCell` is not in the walker-local `BTreeSet<WorldCell>`. Insert only the authoritative post-tick position into that set. Then send `SetMovementDirection`, advance exactly one tick, get a fresh snapshot, and require the position to equal the selected cell.
+From the first authoritative snapshot, initialize walker-local `BTreeMap<WorldCell, u64>` with the starting position at count 1. For each step, obtain the four candidate neighbor cells with `Direction::adjacent`; query precisely the unique `ChunkCoord`s returned by `WorldCell::split`; locate terrain by matching the queried chunk coordinate and calling `ChunkSnapshot::terrain_at`. Among grass candidates choose the smallest count returned by `visit_counts.get(&cell).copied().unwrap_or(0)`; resolve equal counts by the fixed `[East, North, South, West]` iteration order. Then send `SetMovementDirection`, advance exactly one tick, get a fresh snapshot, require the position to equal the selected cell, and increment only the count for that actual authoritative position. Do not count merely selected candidates.
 
-Compute start and current chunk x with `WorldCell::split`. Increment a local `crossed_boundaries` only when the current chunk x becomes greater than the maximum previously seen value; stop only at `crossed_boundaries >= requested`. The max steps is `max(1_024, requested.checked_mul(512).ok_or_else(|| CliError("travel chunk count is too large".to_owned()))?)`. On no candidate, rejected command, position mismatch, or exhaustion, return an error naming seed, ID, current position, maximum chunk x, and steps. Do not retain a route, destination frontier, cost, heuristic, or direct character reference.
+Compute start and current chunk x with `WorldCell::split`. Increment a local `crossed_boundaries` only when the current chunk x becomes greater than the maximum previously seen value; stop only at `crossed_boundaries >= requested`. The max steps is `max(1_024, requested.checked_mul(512).ok_or_else(|| CliError("travel chunk count is too large".to_owned()))?)`. On no candidate, rejected command, position mismatch, or exhaustion, return an error naming seed, ID, current position, maximum chunk x, crossed boundaries, and steps. Do not retain a route, destination frontier, open/closed set, destination search, BFS, Dijkstra, A*, path-cost heuristic, or direct character reference.
 
 - [ ] **Step 4: Verify the external traversal proof**
 
-Run: `cargo fmt --all -- --check && cargo clippy -p progressus-headless --all-targets -- -D warnings && cargo test -p progressus-headless && cargo run -p progressus-headless -- --seed 42 --travel-chunks 64`
+Run: `cargo fmt --all -- --check && cargo clippy -p progressus-headless --all-targets -- -D warnings && cargo test -p progressus-headless && cargo run -p progressus-headless -- --seed 0 --travel-chunks 64`
 
-Expected: the CLI test passes with byte-identical output on repeated executions and the manual scenario reports crossing 64 boundaries with character ID 3.
+Expected: the CLI test passes with byte-identical output on repeated executions and the manual scenario reports `crossed_boundaries=64`, `steps=5213`, and character ID 3.
 
 - [ ] **Step 5: Commit the headless scenario**
 

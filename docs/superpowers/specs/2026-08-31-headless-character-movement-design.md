@@ -81,12 +81,12 @@ All movement intent enters through `Application::execute`; snapshots remain deta
 `progressus-headless` gains an optional `--travel-chunks <positive count>` scenario. It uses only `progressus-app` commands and snapshots:
 
 1. read the active character and terrain of its adjacent cells through a bounded snapshot query;
-2. choose one grass neighbor using fixed priority `East`, `North`, `South`, `West`;
-3. prefer a step not previously visited by the harness, so it does not oscillate locally;
-4. send `SetMovementDirection`, advance exactly one tick, and take a new snapshot;
+2. consider only grass neighbors and choose the one with the lowest walker-local `visit_count`;
+3. break equal visit counts using fixed priority `East`, `North`, `South`, `West`;
+4. send `SetMovementDirection`, advance exactly one tick, take a new snapshot, and increment `visit_count` only for the authoritative cell actually reached;
 5. stop successfully only when the character has crossed at least the requested number of positive chunk-x boundaries from its starting chunk.
 
-The walker stores only visited cells and progress counters for the active scenario; it does not precompute or pass a full route to simulation. It has no frontier, cost model, heuristic, destination search, or authority over character state. It is a bounded external test driver, not a pathfinding system.
+The walker initializes the starting authoritative cell with `visit_count = 1`, then stores only a local `BTreeMap<WorldCell, visit_count>` and progress counters for the active scenario; it does not precompute or pass a full route to simulation. It has no frontier, open/closed set, destination search, BFS, Dijkstra, A*, path-cost heuristic, or authority over character state. Its visit count is only a deterministic local tie-break rule for the next adjacent step. It is a bounded external test driver, not a pathfinding system.
 
 The scenario has a fixed step limit of `max(1_024, requested_chunk_count * 512)`, with checked multiplication. Exhausting it, finding no unvisited grass neighbor, or observing a failed authoritative step returns a diagnostic error containing the seed, character ID, position, maximum reached chunk x-coordinate, and step count. For a fixed seed and initial snapshot, candidate order and command sequence are deterministic.
 
@@ -103,7 +103,7 @@ The test suite must prove:
 7. a headless external walker crosses many positive chunk boundaries within its deterministic bound while keeping the same `EntityId`;
 8. the existing worldgen, application, headless, and dependency-boundary tests remain green.
 
-Tests may search deterministic candidate seeds in harness setup to select a fixed successful long-traversal fixture. The production simulation must not contain that search logic.
+The long-traversal fixture is seed 0: the least-visited walker crosses 64 positive chunk boundaries in 5,213 steps under the 32,768-step bound. The production simulation must not contain seed search or walker logic.
 
 ## Documentation status
 
