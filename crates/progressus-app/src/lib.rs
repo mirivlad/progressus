@@ -6,8 +6,8 @@ mod read_model;
 use progressus_sim::{Simulation, SimulationError};
 
 pub use progressus_sim::{
-    CHUNK_SIDE, ChunkCoord, EntityId, LocalCell, SimulationTick, Terrain, WorldCell, WorldSeed,
-    WorldgenVersion,
+    CHUNK_SIDE, ChunkCoord, Direction, EntityId, LocalCell, MovementState, SimulationTick, Terrain,
+    WorldCell, WorldSeed, WorldgenVersion,
 };
 pub use read_model::{CharacterSnapshot, ChunkSnapshot, ClientSnapshot};
 
@@ -18,7 +18,16 @@ pub struct NewGameOptions {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Command {
-    AdvanceTicks { count: u64 },
+    AdvanceTicks {
+        count: u64,
+    },
+    SetMovementDirection {
+        character_id: EntityId,
+        direction: Direction,
+    },
+    StopMovement {
+        character_id: EntityId,
+    },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -41,6 +50,15 @@ impl Application {
     pub fn execute(&mut self, command: Command) -> Result<(), ApplicationError> {
         match command {
             Command::AdvanceTicks { count } => self.simulation.advance_ticks(count)?,
+            Command::SetMovementDirection {
+                character_id,
+                direction,
+            } => self
+                .simulation
+                .set_movement_direction(character_id, direction)?,
+            Command::StopMovement { character_id } => {
+                self.simulation.stop_movement(character_id)?
+            }
         }
         Ok(())
     }

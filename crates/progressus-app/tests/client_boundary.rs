@@ -1,6 +1,7 @@
 use progressus_app::{
-    Application, CHUNK_SIDE, CharacterSnapshot, ChunkCoord, Command, EntityId, LocalCell,
-    NewGameOptions, SimulationTick, SnapshotQuery, Terrain, WorldCell, WorldSeed, WorldgenVersion,
+    Application, CHUNK_SIDE, CharacterSnapshot, ChunkCoord, Command, Direction, EntityId,
+    LocalCell, MovementState, NewGameOptions, SimulationTick, SnapshotQuery, Terrain, WorldCell,
+    WorldSeed, WorldgenVersion,
 };
 
 fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
@@ -53,26 +54,31 @@ fn snapshot_is_bounded_ordered_and_renderable() {
                 id: EntityId::new(1).unwrap(),
                 name: "Ada".to_owned(),
                 position: WorldCell::new(-2, 0),
+                movement: MovementState::Idle,
             },
             CharacterSnapshot {
                 id: EntityId::new(2).unwrap(),
                 name: "Borin".to_owned(),
                 position: WorldCell::new(-1, 0),
+                movement: MovementState::Idle,
             },
             CharacterSnapshot {
                 id: EntityId::new(3).unwrap(),
                 name: "Cora".to_owned(),
                 position: WorldCell::new(0, 0),
+                movement: MovementState::Idle,
             },
             CharacterSnapshot {
                 id: EntityId::new(4).unwrap(),
                 name: "Dain".to_owned(),
                 position: WorldCell::new(1, 0),
+                movement: MovementState::Idle,
             },
             CharacterSnapshot {
                 id: EntityId::new(5).unwrap(),
                 name: "Elin".to_owned(),
                 position: WorldCell::new(2, 0),
+                movement: MovementState::Idle,
             },
         ]
     );
@@ -122,4 +128,51 @@ fn chunk_snapshots_map_local_coordinates_without_simulation_access() {
         Some(Terrain::Grass)
     );
     assert_eq!(chunk.terrain_at(LocalCell::new(CHUNK_SIDE, 0)), None);
+}
+
+#[test]
+fn movement_commands_are_applied_and_published_through_snapshots() {
+    let mut application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(42),
+    })
+    .unwrap();
+    let cora = EntityId::new(3).unwrap();
+
+    application
+        .execute(Command::SetMovementDirection {
+            character_id: cora,
+            direction: Direction::East,
+        })
+        .unwrap();
+    application
+        .execute(Command::AdvanceTicks { count: 1 })
+        .unwrap();
+
+    let snapshot = application.snapshot(SnapshotQuery::default()).unwrap();
+    let cora = snapshot
+        .characters
+        .iter()
+        .find(|character| character.id == cora)
+        .unwrap();
+    assert_eq!(cora.position, WorldCell::new(1, 0));
+    assert_eq!(
+        cora.movement,
+        MovementState::Moving {
+            direction: Direction::East
+        }
+    );
+
+    application
+        .execute(Command::StopMovement {
+            character_id: cora.id,
+        })
+        .unwrap();
+    let stopped = application
+        .snapshot(SnapshotQuery::default())
+        .unwrap()
+        .characters
+        .into_iter()
+        .find(|character| character.id == cora.id)
+        .unwrap();
+    assert_eq!(stopped.movement, MovementState::Idle);
 }
