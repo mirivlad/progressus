@@ -417,7 +417,7 @@ git commit -m "feat: add headless application runner"
 - Consumes: all implemented crates and their verified commands.
 - Produces: documented development entry points and evidence that visual-client work can begin.
 
-- [ ] **Step 1: Update documentation to match reality**
+- [x] **Step 1: Update documentation to match reality**
 
 Change README status from pre-production-only to Prototype 01 foundation in progress. List:
 
@@ -430,7 +430,7 @@ Document that the current executable foundation exposes deterministic terrain an
 
 Append a Prototype 01 bootstrap implementation section to the architecture overview with the exact four-crate dependency chain and the rule that future Bevy code depends on \`progressus-app\`, not \`progressus-sim\`.
 
-- [ ] **Step 2: Run the complete fresh verification gate**
+- [x] **Step 2: Run the complete fresh verification gate**
 
 Run:
 
@@ -450,7 +450,7 @@ Expected:
 - headless output reports tick 100000, three chunks, and five characters;
 - the full dependency tree contains only the four Progressus crates and no occurrence of \`bevy\`.
 
-- [ ] **Step 3: Audit every client-readiness requirement**
+- [x] **Step 3: Audit every client-readiness requirement**
 
 Check the design requirements against evidence:
 
@@ -465,7 +465,7 @@ Check the design requirements against evidence:
 
 Do not mark the goal complete if any evidence is missing or indirect.
 
-- [ ] **Step 4: Commit the documentation and verified handoff**
+- [x] **Step 4: Commit the documentation and verified handoff**
 
 \`\`\`bash
 git add README.md docs/architecture/overview.md Cargo.lock

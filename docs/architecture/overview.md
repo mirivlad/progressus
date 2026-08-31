@@ -478,3 +478,29 @@ Do not implement during architectural bootstrap unless required by an accepted m
 - premature population aggregation.
 
 These are future game systems, not prerequisites for proving the core.
+
+## 27. Prototype 01 bootstrap implementation
+
+The executable bootstrap uses this concrete Cargo dependency chain:
+
+```text
+progressus-headless
+        |
+        v
+progressus-app
+        |
+        v
+progressus-sim
+        |
+        v
+progressus-worldgen
+```
+
+- `progressus-worldgen` owns deterministic versioned terrain generation and coordinate types.
+- `progressus-sim` owns authoritative time, stable identities, characters, and simulation state.
+- `progressus-app` is the client-facing command/query boundary and returns detached read models.
+- `progressus-headless` proves that the application can run and be inspected without a renderer.
+
+A Bevy client should depend on `progressus-app`, not on `progressus-sim`. It may translate a `ClientSnapshot` into disposable Bevy entities and send `Command` values back through `Application`. It must not retain mutable access to authoritative simulation storage.
+
+The bootstrap currently presents deterministic terrain and five characters. It does not yet implement movement, jobs, items, persistence, or the visual client itself. Coordinate and provisional chunk-geometry decisions are specified by [`ADR-0003`](../adr/0003-bootstrap-world-coordinates.md).

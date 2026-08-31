@@ -46,7 +46,18 @@ See [`docs/gameplay/production.md`](docs/gameplay/production.md) for the normati
 
 ## Current status
 
-**Pre-production / architecture.**
+**Prototype 01 — foundation in progress.**
+
+The first executable headless foundation is implemented:
+
+- deterministic versioned 32×32 chunk generation;
+- signed positive/negative world coordinates;
+- a checked simulation clock and stable Progressus entity IDs;
+- a deterministic five-character new-game scenario;
+- a detached client read model exposed through `progressus-app`;
+- a headless consumer that runs without Bevy, a window, or a graphics context.
+
+Movement, jobs, physical items, modified chunk persistence, save/load, and the Bevy client remain Prototype 01 work. The current boundary is intentionally ready for a visual client to depend on `progressus-app` without taking ownership of simulation truth.
 
 The immediate goal is not to build the entire game. The first prototype exists to prove the dangerous fundamentals:
 
@@ -61,6 +72,22 @@ The immediate goal is not to build the entire game. The first prototype exists t
 - clean separation between the Rust simulation and the Bevy client.
 
 See [`docs/milestones/prototype-01.md`](docs/milestones/prototype-01.md).
+
+## Development
+
+Run the complete automated suite:
+
+```bash
+cargo test --workspace
+```
+
+Run a deterministic headless scenario:
+
+```bash
+cargo run -p progressus-headless -- --seed 42 --ticks 100000
+```
+
+The application API and its external-consumer contract test live in `crates/progressus-app`. Bootstrap coordinate and chunk decisions are recorded in [`docs/adr/0003-bootstrap-world-coordinates.md`](docs/adr/0003-bootstrap-world-coordinates.md).
 
 ## Documentation
 
