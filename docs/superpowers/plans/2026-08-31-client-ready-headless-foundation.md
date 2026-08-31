@@ -57,7 +57,7 @@
 **Interfaces:**
 - Produces: \`CHUNK_SIDE: u16\`, \`WorldCell::new(i64, i64)\`, \`WorldCell::split()\`, \`ChunkCoord::new(i64, i64)\`, \`ChunkCoord::world_cell(LocalCell) -> Option<WorldCell>\`.
 
-- [ ] **Step 1: Add the workspace shell and failing coordinate tests**
+- [x] **Step 1: Add the workspace shell and failing coordinate tests**
 
 Create the root workspace with only \`crates/progressus-worldgen\` as the initial member, \`resolver = "3"\`, edition 2024, rust-version 1.85, and workspace lints forbidding unsafe code. Add each later crate to the member list in the task that creates its manifest. Add \`/target/\` to \`.gitignore\`.
 
@@ -99,13 +99,13 @@ fn chunk_local_round_trip_preserves_world_cells() {
 }
 \`\`\`
 
-- [ ] **Step 2: Run the coordinate test and observe the red state**
+- [x] **Step 2: Run the coordinate test and observe the red state**
 
 Run: \`cargo test -p progressus-worldgen --test coordinates\`
 
 Expected: compilation fails because \`coordinate.rs\` and the exported types do not exist.
 
-- [ ] **Step 3: Implement checked coordinate conversion**
+- [x] **Step 3: Implement checked coordinate conversion**
 
 Create immutable, copyable, ordered structs with private fields and public \`x()\` and \`y()\` accessors. Set \`CHUNK_SIDE\` to 32. Implement \`WorldCell::split\` with \`div_euclid\` and \`rem_euclid\`. Implement \`ChunkCoord::world_cell\` with \`checked_mul\` and \`checked_add\`; reject local values greater than or equal to \`CHUNK_SIDE\`.
 
@@ -137,7 +137,7 @@ pub fn world_cell(self, local: LocalCell) -> Option<WorldCell> {
 
 Write ADR-0003 with status Accepted, the six coordinate choices from the design, explicit provisional status of 32 cells, and the rule that persisted geometry changes require a worldgen version bump or migration.
 
-- [ ] **Step 4: Verify and commit the coordinate contract**
+- [x] **Step 4: Verify and commit the coordinate contract**
 
 Run: \`cargo fmt --all -- --check && cargo test -p progressus-worldgen --test coordinates\`
 
