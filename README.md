@@ -2,20 +2,30 @@
 
 **Progressus** is a bottom-up civilization simulator: a colony-scale game that grows into a simulation of settlements, cities, industrial regions, and eventually a technological civilization — all inside one continuous physical world.
 
-The project starts from a familiar colony-sim scale, but its long-term goal is different from a traditional RimWorld-like game. There is no separate strategic map and no abstract expedition layer. People, cargo, roads, mines, factories, vehicles, settlements, and infrastructure remain part of the same world.
+The project starts from a familiar colony-sim scale, but its long-term goal is different from a traditional RimWorld-like game. There is no separate strategic map and no abstract expedition layer. People, cargo, roads, mines, workshops, factories, vehicles, settlements, and infrastructure remain part of the same world.
 
-> Start with a few people and primitive tools. End with a civilization whose railways, power grids, factories, cities, and abandoned ruins all grew from that first settlement.
+> Start with a few people and primitive tools. End with a civilization whose railways, power grids, industries, cities, and abandoned ruins all grew from that first settlement.
 
 ## Core pillars
 
 1. **One continuous world** — no separate expedition maps or teleporting logistics.
 2. **Potentially unbounded procedural map** — generated in chunks as the world is explored.
-3. **Physical production and logistics** — resources exist somewhere and must physically move.
+3. **Physical goods, lightweight production chains** — resources exist somewhere and must physically move, but production is not an optimization puzzle about perfectly matching conveyor-like chains.
 4. **Deep technological progression** — technologies unlock capabilities, not merely numerical bonuses.
-5. **Infrastructure matters** — advanced technology requires the industrial base that can actually produce it.
-6. **Management scales with civilization** — the player gradually moves from assigning individual jobs to defining production, logistics, and economic rules.
+5. **Infrastructure matters** — advanced technology requires the industrial base that can actually support it, without requiring the player to micromanage every intermediate component.
+6. **Management scales with civilization** — the player gradually moves from assigning individual jobs to defining workshops, supplies, transport, services, and broader economic rules.
 7. **Persistent history** — old buildings, roads, settlements, and infrastructure remain part of the world's history.
 8. **Simulation LOD** — nearby regions are simulated in detail; distant regions may be safely aggregated.
+
+## Production philosophy
+
+Production exists to make technological and territorial development believable, not to turn Progressus into a factory-layout game.
+
+A product should require the materials, tools, facilities, knowledge, and infrastructure that make sense for its era. Intermediate parts are modeled when they create useful choices, dependencies, specialization, trade, maintenance, or historical character. They should not be added merely to make a longer recipe.
+
+Throughput, stock levels, transport capacity, and bottlenecks can matter, especially in an industrial society, but optimizing them is one possible activity rather than the central fantasy of the game.
+
+The central fantasy remains **building a living civilization in one continuous world**.
 
 ## Current status
 
