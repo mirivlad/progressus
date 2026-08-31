@@ -1,8 +1,8 @@
-# Architecture Overview v0.1
+# Architecture Overview v0.2
 
-Status: **Proposed for Prototype 01**
+Status: **Accepted for Prototype 01**
 
-This document defines architectural boundaries and constraints, not a final engine/language choice. Engine, language, renderer, ECS library, storage implementation, and asset pipeline remain separate decisions until evaluated against Prototype 01.
+The implementation boundary is fixed by [`ADR-0002`](../adr/0002-rust-core-bevy-client.md): the authoritative simulation is pure Rust and does not depend on Bevy; Bevy is the initial client/rendering framework. Renderer details, authoritative storage layout, chunk dimensions, persistence technology, and other lower-level choices remain separate decisions unless explicitly accepted elsewhere.
 
 ## 1. Primary architectural goal
 
@@ -16,7 +16,7 @@ Conceptually the project is split into:
 
 ```text
 +-----------------------------+
-|          Game Client        |
+|        Bevy Game Client     |
 | rendering / input / UI      |
 +--------------+--------------+
                |
@@ -28,7 +28,7 @@ Conceptually the project is split into:
                |
                v
 +-----------------------------+
-|       Simulation Core       |
+|   Pure Rust Simulation Core |
 | world / entities / jobs     |
 | production / logistics      |
 +--------------+--------------+
@@ -42,7 +42,7 @@ Conceptually the project is split into:
 
 The boundaries do not require separate processes or repositories. They are logical dependency directions.
 
-The Simulation Core must not depend on rendering APIs.
+The Simulation Core must not depend on Bevy or any rendering API.
 
 ## 3. Simulation Core
 
@@ -183,7 +183,7 @@ Save format versioning must exist from the first persistent prototype. Backward 
 
 ## 10. Entity identity
 
-Long-lived entities require stable identifiers independent of memory addresses, array indices, or chunk load order.
+Long-lived entities require stable identifiers independent of memory addresses, array indices, chunk load order, or client/runtime handles.
 
 At minimum this applies to:
 
@@ -194,22 +194,29 @@ At minimum this applies to:
 
 An entity may move between chunks without changing identity.
 
+Bevy `Entity` is never a persistent simulation identity. The client may keep disposable mappings from Progressus stable IDs to Bevy entities.
+
 Temporary rendering objects do not require simulation identities.
 
-## 11. Entity storage
+## 11. Authoritative entity/storage model
 
-No ECS framework is mandated yet.
+The authoritative core is pure Rust. No external ECS framework is mandated for simulation storage.
 
-The implementation may use ECS, sparse sets, tables, ordinary structs/classes, or a hybrid. Selection must be based on measured fit to the prototype.
+The implementation may use tables, sparse sets, ordinary structs, arenas, indexes, a custom ECS-like representation, or a hybrid. Selection must be based on measured fit to the simulation rather than convenience for the renderer.
 
-Regardless of implementation, the model must support:
+Bevy ECS may be used freely for presentation/client state, but `progressus-sim` must not depend on Bevy.
+
+Regardless of implementation, the simulation model must support:
 
 - stable IDs;
 - bulk iteration by relevant component/state;
 - entity creation/destruction;
 - serialization;
 - chunk-aware spatial indexing;
-- separation between simulation data and presentation data.
+- separation between simulation data and presentation data;
+- future transitions between detailed and aggregated Simulation LOD representations.
+
+Not every physical unit must be a separate runtime entity. Stacks, bulk resources, or future remote-population representations may be aggregated when gameplay semantics permit it.
 
 ## 12. Spatial indexing
 
@@ -279,6 +286,8 @@ A recipe conceptually includes:
 
 Prototype 01 uses only a few recipes. The architecture should avoid hard-coding each product's behavior into bespoke UI or simulation classes.
 
+Production complexity follows [`docs/gameplay/production.md`](../gameplay/production.md): chains exist to support believable development, not to turn Progressus into a conveyor/ratio optimization game.
+
 ## 16. Data definitions
 
 Game content should be data-driven where practical:
@@ -304,7 +313,7 @@ Early pathfinding should therefore be encapsulated behind a service/interface bo
 
 ## 18. Headless mode
 
-The Simulation Core must be runnable without creating a graphics window.
+The Simulation Core must be runnable directly as pure Rust without initializing Bevy, a window, renderer, graphics device, or audio system.
 
 Required uses:
 
@@ -312,7 +321,8 @@ Required uses:
 - integration tests;
 - deterministic reproduction of bugs;
 - accelerated simulation runs;
-- future performance qualification.
+- performance qualification;
+- long-span and population-scale experiments.
 
 A useful target shape is conceptually:
 
@@ -359,6 +369,8 @@ Optimization order:
 4. optimize proven hotspots;
 5. re-measure.
 
+The accepted Rust-core architecture is chosen to keep this path open, not because performance is assumed to be automatically solved by the language choice.
+
 Do not introduce complicated multithreading, distributed simulation, custom allocators, or low-level storage solely because the final vision sounds large.
 
 The architecture should avoid obvious global scans and renderer coupling now, while leaving deeper optimization until profiling justifies it.
@@ -379,7 +391,9 @@ Future LOD work will need explicit transitions between detailed and aggregated r
 
 The key future invariant is conservation: aggregation and expansion must not create or destroy meaningful quantities, identities, or obligations without a simulation rule explaining the change.
 
-## 24. Client
+## 24. Bevy client
+
+Bevy is the selected initial client framework.
 
 The client is responsible for:
 
@@ -389,27 +403,60 @@ The client is responsible for:
 - placement previews;
 - UI panels;
 - input mapping;
-- sound and animation.
+- sound and animation;
+- procedural visual generation and caching.
 
 It sends commands to the application/simulation layer and presents resulting state.
 
 Visual interpolation may exist between simulation ticks but must never become authoritative gameplay state.
 
+The client should treat simulation read models as input data. Bevy scene/ECS state must be disposable and reconstructable from authoritative state where necessary.
+
+### 24.1 Procedural graphics boundary
+
+Procedural-by-default graphics are a presentation policy, not a simulation rule.
+
+The simulation may expose meaningful visual facts such as:
+
+- material;
+- age/era;
+- condition;
+- footprint;
+- species;
+- equipment;
+- functional state.
+
+The client may derive from those facts:
+
+- texture variation;
+- geometric detail;
+- vegetation shape;
+- roof/decorative form;
+- character appearance;
+- dirt/wear;
+- animation;
+- other non-authoritative visual variation.
+
+Visual generation must use presentation-owned deterministic seeds/state. It must not consume authoritative simulation RNG or change world/simulation outcomes.
+
+Generated visual results should be cached/batched where appropriate rather than regenerated every frame.
+
 ## 25. Prototype 01 architecture deliverables
 
 Before Prototype 01 is considered complete, the codebase should contain:
 
-- a documented project/module layout;
+- a documented Rust crate/module layout preserving the ADR-0002 dependency direction;
 - deterministic world seed handling;
 - chunk coordinate and lifecycle implementation;
 - stable simulation entity IDs;
 - a simulation clock;
-- headless stepping;
+- headless stepping without Bevy initialization;
 - basic job/reservation model;
 - item/resource ownership model;
 - persistence with version metadata;
 - automated tests for core invariants;
-- at least one long-run headless smoke test.
+- at least one long-run headless smoke test;
+- a minimal Bevy client proving that simulation state can be presented without becoming authoritative client state.
 
 ## 26. Explicit non-goals for now
 
