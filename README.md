@@ -57,8 +57,9 @@ The first executable headless foundation is implemented:
 - bootstrap cardinal character movement: at most one grass-cell step per simulation tick, with deterministic stops before water, rock, or coordinate overflow;
 - `SetMovementDirection` and `StopMovement` through `progressus-app`, with detached snapshots that expose `MovementState`;
 - a headless consumer that runs without Bevy, a window, or a graphics context, including a bounded external least-visited walker that crosses generated chunk boundaries through the public application API.
+- a native Bevy bootstrap client for seed `0`: a 2D 3×3 Cora-centered terrain window, five snapshot-driven characters, arrow-key movement and Space to stop Cora, plus presentation-only camera pan/zoom.
 
-This is direction-driven movement bootstrap work, not complete navigation. Full pathfinding around obstacles, jobs/AI interruption policy, speed/collision, chunk residency, modified chunks, save/load, physical items, and the Bevy client remain Prototype 01 work. The current boundary is intentionally ready for a visual client to depend on `progressus-app` without taking ownership of simulation truth.
+This is direction-driven movement and client bootstrap work, not complete navigation. Full pathfinding around obstacles, jobs/AI interruption policy, speed/collision, chunk residency, modified chunks, save/load, physical items, resources, and construction remain Prototype 01 work. The current boundary keeps the visual client dependent on `progressus-app` without giving it ownership of simulation truth.
 
 The immediate goal is not to build the entire game. The first prototype exists to prove the dangerous fundamentals:
 
@@ -93,6 +94,14 @@ Run the bounded external traversal proof (seed 0 crosses 64 positive chunk bound
 ```bash
 cargo run -p progressus-headless -- --seed 0 --travel-chunks 64
 ```
+
+Run the native visual bootstrap (requires a local display and GPU for the manual graphical smoke check):
+
+```bash
+cargo run -p progressus-client
+```
+
+It opens seed `0` as a 2D visual bootstrap with a 3×3 Cora-centered terrain window, five snapshot-driven characters, arrow-key movement and Space to stop Cora, and presentation-only pan/zoom. Terrain is queried initially and when Cora's central chunk changes, not once per FPS frame.
 
 Verify that Bevy has not entered the complete headless/application/simulation/worldgen dependency chain:
 

@@ -491,26 +491,27 @@ These are future game systems, not prerequisites for proving the core.
 
 ## 27. Prototype 01 bootstrap implementation
 
-The executable bootstrap uses this concrete Cargo dependency chain:
+The executable bootstrap has five crates with these dependency directions:
 
 ```text
-progressus-headless
+progressus-client --> Bevy
         |
-        v
-progressus-app
-        |
-        v
-progressus-sim
-        |
-        v
-progressus-worldgen
+        +--> progressus-app <-- progressus-headless
+                 |
+                 v
+           progressus-sim --> progressus-worldgen
 ```
 
 - `progressus-worldgen` owns deterministic versioned terrain generation and coordinate types.
 - `progressus-sim` owns authoritative time, stable identities, characters, and simulation state.
-- `progressus-app` is the client-facing command/query boundary and returns detached read models.
+- `progressus-app` is the command/query boundary and returns detached read models.
 - `progressus-headless` proves that the application can run and be inspected without a renderer.
+- `progressus-client` is a native Bevy presentation consumer. Its only direct dependencies are Bevy and `progressus-app`; it must not directly depend on `progressus-sim` or `progressus-worldgen`.
 
-A Bevy client should depend on `progressus-app`, not on `progressus-sim`. It may translate a `ClientSnapshot` into disposable Bevy entities and send `Command` values back through `Application`. It must not retain mutable access to authoritative simulation storage.
+The headless application chain is Bevy-free. The boundary guard scans that complete chain and verifies the client's direct-dependency rule. The Bevy client converts `ClientSnapshot` data into disposable entities mapped from stable Progressus IDs; those mappings are derived presentation caches, never authoritative or persistent state.
 
-The bootstrap currently presents deterministic terrain and five characters. It does not yet implement movement, jobs, items, persistence, or the visual client itself. Coordinate and provisional chunk-geometry decisions are specified by [`ADR-0003`](../adr/0003-bootstrap-world-coordinates.md).
+For seed `0`, the client first requests a lightweight character snapshot, derives Cora (`EntityId` 3)'s central chunk, then requests its radius-one (3×3) terrain window. It repeats the terrain request only when that authoritative central chunk changes, not at render-frame frequency. Arrow and Stop input become ordinary application commands; pan and zoom alter only presentation camera state.
+
+The presentation scheduler is non-authoritative: it requests at most one simulation tick every approximately 250 ms (nominally 4 Hz) and discards a long-frame backlog rather than catching up. Rendering frame time never becomes simulation input.
+
+This bootstrap proves rendering, input, snapshot-driven mapping, and normal chunk-window refresh. It does not implement navigation or pathfinding, jobs/AI, speed or collision, chunk residency, persistence, resources, construction, or save/load. Coordinate and provisional chunk-geometry decisions are specified by [`ADR-0003`](../adr/0003-bootstrap-world-coordinates.md).

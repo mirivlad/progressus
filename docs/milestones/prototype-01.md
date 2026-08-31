@@ -228,6 +228,8 @@ The exact tick count should be chosen once simulation speed is measurable.
 
 Only enough interface is required to operate and inspect the prototype.
 
+**Partially advanced (bootstrap):** the native Bevy client opens seed `0`, renders five snapshot-driven characters and a 3×3 Cora-centered terrain window, accepts Cora's arrow/Stop movement input, and provides presentation-only pan/zoom. Terrain refreshes on initial display and an authoritative central-chunk change, not every render frame; its non-authoritative scheduler runs at a nominal 4 Hz without catch-up. This proves rendering/input and normal chunk-window refresh only. The remaining interface, navigation/pathfinding, jobs/AI, speed/collision, persistence, residency, resources, construction, and save/load criteria are incomplete.
+
 Minimum capabilities:
 
 - pan/zoom camera;
