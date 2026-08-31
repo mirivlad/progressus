@@ -1,5 +1,9 @@
 [workspace]
-members = ["crates/progressus-sim", "crates/progressus-worldgen"]
+members = [
+    "crates/progressus-app",
+    "crates/progressus-sim",
+    "crates/progressus-worldgen",
+]
 resolver = "3"
 
 [workspace.package]

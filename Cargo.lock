@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "progressus-app"
+version = "0.1.0"
+dependencies = [
+ "progressus-sim",
+]
+
+[[package]]
 name = "progressus-sim"
 version = "0.1.0"
 dependencies = [

@@ -8,7 +8,7 @@ use crate::clock::SimulationClock;
 use crate::entity::EntityIdAllocator;
 use crate::{
     CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, EntityId, GeneratedChunk, SimulationTick,
-    Terrain, WorldCell, WorldSeed,
+    Terrain, WorldCell, WorldSeed, WorldgenVersion,
 };
 
 const INITIAL_CHARACTERS: [(&str, i64); 5] = [
@@ -56,6 +56,10 @@ impl Simulation {
 
     pub const fn tick(&self) -> SimulationTick {
         self.clock.tick()
+    }
+
+    pub const fn worldgen_version(&self) -> WorldgenVersion {
+        self.generator.version()
     }
 
     pub fn advance_ticks(&mut self, count: u64) -> Result<(), SimulationError> {

@@ -296,7 +296,7 @@ git commit -m "feat: add deterministic headless simulation"
 - Consumes: the public \`progressus-sim\` API only.
 - Produces: \`Application::new_game(NewGameOptions)\`, \`Application::execute(Command)\`, \`Application::snapshot(SnapshotQuery)\`, \`ClientSnapshot\`, \`ChunkSnapshot\`, and \`CharacterSnapshot\`.
 
-- [ ] **Step 1: Write the external-consumer contract tests**
+- [x] **Step 1: Write the external-consumer contract tests**
 
 Add \`crates/progressus-app\` to the root workspace and create its manifest with a path dependency on \`progressus-sim\`. From the integration test, import only \`progressus_app\`. Create an application with seed 42, execute \`Command::AdvanceTicks { count: 100_000 }\`, and query chunks in the deliberately unsorted sequence \`(1, 0), (-1, 0), (0, 0), (1, 0)\`.
 
@@ -310,13 +310,13 @@ Assert that:
 - repeating the same options and commands creates an equal \`ClientSnapshot\`;
 - mutating an owned clone of a snapshot does not change a later snapshot from the application.
 
-- [ ] **Step 2: Run the application tests and observe the red state**
+- [x] **Step 2: Run the application tests and observe the red state**
 
 Run: \`cargo test -p progressus-app --test client_boundary\`
 
 Expected: Cargo reports that the package or imported application API does not exist.
 
-- [ ] **Step 3: Implement the façade and read models**
+- [x] **Step 3: Implement the façade and read models**
 
 Use these public command/query shapes:
 
@@ -341,7 +341,7 @@ pub struct SnapshotQuery {
 
 Map simulation errors into an \`ApplicationError::Simulation\` variant with source chaining.
 
-- [ ] **Step 4: Verify and commit the client boundary**
+- [x] **Step 4: Verify and commit the client boundary**
 
 Run: \`cargo fmt --all -- --check && cargo clippy -p progressus-app --all-targets -- -D warnings && cargo test -p progressus-app\`
 

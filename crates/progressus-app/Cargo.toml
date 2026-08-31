@@ -1,0 +1,11 @@
+[package]
+name = "progressus-app"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+progressus-sim = { path = "../progressus-sim" }
+
+[lints]
+workspace = true
