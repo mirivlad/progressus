@@ -17,6 +17,21 @@ The project starts from a familiar colony-sim scale, but its long-term goal is d
 7. **Persistent history** — old buildings, roads, settlements, and infrastructure remain part of the world's history.
 8. **Simulation LOD** — nearby regions are simulated in detail; distant regions may be safely aggregated.
 
+## Implementation architecture
+
+The initial implementation stack is an accepted project decision:
+
+- **pure Rust authoritative simulation core**;
+- **Bevy client** for rendering, input, UI, audio, and presentation;
+- the simulation core **must not depend on Bevy**;
+- stable Progressus IDs, not Bevy `Entity`, define persistent simulation identity;
+- headless simulation and tests must run without initializing a renderer or window;
+- procedural graphics are the default visual direction, with authored assets used where they clearly provide value.
+
+In short: **Rust decides what exists; Bevy shows it.**
+
+See [`docs/adr/0002-rust-core-bevy-client.md`](docs/adr/0002-rust-core-bevy-client.md) for the normative decision and [`docs/architecture/overview.md`](docs/architecture/overview.md) for architectural boundaries.
+
 ## Production philosophy
 
 Production exists to make technological and territorial development believable, not to turn Progressus into a factory-layout game.
@@ -42,7 +57,8 @@ The immediate goal is not to build the entire game. The first prototype exists t
 - physical resource movement;
 - simple crafting and construction;
 - save/load of a sparse, growing world;
-- headless deterministic simulation tests.
+- headless deterministic simulation tests;
+- clean separation between the Rust simulation and the Bevy client.
 
 See [`docs/milestones/prototype-01.md`](docs/milestones/prototype-01.md).
 
@@ -50,16 +66,17 @@ See [`docs/milestones/prototype-01.md`](docs/milestones/prototype-01.md).
 
 - [`docs/vision.md`](docs/vision.md) — game vision and design bible.
 - [`docs/gameplay/production.md`](docs/gameplay/production.md) — lightweight production-chain philosophy and guardrails.
-- [`docs/architecture/overview.md`](docs/architecture/overview.md) — initial technical architecture and boundaries.
+- [`docs/architecture/overview.md`](docs/architecture/overview.md) — technical architecture and boundaries.
 - [`docs/milestones/prototype-01.md`](docs/milestones/prototype-01.md) — first executable milestone and acceptance criteria.
 - [`docs/adr/0001-core-invariants.md`](docs/adr/0001-core-invariants.md) — architectural invariants that implementations must preserve.
+- [`docs/adr/0002-rust-core-bevy-client.md`](docs/adr/0002-rust-core-bevy-client.md) — accepted Rust simulation / Bevy client decision.
 - [`AGENTS.md`](AGENTS.md) — rules for Codex, Claude, and other coding agents.
 
 ## Development principle
 
 Each milestone should produce a smaller but coherent playable game. Architecture should permit future scale, but code for hypothetical late-game systems should not be written before it is needed.
 
-If an implementation seems to require violating a documented invariant, stop and document the conflict instead of silently changing the game model.
+If an implementation seems to require violating a documented invariant or accepted ADR, stop and document the conflict instead of silently changing the game model.
 
 ## Name
 
