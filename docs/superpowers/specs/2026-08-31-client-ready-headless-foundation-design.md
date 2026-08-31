@@ -164,6 +164,7 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo run -p progressus-headless -- --seed 42 --ticks 100000
+./scripts/verify-core-dependency-boundary.sh
 ```
 
 The exact executable summary becomes part of the smoke-test evidence, not a permanent serialization format.

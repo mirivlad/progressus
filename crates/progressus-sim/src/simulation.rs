@@ -23,6 +23,7 @@ const INITIAL_CHARACTERS: [(&str, i64); 5] = [
 pub struct Simulation {
     generator: WorldGenerator,
     clock: SimulationClock,
+    id_allocator: EntityIdAllocator,
     characters: BTreeMap<EntityId, Character>,
 }
 
@@ -50,6 +51,7 @@ impl Simulation {
         Ok(Self {
             generator,
             clock: SimulationClock::new(0),
+            id_allocator,
             characters,
         })
     }
@@ -60,6 +62,10 @@ impl Simulation {
 
     pub const fn worldgen_version(&self) -> WorldgenVersion {
         self.generator.version()
+    }
+
+    pub fn next_entity_id(&self) -> Option<EntityId> {
+        self.id_allocator.peek()
     }
 
     pub fn advance_ticks(&mut self, count: u64) -> Result<(), SimulationError> {

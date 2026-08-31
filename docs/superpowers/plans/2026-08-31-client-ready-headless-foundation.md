@@ -440,6 +440,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo run -p progressus-headless -- --seed 42 --ticks 100000
 cargo tree --workspace --edges normal,build,dev
+./scripts/verify-core-dependency-boundary.sh
 \`\`\`
 
 Expected:
@@ -449,6 +450,7 @@ Expected:
 - all workspace tests pass;
 - headless output reports tick 100000, three chunks, and five characters;
 - the full dependency tree contains only the four Progressus crates and no occurrence of \`bevy\`.
+- the committed dependency-boundary guard exits 0.
 
 - [x] **Step 3: Audit every client-readiness requirement**
 

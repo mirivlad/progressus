@@ -1,7 +1,8 @@
 use progressus_sim::{Character, GeneratedChunk};
 
 use crate::{
-    CHUNK_SIDE, ChunkCoord, EntityId, SimulationTick, Terrain, WorldCell, WorldgenVersion,
+    CHUNK_SIDE, ChunkCoord, EntityId, LocalCell, SimulationTick, Terrain, WorldCell,
+    WorldgenVersion,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16,7 +17,19 @@ pub struct ClientSnapshot {
 pub struct ChunkSnapshot {
     pub coordinate: ChunkCoord,
     pub side: u16,
+    /// Terrain in row-major order: `index = local_y * side + local_x`.
     pub cells: Vec<Terrain>,
+}
+
+impl ChunkSnapshot {
+    pub fn terrain_at(&self, local: LocalCell) -> Option<Terrain> {
+        if local.x() >= self.side || local.y() >= self.side {
+            return None;
+        }
+
+        let index = usize::from(local.y()) * usize::from(self.side) + usize::from(local.x());
+        self.cells.get(index).copied()
+    }
 }
 
 impl From<GeneratedChunk> for ChunkSnapshot {

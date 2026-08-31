@@ -1,6 +1,6 @@
 use progressus_app::{
-    Application, CHUNK_SIDE, CharacterSnapshot, ChunkCoord, Command, EntityId, NewGameOptions,
-    SimulationTick, SnapshotQuery, WorldCell, WorldSeed, WorldgenVersion,
+    Application, CHUNK_SIDE, CharacterSnapshot, ChunkCoord, Command, EntityId, LocalCell,
+    NewGameOptions, SimulationTick, SnapshotQuery, Terrain, WorldCell, WorldSeed, WorldgenVersion,
 };
 
 fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
@@ -102,4 +102,24 @@ fn snapshots_do_not_borrow_or_mutate_authoritative_state() {
     detached.characters[0].name = "renderer-owned name".to_owned();
 
     assert_eq!(application.snapshot(query).unwrap(), expected);
+}
+
+#[test]
+fn chunk_snapshots_map_local_coordinates_without_simulation_access() {
+    let application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(42),
+    })
+    .unwrap();
+    let snapshot = application
+        .snapshot(SnapshotQuery {
+            chunks: vec![ChunkCoord::new(-1, 0)],
+        })
+        .unwrap();
+    let chunk = &snapshot.chunks[0];
+
+    assert_eq!(
+        chunk.terrain_at(LocalCell::new(30, 0)),
+        Some(Terrain::Grass)
+    );
+    assert_eq!(chunk.terrain_at(LocalCell::new(CHUNK_SIDE, 0)), None);
 }

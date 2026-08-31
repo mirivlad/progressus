@@ -58,4 +58,8 @@ impl EntityIdAllocator {
         self.next = value.checked_add(1);
         Ok(id)
     }
+
+    pub(crate) fn peek(self) -> Option<EntityId> {
+        self.next.and_then(EntityId::new)
+    }
 }

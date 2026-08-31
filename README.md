@@ -87,6 +87,12 @@ Run a deterministic headless scenario:
 cargo run -p progressus-headless -- --seed 42 --ticks 100000
 ```
 
+Verify that Bevy has not entered the application/simulation/worldgen dependency boundary:
+
+```bash
+./scripts/verify-core-dependency-boundary.sh
+```
+
 The application API and its external-consumer contract test live in `crates/progressus-app`. Bootstrap coordinate and chunk decisions are recorded in [`docs/adr/0003-bootstrap-world-coordinates.md`](docs/adr/0003-bootstrap-world-coordinates.md).
 
 ## Documentation

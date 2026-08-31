@@ -47,3 +47,10 @@ fn identical_commands_produce_identical_public_state() {
 fn entity_id_zero_is_invalid() {
     assert_eq!(EntityId::new(0), None);
 }
+
+#[test]
+fn next_stable_entity_id_continues_after_bootstrap_characters() {
+    let simulation = Simulation::new(WorldSeed::new(42)).unwrap();
+
+    assert_eq!(simulation.next_entity_id(), EntityId::new(6));
+}
