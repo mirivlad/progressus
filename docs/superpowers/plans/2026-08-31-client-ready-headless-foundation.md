@@ -163,7 +163,7 @@ git commit -m "feat: establish world coordinate contract"
 - Consumes: \`ChunkCoord\`, \`LocalCell\`, \`WorldCell\`, \`CHUNK_SIDE\`.
 - Produces: \`WorldSeed(u64)\`, \`WorldgenVersion(u32)\`, \`CURRENT_WORLDGEN_VERSION\`, \`Terrain::{Grass, Water, Rock}\`, \`GeneratedChunk\`, \`WorldGenerator::new\`, \`WorldGenerator::generate\`.
 
-- [ ] **Step 1: Write repeatability, order-independence, spawn-clearing, and unsupported-version tests**
+- [x] **Step 1: Write repeatability, order-independence, spawn-clearing, and unsupported-version tests**
 
 The tests construct two generators from the same seed/version, compare generated chunks directly, generate coordinates in forward and reverse order into \`BTreeMap\`, assert the maps are equal, assert world cells \`(-2, 0)..=(2, 0)\` are grass, and assert version 999 returns:
 
@@ -171,13 +171,13 @@ The tests construct two generators from the same seed/version, compare generated
 Err(WorldgenError::UnsupportedVersion(WorldgenVersion::new(999)))
 \`\`\`
 
-- [ ] **Step 2: Run the worldgen tests and observe the red state**
+- [x] **Step 2: Run the worldgen tests and observe the red state**
 
 Run: \`cargo test -p progressus-worldgen --test generation\`
 
 Expected: compilation fails with unresolved imports for generator types.
 
-- [ ] **Step 3: Implement world-generation version 1**
+- [x] **Step 3: Implement world-generation version 1**
 
 Add public derives \`Clone, Debug, Eq, PartialEq\` to chunks and terrain; add \`Copy, Hash, Ord, PartialOrd\` where values are scalar. \`GeneratedChunk\` exposes its coordinate and cell slice, plus:
 
@@ -206,7 +206,7 @@ fn mix64(mut value: u64) -> u64 {
 
 Mix the seed, version, world x, and world y in separate rounds. Force the five cells from x -2 through 2 at y 0 to grass. For other cells map \`sample % 100\` values 0..=14 to water, 15..=29 to rock, and 30..=99 to grass. Do not use \`DefaultHasher\` or external RNG state.
 
-- [ ] **Step 4: Verify and commit deterministic worldgen**
+- [x] **Step 4: Verify and commit deterministic worldgen**
 
 Run: \`cargo fmt --all -- --check && cargo clippy -p progressus-worldgen --all-targets -- -D warnings && cargo test -p progressus-worldgen\`
 
