@@ -27,6 +27,8 @@ Throughput, stock levels, transport capacity, and bottlenecks can matter, especi
 
 The central fantasy remains **building a living civilization in one continuous world**.
 
+See [`docs/gameplay/production.md`](docs/gameplay/production.md) for the normative production-design rules.
+
 ## Current status
 
 **Pre-production / architecture.**
@@ -47,6 +49,7 @@ See [`docs/milestones/prototype-01.md`](docs/milestones/prototype-01.md).
 ## Documentation
 
 - [`docs/vision.md`](docs/vision.md) — game vision and design bible.
+- [`docs/gameplay/production.md`](docs/gameplay/production.md) — lightweight production-chain philosophy and guardrails.
 - [`docs/architecture/overview.md`](docs/architecture/overview.md) — initial technical architecture and boundaries.
 - [`docs/milestones/prototype-01.md`](docs/milestones/prototype-01.md) — first executable milestone and acceptance criteria.
 - [`docs/adr/0001-core-invariants.md`](docs/adr/0001-core-invariants.md) — architectural invariants that implementations must preserve.
