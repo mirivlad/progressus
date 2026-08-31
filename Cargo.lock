@@ -3,5 +3,12 @@
 version = 4
 
 [[package]]
+name = "progressus-sim"
+version = "0.1.0"
+dependencies = [
+ "progressus-worldgen",
+]
+
+[[package]]
 name = "progressus-worldgen"
 version = "0.1.0"

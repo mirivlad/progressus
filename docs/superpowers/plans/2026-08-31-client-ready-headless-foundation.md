@@ -236,19 +236,19 @@ git commit -m "feat: add deterministic chunk generation"
 - Consumes: versioned \`WorldGenerator\` and coordinate/terrain types.
 - Produces: \`Simulation::new(WorldSeed)\`, \`Simulation::advance_ticks(u64)\`, \`Simulation::characters()\`, \`Simulation::generate_chunk(ChunkCoord)\`, \`SimulationTick\`, \`EntityId\`, and \`Character\`.
 
-- [ ] **Step 1: Write failing simulation contract tests**
+- [x] **Step 1: Write failing simulation contract tests**
 
 Add \`crates/progressus-sim\` to the root workspace and create its manifest with a path dependency on \`progressus-worldgen\`. Test that \`Simulation::new(WorldSeed::new(42))\` has tick 0; contains exactly the ordered IDs 1 through 5; contains names Ada, Borin, Cora, Dain, and Elin at world cells x -2 through 2 and y 0; and all positions are grass in the generated origin chunk. Create two simulations, advance both by 100,000 ticks, and assert their public character/tick state is equal.
 
 Add a unit test in \`clock.rs\` that constructs a clock at \`u64::MAX - 1\`, advances once successfully, then receives \`SimulationError::TickOverflow\` when advancing once more.
 
-- [ ] **Step 2: Run the simulation tests and observe the red state**
+- [x] **Step 2: Run the simulation tests and observe the red state**
 
 Run: \`cargo test -p progressus-sim\`
 
 Expected: compilation fails because simulation modules and types are absent.
 
-- [ ] **Step 3: Implement the minimal authoritative state**
+- [x] **Step 3: Implement the minimal authoritative state**
 
 \`SimulationTick\` and \`EntityId\` are private-field newtypes with \`new\`/value accessors, ordering, hashing, and equality. \`EntityId::new(0)\` returns \`None\`. The allocator starts at 1 and uses checked addition.
 
@@ -268,7 +268,7 @@ const INITIAL_CHARACTERS: [(&str, i64); 5] = [
 
 Before insertion, generate the corresponding terrain and fail with \`SpawnNotWalkable(WorldCell)\` unless it is grass. Duplicate IDs, allocator exhaustion, tick overflow, and worldgen errors are explicit \`SimulationError\` variants with \`Display\` and \`Error\` implementations.
 
-- [ ] **Step 4: Verify and commit the simulation**
+- [x] **Step 4: Verify and commit the simulation**
 
 Run: \`cargo fmt --all -- --check && cargo clippy -p progressus-sim --all-targets -- -D warnings && cargo test -p progressus-sim\`
 
