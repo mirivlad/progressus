@@ -103,7 +103,7 @@ The test suite must prove:
 7. a headless external walker crosses many positive chunk boundaries within its deterministic bound while keeping the same `EntityId`;
 8. the existing worldgen, application, headless, and dependency-boundary tests remain green.
 
-The long-traversal fixture is seed 0: the least-visited walker crosses 64 positive chunk boundaries in 5,213 steps under the 32,768-step bound. The production simulation must not contain seed search or walker logic.
+The long-traversal fixture is seed 0: the least-visited walker crosses 64 positive chunk boundaries in 5,050 steps under the 32,768-step bound. The production simulation must not contain seed search or walker logic.
 
 ## Documentation status
 

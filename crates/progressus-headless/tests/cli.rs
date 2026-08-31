@@ -26,11 +26,9 @@ fn missing_tick_count_is_rejected() {
     let output = headless_command().args(["--seed", "42"]).output().unwrap();
 
     assert!(!output.status.success());
-    assert!(
-        String::from_utf8(output.stderr)
-            .unwrap()
-            .contains("usage: progressus-headless --seed <u64> --ticks <u64>")
-    );
+    assert!(String::from_utf8(output.stderr).unwrap().contains(
+        "usage: progressus-headless --seed <u64> (--ticks <u64> | --travel-chunks <positive u64>)"
+    ));
 }
 
 #[test]
@@ -75,5 +73,39 @@ fn duplicate_arguments_are_rejected() {
         String::from_utf8(output.stderr)
             .unwrap()
             .contains("duplicate --seed argument")
+    );
+}
+
+#[test]
+fn travel_chunks_crosses_many_boundaries_deterministically() {
+    let first = headless_command()
+        .args(["--seed", "0", "--travel-chunks", "64"])
+        .output()
+        .unwrap();
+    let second = headless_command()
+        .args(["--seed", "0", "--travel-chunks", "64"])
+        .output()
+        .unwrap();
+
+    assert!(first.status.success());
+    assert_eq!(first.stdout, second.stdout);
+    let stdout = String::from_utf8(first.stdout).unwrap();
+    assert!(stdout.contains("travel character_id=3"));
+    assert!(stdout.contains("crossed_boundaries=64"));
+    assert!(stdout.contains("steps=5050"));
+}
+
+#[test]
+fn travel_chunks_requires_a_positive_count() {
+    let output = headless_command()
+        .args(["--seed", "0", "--travel-chunks", "0"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("travel chunk count must be positive")
     );
 }

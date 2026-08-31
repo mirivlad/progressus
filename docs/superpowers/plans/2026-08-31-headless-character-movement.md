@@ -264,7 +264,7 @@ fn travel_chunks_requires_a_positive_count() {
 }
 ```
 
-Use seed 0 as the fixed long-traversal fixture. It crosses 64 boundaries in 5,213 steps under the 32,768-step bound. Do not add seed search to the binary or simulation.
+Use seed 0 as the fixed long-traversal fixture. It crosses 64 boundaries in 5,050 steps under the 32,768-step bound. Do not add seed search to the binary or simulation.
 
 - [ ] **Step 2: Run the CLI tests and observe the red state**
 
@@ -284,7 +284,7 @@ Compute start and current chunk x with `WorldCell::split`. Increment a local `cr
 
 Run: `cargo fmt --all -- --check && cargo clippy -p progressus-headless --all-targets -- -D warnings && cargo test -p progressus-headless && cargo run -p progressus-headless -- --seed 0 --travel-chunks 64`
 
-Expected: the CLI test passes with byte-identical output on repeated executions and the manual scenario reports `crossed_boundaries=64`, `steps=5213`, and character ID 3.
+Expected: the CLI test passes with byte-identical output on repeated executions and the manual scenario reports `crossed_boundaries=64`, `steps=5050`, and character ID 3.
 
 - [ ] **Step 5: Commit the headless scenario**
 

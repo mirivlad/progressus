@@ -2,17 +2,36 @@ use std::env;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::process::ExitCode;
+use std::{cmp::Ordering, collections::BTreeMap};
 
 use progressus_app::{
-    Application, ChunkCoord, Command, NewGameOptions, SnapshotQuery, Terrain, WorldSeed,
+    Application, ChunkCoord, ClientSnapshot, Command, Direction, EntityId, NewGameOptions,
+    SnapshotQuery, Terrain, WorldCell, WorldSeed,
 };
 
-const USAGE: &str = "usage: progressus-headless --seed <u64> --ticks <u64>";
+const USAGE: &str =
+    "usage: progressus-headless --seed <u64> (--ticks <u64> | --travel-chunks <positive u64>)";
+const WALKER_CHARACTER_ID: EntityId = match EntityId::new(3) {
+    Some(id) => id,
+    None => panic!("walker character ID must be non-zero"),
+};
+const DIRECTIONS: [Direction; 4] = [
+    Direction::East,
+    Direction::North,
+    Direction::South,
+    Direction::West,
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Config {
     seed: u64,
-    ticks: u64,
+    scenario: Scenario,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Scenario {
+    AdvanceTicks(u64),
+    TravelChunks(u64),
 }
 
 #[derive(Debug)]
@@ -41,9 +60,19 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut application = Application::new_game(NewGameOptions {
         seed: WorldSeed::new(config.seed),
     })?;
-    application.execute(Command::AdvanceTicks {
-        count: config.ticks,
-    })?;
+
+    match config.scenario {
+        Scenario::AdvanceTicks(count) => run_ticks(&mut application, config.seed, count)?,
+        Scenario::TravelChunks(requested_boundaries) => {
+            run_travel(&mut application, config.seed, requested_boundaries)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn run_ticks(application: &mut Application, seed: u64, ticks: u64) -> Result<(), Box<dyn Error>> {
+    application.execute(Command::AdvanceTicks { count: ticks })?;
     let snapshot = application.snapshot(SnapshotQuery {
         chunks: vec![
             ChunkCoord::new(-1, 0),
@@ -54,7 +83,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     println!(
         "seed={} tick={} worldgen_version={} chunks={} characters={}",
-        config.seed,
+        seed,
         snapshot.tick.value(),
         snapshot.worldgen_version.value(),
         snapshot.chunks.len(),
@@ -85,10 +114,212 @@ fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn run_travel(
+    application: &mut Application,
+    seed: u64,
+    requested_boundaries: u64,
+) -> Result<(), Box<dyn Error>> {
+    let mut snapshot = application.snapshot(SnapshotQuery::default())?;
+    let mut position = character_position(&snapshot, WALKER_CHARACTER_ID)?;
+    let (start_chunk, _) = position.split();
+    let mut max_chunk_x = start_chunk.x();
+    let mut crossed_boundaries = 0_u64;
+    let step_limit = requested_boundaries
+        .checked_mul(512)
+        .ok_or_else(|| CliError("travel chunk count is too large".to_owned()))?
+        .max(1_024);
+    let mut visit_counts = BTreeMap::new();
+    visit_counts.insert(position, 1_u64);
+
+    for steps in 0..step_limit {
+        let direction =
+            select_direction(application, position, &visit_counts).map_err(|reason| {
+                travel_failure(
+                    seed,
+                    position,
+                    max_chunk_x,
+                    crossed_boundaries,
+                    steps,
+                    reason,
+                )
+            })?;
+        let target = direction.adjacent(position).ok_or_else(|| {
+            travel_failure(
+                seed,
+                position,
+                max_chunk_x,
+                crossed_boundaries,
+                steps,
+                "selected direction overflows world-cell coordinates",
+            )
+        })?;
+
+        application
+            .execute(Command::SetMovementDirection {
+                character_id: WALKER_CHARACTER_ID,
+                direction,
+            })
+            .map_err(|error| {
+                travel_failure(
+                    seed,
+                    position,
+                    max_chunk_x,
+                    crossed_boundaries,
+                    steps,
+                    &format!("movement command was rejected: {error}"),
+                )
+            })?;
+        application
+            .execute(Command::AdvanceTicks { count: 1 })
+            .map_err(|error| {
+                travel_failure(
+                    seed,
+                    position,
+                    max_chunk_x,
+                    crossed_boundaries,
+                    steps,
+                    &format!("simulation tick failed: {error}"),
+                )
+            })?;
+        snapshot = application.snapshot(SnapshotQuery::default())?;
+        let actual = character_position(&snapshot, WALKER_CHARACTER_ID)?;
+        if actual != target {
+            return Err(Box::new(travel_failure(
+                seed,
+                actual,
+                max_chunk_x,
+                crossed_boundaries,
+                steps + 1,
+                "authoritative position did not match the chosen cell",
+            )));
+        }
+
+        position = actual;
+        let count = visit_counts.entry(position).or_insert(0);
+        *count = count.checked_add(1).ok_or_else(|| {
+            travel_failure(
+                seed,
+                position,
+                max_chunk_x,
+                crossed_boundaries,
+                steps + 1,
+                "walker visit count overflowed",
+            )
+        })?;
+
+        let (chunk, _) = position.split();
+        if chunk.x() > max_chunk_x {
+            crossed_boundaries += u64::try_from(chunk.x() - max_chunk_x).expect("positive delta");
+            max_chunk_x = chunk.x();
+        }
+        if crossed_boundaries >= requested_boundaries {
+            println!(
+                "travel character_id={} seed={} start_chunk_x={} max_chunk_x={} crossed_boundaries={} steps={} position=({}, {})",
+                WALKER_CHARACTER_ID.value(),
+                seed,
+                start_chunk.x(),
+                max_chunk_x,
+                crossed_boundaries,
+                steps + 1,
+                position.x(),
+                position.y()
+            );
+            return Ok(());
+        }
+    }
+
+    Err(Box::new(travel_failure(
+        seed,
+        position,
+        max_chunk_x,
+        crossed_boundaries,
+        step_limit,
+        "step limit exhausted",
+    )))
+}
+
+fn select_direction(
+    application: &Application,
+    position: WorldCell,
+    visit_counts: &BTreeMap<WorldCell, u64>,
+) -> Result<Direction, &'static str> {
+    let candidates = DIRECTIONS
+        .into_iter()
+        .filter_map(|direction| direction.adjacent(position).map(|cell| (direction, cell)))
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Err("no adjacent world cell is representable");
+    }
+
+    let mut chunks = candidates
+        .iter()
+        .map(|(_, cell)| cell.split().0)
+        .collect::<Vec<_>>();
+    chunks.sort_unstable();
+    chunks.dedup();
+    let snapshot = application
+        .snapshot(SnapshotQuery { chunks })
+        .map_err(|_| "terrain snapshot query failed")?;
+
+    candidates
+        .into_iter()
+        .filter(|(_, cell)| terrain_at(&snapshot, *cell) == Some(Terrain::Grass))
+        .min_by(|(_, first), (_, second)| {
+            visit_counts
+                .get(first)
+                .copied()
+                .unwrap_or(0)
+                .cmp(&visit_counts.get(second).copied().unwrap_or(0))
+                .then(Ordering::Equal)
+        })
+        .map(|(direction, _)| direction)
+        .ok_or("no adjacent grass cell is available")
+}
+
+fn terrain_at(snapshot: &ClientSnapshot, cell: WorldCell) -> Option<Terrain> {
+    let (coordinate, local) = cell.split();
+    snapshot
+        .chunks
+        .iter()
+        .find(|chunk| chunk.coordinate == coordinate)
+        .and_then(|chunk| chunk.terrain_at(local))
+}
+
+fn character_position(snapshot: &ClientSnapshot, id: EntityId) -> Result<WorldCell, CliError> {
+    snapshot
+        .characters
+        .iter()
+        .find(|character| character.id == id)
+        .map(|character| character.position)
+        .ok_or_else(|| {
+            CliError(format!(
+                "character ID {} is missing from snapshot",
+                id.value()
+            ))
+        })
+}
+
+fn travel_failure(
+    seed: u64,
+    position: WorldCell,
+    max_chunk_x: i64,
+    crossed_boundaries: u64,
+    steps: u64,
+    reason: &str,
+) -> CliError {
+    CliError(format!(
+        "travel failed: {reason}; seed={seed} character_id={} position=({}, {}) max_chunk_x={max_chunk_x} crossed_boundaries={crossed_boundaries} steps={steps}",
+        WALKER_CHARACTER_ID.value(),
+        position.x(),
+        position.y()
+    ))
+}
+
 fn parse_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Config, CliError> {
     let mut arguments = arguments.into_iter();
     let mut seed = None;
     let mut ticks = None;
+    let mut travel_chunks = None;
 
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -114,12 +345,36 @@ fn parse_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Config
                         .map_err(|_| CliError(format!("invalid tick count '{value}'")))?,
                 );
             }
+            "--travel-chunks" => {
+                if travel_chunks.is_some() {
+                    return Err(CliError("duplicate --travel-chunks argument".to_owned()));
+                }
+                let value = arguments.next().ok_or_else(|| CliError(USAGE.to_owned()))?;
+                let count = value
+                    .parse::<u64>()
+                    .map_err(|_| CliError(format!("invalid travel chunk count '{value}'")))?;
+                if count == 0 {
+                    return Err(CliError("travel chunk count must be positive".to_owned()));
+                }
+                travel_chunks = Some(count);
+            }
             unknown => return Err(CliError(format!("unknown argument '{unknown}'"))),
         }
     }
 
+    let scenario = match (ticks, travel_chunks) {
+        (Some(count), None) => Scenario::AdvanceTicks(count),
+        (None, Some(count)) => Scenario::TravelChunks(count),
+        (None, None) => return Err(CliError(USAGE.to_owned())),
+        (Some(_), Some(_)) => {
+            return Err(CliError(
+                "choose either --ticks or --travel-chunks, not both".to_owned(),
+            ));
+        }
+    };
+
     Ok(Config {
         seed: seed.ok_or_else(|| CliError(USAGE.to_owned()))?,
-        ticks: ticks.ok_or_else(|| CliError(USAGE.to_owned()))?,
+        scenario,
     })
 }
