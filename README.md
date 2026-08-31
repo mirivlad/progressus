@@ -54,10 +54,11 @@ The first executable headless foundation is implemented:
 - signed positive/negative world coordinates;
 - a checked simulation clock and stable Progressus entity IDs;
 - a deterministic five-character new-game scenario;
-- a detached client read model exposed through `progressus-app`;
-- a headless consumer that runs without Bevy, a window, or a graphics context.
+- bootstrap cardinal character movement: at most one grass-cell step per simulation tick, with deterministic stops before water, rock, or coordinate overflow;
+- `SetMovementDirection` and `StopMovement` through `progressus-app`, with detached snapshots that expose `MovementState`;
+- a headless consumer that runs without Bevy, a window, or a graphics context, including a bounded external least-visited walker that crosses generated chunk boundaries through the public application API.
 
-Movement, jobs, physical items, modified chunk persistence, save/load, and the Bevy client remain Prototype 01 work. The current boundary is intentionally ready for a visual client to depend on `progressus-app` without taking ownership of simulation truth.
+This is direction-driven movement bootstrap work, not complete navigation. Full pathfinding around obstacles, jobs/AI interruption policy, speed/collision, chunk residency, modified chunks, save/load, physical items, and the Bevy client remain Prototype 01 work. The current boundary is intentionally ready for a visual client to depend on `progressus-app` without taking ownership of simulation truth.
 
 The immediate goal is not to build the entire game. The first prototype exists to prove the dangerous fundamentals:
 
@@ -85,6 +86,12 @@ Run a deterministic headless scenario:
 
 ```bash
 cargo run -p progressus-headless -- --seed 42 --ticks 100000
+```
+
+Run the bounded external traversal proof (seed 0 crosses 64 positive chunk boundaries in 5,050 ticks):
+
+```bash
+cargo run -p progressus-headless -- --seed 0 --travel-chunks 64
 ```
 
 Verify that Bevy has not entered the complete headless/application/simulation/worldgen dependency chain:

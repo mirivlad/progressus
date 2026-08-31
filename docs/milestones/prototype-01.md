@@ -49,6 +49,8 @@ A character can move across many chunk boundaries in positive and negative coord
 
 The acceptance test should cover enough distance to catch hidden finite-grid assumptions.
 
+**Partially advanced (bootstrap):** deterministic cardinal movement crosses the immediate positive and negative chunk boundaries, and the external headless walker crosses 64 positive boundaries without a finite global grid or preloaded route. Long-distance traversal across both signs, chunk residency, and general navigation remain incomplete.
+
 ### P01-WORLD-04 — Sparse residency
 
 The implementation must not require all generated or visited chunks to remain loaded in memory.
@@ -90,6 +92,8 @@ Other needs/skills may remain minimal.
 Characters can navigate walkable generated terrain and cross chunk boundaries.
 
 Pathfinding must not require a single finite global grid.
+
+**Partially advanced (bootstrap):** characters retain `Idle` or persistent cardinal direction state, validate a new direction before replacing existing state, and move at most one grass cell per tick. Each persisted step rechecks coordinate range and generated terrain; water, rock, and overflow stop movement normally without changing position. Commands and detached movement snapshots cross `progressus-app`; a bounded headless walker proves 64 positive chunk-boundary crossings while preserving character ID. This is not complete navigation: no obstacle pathfinding, jobs/AI interruption policy, speed/collision, chunk residency, or persistence exists yet.
 
 ### P01-SIM-05 — Jobs
 
@@ -194,6 +198,8 @@ Generate a set of neighboring chunks in two different orders. Results must match
 ### TEST-P01-03 — Cross-chunk travel
 
 Move an entity across multiple chunk boundaries and verify final position and identity.
+
+**Partially advanced:** simulation tests cover `x=31 -> x=32` and `x=0 -> x=-1` with the same `EntityId`; the headless application-boundary scenario drives ID 3 across 64 positive chunk boundaries for seed 0, ending at `(2048, 580)` after 5,050 steps. Long-distance negative traversal and residency/unload behavior remain future coverage.
 
 ### TEST-P01-04 — Item ownership invariant
 

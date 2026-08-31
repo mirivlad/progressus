@@ -80,6 +80,16 @@ SetJobPriority(character, job_type, priority)
 
 The UI reads state through queries/read models.
 
+The current movement bootstrap makes this boundary concrete with:
+
+- `SetMovementDirection { character_id, direction }` and `StopMovement { character_id }` application commands;
+- authoritative `MovementState::{Idle, Moving { direction }}` on characters;
+- one checked cardinal cell transition at most per simulation tick, with grass-only passability and a normal idle stop on water, rock, or coordinate overflow;
+- detached `CharacterSnapshot.movement` values;
+- a headless-only least-visited walker that queries neighboring terrain through snapshots, submits ordinary commands, advances one tick, and observes a fresh snapshot before selecting again.
+
+The walker is an external deterministic test driver, not authoritative navigation: it stores no route, does not run BFS/Dijkstra/A*, and does not alter simulation or world-generation state. This bootstrap does not yet provide general obstacle navigation, jobs/AI movement policy, speed/collision, chunk residency, or persistence.
+
 This creates a useful seam for:
 
 - deterministic tests;
