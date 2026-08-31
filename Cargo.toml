@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/progressus-app",
+    "crates/progressus-headless",
     "crates/progressus-sim",
     "crates/progressus-worldgen",
 ]

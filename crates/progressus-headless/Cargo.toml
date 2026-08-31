@@ -1,0 +1,15 @@
+[package]
+name = "progressus-headless"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+progressus-app = { path = "../progressus-app" }
+
+[[bin]]
+name = "progressus-headless"
+path = "src/main.rs"
+
+[lints]
+workspace = true

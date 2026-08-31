@@ -368,7 +368,7 @@ git commit -m "feat: expose client application boundary"
 - Consumes: \`progressus-app\` only.
 - Produces: \`progressus-headless --seed <u64> --ticks <u64>\`.
 
-- [ ] **Step 1: Write failing CLI integration tests**
+- [x] **Step 1: Write failing CLI integration tests**
 
 Add \`crates/progressus-headless\` to the root workspace and create its manifest with a path dependency on \`progressus-app\`. Use \`env!("CARGO_BIN_EXE_progressus-headless")\` and \`std::process::Command\`. For \`--seed 42 --ticks 100000\`, assert success and stdout lines containing:
 
@@ -380,19 +380,19 @@ character id=5 name=Elin position=(2, 0)
 
 For missing \`--ticks\` and for \`--seed invalid --ticks 1\`, assert non-zero status and a concise stderr message containing usage or invalid seed respectively.
 
-- [ ] **Step 2: Run the CLI tests and observe the red state**
+- [x] **Step 2: Run the CLI tests and observe the red state**
 
 Run: \`cargo test -p progressus-headless --test cli\`
 
 Expected: Cargo reports that the binary package does not exist.
 
-- [ ] **Step 3: Implement minimal argument parsing and summary output**
+- [x] **Step 3: Implement minimal argument parsing and summary output**
 
 Parse exactly one \`--seed\` value and one \`--ticks\` value using the standard library; reject unknown, duplicate, missing, and unparsable arguments. The executable creates \`Application\`, advances ticks once, and queries chunks \`(-1, 0), (0, 0), (1, 0)\`.
 
 Print the fixed summary first, followed by ordered character records and terrain counts for grass, water, and rock. Route all errors through \`run() -> Result<(), Box<dyn Error>>\`; \`main\` prints \`error: {message}\` and exits with code 2.
 
-- [ ] **Step 4: Verify and commit the headless consumer**
+- [x] **Step 4: Verify and commit the headless consumer**
 
 Run: \`cargo fmt --all -- --check && cargo clippy -p progressus-headless --all-targets -- -D warnings && cargo test -p progressus-headless && cargo run -p progressus-headless -- --seed 42 --ticks 100000\`
 
