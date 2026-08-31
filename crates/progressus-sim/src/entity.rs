@@ -1,5 +1,30 @@
 use crate::{SimulationError, WorldCell};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Direction {
+    East,
+    West,
+    North,
+    South,
+}
+
+impl Direction {
+    pub fn adjacent(self, cell: WorldCell) -> Option<WorldCell> {
+        match self {
+            Self::East => cell.x().checked_add(1).map(|x| WorldCell::new(x, cell.y())),
+            Self::West => cell.x().checked_sub(1).map(|x| WorldCell::new(x, cell.y())),
+            Self::North => cell.y().checked_add(1).map(|y| WorldCell::new(cell.x(), y)),
+            Self::South => cell.y().checked_sub(1).map(|y| WorldCell::new(cell.x(), y)),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MovementState {
+    Idle,
+    Moving { direction: Direction },
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct EntityId(u64);
 
@@ -18,6 +43,7 @@ pub struct Character {
     id: EntityId,
     name: String,
     position: WorldCell,
+    movement: MovementState,
 }
 
 impl Character {
@@ -26,6 +52,7 @@ impl Character {
             id,
             name: name.to_owned(),
             position,
+            movement: MovementState::Idle,
         }
     }
 
@@ -39,6 +66,18 @@ impl Character {
 
     pub const fn position(&self) -> WorldCell {
         self.position
+    }
+
+    pub const fn movement(&self) -> MovementState {
+        self.movement
+    }
+
+    pub(crate) fn set_position(&mut self, position: WorldCell) {
+        self.position = position;
+    }
+
+    pub(crate) fn set_movement(&mut self, movement: MovementState) {
+        self.movement = movement;
     }
 }
 
