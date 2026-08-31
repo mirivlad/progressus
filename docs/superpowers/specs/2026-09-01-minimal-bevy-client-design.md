@@ -62,8 +62,10 @@ and seed `0`. Its interaction loop is strictly ordered within a Bevy frame:
    `Application::execute`;
 3. if the client cadence is due, submit exactly one
    `AdvanceTicks { count: 1 }`;
-4. request a fresh `ClientSnapshot` through `Application::snapshot`;
-5. derive/synchronize presentation state from that snapshot.
+4. request a fresh, lightweight character `ClientSnapshot` with no chunks;
+5. synchronize characters and derive Cora's authoritative central chunk;
+6. only when that central chunk changed, request the radius-one terrain
+   snapshot and rebuild the terrain presentation cache.
 
 The presentation-side scheduler has a nominal cadence of four simulation
 ticks per second (one tick after approximately 250 ms of client wall-clock
@@ -96,12 +98,15 @@ The selected character is Cora, identified by stable `EntityId::new(3)`, not
 by a Bevy entity or a client-side position.
 
 Terrain has a separate presentation root. The client derives Cora's central
-chunk from the authoritative `WorldCell` in the snapshot and requests exactly
-the nine chunks in radius one around it. Chunks are rendered as colored cell
-primitives: grass, water, and rock have distinct colors. On a change of the
-central chunk, the terrain root and its descendants are discarded and rebuilt
-from the newly requested snapshot. This is presentation cache replacement, not
-authoritative chunk residency or mutation.
+chunk from the authoritative `WorldCell` in the lightweight snapshot. It
+requests exactly the nine chunks in radius one around it during initial load
+and only when that central chunk changes; it does not query terrain each render
+frame. Between changes, a disposable terrain presentation cache supplies the
+rendered cells. Chunks are rendered as colored cell primitives: grass, water,
+and rock have distinct colors. On a change of the central chunk, the terrain
+root and its descendants are discarded and rebuilt from the newly requested
+snapshot. This is presentation cache replacement, not authoritative chunk
+residency or mutation.
 
 The first client renders simple procedural colored shapes only: no authored
 assets, sprite sheets, animation interpolation, audio, 3D, egui, selection
@@ -115,13 +120,20 @@ generation, command semantics, or tick cadence.
 
 Controls are deliberately narrow:
 
-- Arrow keys: submit `SetMovementDirection` for Cora with the corresponding
-  cardinal direction.
-- Stop key: submit `StopMovement` for Cora.
+- Arrow keys: submit `SetMovementDirection` for Cora only on an input edge or
+  change of intended direction, with the corresponding cardinal direction.
+  Holding an already selected arrow key does not resend that same command each
+  render frame because movement direction is authoritative persistent state.
+- Stop key: submit `StopMovement` only as its own input event.
 - Mouse wheel / simple pan input: camera-only movement.
 
 No movement route, pathfinding result, destination, or future world map is
 stored by the client.
+
+If `Application::execute` rejects a movement command because its first step is
+blocked, the graphical client logs the error/debug diagnostic and leaves all
+presentation state untouched. Its next authoritative snapshot remains the
+source of truth; this increment adds no notification UI.
 
 ## 7. Testable policy and verification
 
@@ -131,12 +143,15 @@ include:
 
 1. the radius-one visible window contains the expected deterministic 3x3
    chunk coordinates;
-2. moving Cora across a chunk boundary selects a new terrain window;
+2. an unchanged central chunk does not request/rebuild terrain, while moving
+   Cora across a chunk boundary selects a new terrain window;
 3. character synchronization preserves the stable `EntityId` key while the
    disposable presentation handle may be rebuilt;
 4. a snapshot with a missing character produces a removal action, and an
    equivalent later snapshot is idempotent;
-5. the client manifest has no direct simulation/worldgen dependency and the
+5. unchanged persistent-direction input emits no repeated movement command,
+   and a rejected command leaves presentation derivation snapshot-driven;
+6. the client manifest has no direct simulation/worldgen dependency and the
    dependency-boundary script proves Bevy is absent from the headless chain.
 
 The completion gate is:
