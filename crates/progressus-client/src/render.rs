@@ -47,6 +47,9 @@ pub(crate) fn sync_presentation(
         return;
     }
 
+    let rendered_center = cache.central_chunk;
+    sync_characters(&mut commands, &authoritative, &mut cache, rendered_center);
+
     let Some(controlled) = controlled_character(&authoritative.snapshot().characters) else {
         warn!("controlled character is missing from authoritative snapshot");
         return;
@@ -58,8 +61,6 @@ pub(crate) fn sync_presentation(
             Ok(window) => window,
             Err(error) => {
                 error!("presentation sync failed: {error}");
-                let rendered_center = cache.central_chunk;
-                sync_characters(&mut commands, &authoritative, &mut cache, rendered_center);
                 return;
             }
         };
@@ -67,8 +68,6 @@ pub(crate) fn sync_presentation(
             Ok(terrain) => terrain,
             Err(error) => {
                 error!("presentation sync failed: {error}");
-                let rendered_center = cache.central_chunk;
-                sync_characters(&mut commands, &authoritative, &mut cache, rendered_center);
                 return;
             }
         };
@@ -82,10 +81,8 @@ pub(crate) fn sync_presentation(
         let new_root = spawn_terrain(&mut commands, &terrain.chunks, origin);
         cache.terrain_root = Some(new_root);
         cache.central_chunk = Some(current_center);
+        position_characters(&mut commands, &authoritative, &cache, origin);
     }
-
-    let rendered_center = cache.central_chunk;
-    sync_characters(&mut commands, &authoritative, &mut cache, rendered_center);
 }
 
 fn spawn_terrain(
@@ -126,12 +123,11 @@ fn sync_characters(
     cache: &mut PresentationCache,
     rendered_center: Option<ChunkCoord>,
 ) {
-    let Some(center) = rendered_center else {
-        return;
-    };
-    let origin = center
-        .world_cell(LocalCell::new(0, 0))
-        .expect("a chunk derived from a world cell has a valid lower-left cell");
+    let origin = rendered_center.map(|center| {
+        center
+            .world_cell(LocalCell::new(0, 0))
+            .expect("a chunk derived from a world cell has a valid lower-left cell")
+    });
     let rendered = cache.characters.keys().copied().collect::<BTreeSet<_>>();
     for action in character_sync_actions(&rendered, &authoritative.snapshot().characters) {
         match action {
@@ -144,25 +140,44 @@ fn sync_characters(
                             Color::srgb(1.0, 0.85, 0.2),
                             Vec2::splat(CELL_SIZE * 0.75),
                         ),
-                        Transform::from_translation(character_translation(&character, origin)),
+                        origin.map_or_else(Transform::default, |origin| {
+                            Transform::from_translation(character_translation(&character, origin))
+                        }),
                         visual,
                     ))
                     .id();
                 cache.characters.insert(character_id, entity);
             }
             CharacterSyncAction::Update(character) => {
-                let entity = cache.characters[&character.id];
-                commands
-                    .entity(entity)
-                    .insert(Transform::from_translation(character_translation(
-                        &character, origin,
-                    )));
+                if let Some(origin) = origin {
+                    let entity = cache.characters[&character.id];
+                    commands.entity(entity).insert(Transform::from_translation(
+                        character_translation(&character, origin),
+                    ));
+                }
             }
             CharacterSyncAction::Despawn(id) => {
                 if let Some(entity) = cache.characters.remove(&id) {
                     commands.entity(entity).despawn();
                 }
             }
+        }
+    }
+}
+
+fn position_characters(
+    commands: &mut Commands,
+    authoritative: &AuthoritativeClient,
+    cache: &PresentationCache,
+    origin: WorldCell,
+) {
+    for character in &authoritative.snapshot().characters {
+        if let Some(entity) = cache.characters.get(&character.id) {
+            commands
+                .entity(*entity)
+                .insert(Transform::from_translation(character_translation(
+                    character, origin,
+                )));
         }
     }
 }

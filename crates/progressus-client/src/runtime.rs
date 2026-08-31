@@ -162,9 +162,11 @@ pub fn run() -> Result<(), ClientError> {
 
 #[cfg(test)]
 mod tests {
-    use progressus_app::EntityId;
+    use bevy::prelude::{App, Transform, Update, Vec3};
+    use progressus_app::{ChunkCoord, EntityId};
 
     use super::AuthoritativeClient;
+    use crate::render::{CharacterVisual, PresentationCache, sync_presentation};
 
     #[test]
     fn new_game_exposes_cora_in_lightweight_snapshot() {
@@ -177,5 +179,54 @@ mod tests {
                 .any(|character| character.id == EntityId::new(3).unwrap())
         );
         assert!(client.snapshot().chunks.is_empty());
+    }
+
+    #[test]
+    fn character_reconciliation_precedes_the_missing_cora_gate() {
+        let mut authoritative = AuthoritativeClient::new().unwrap();
+        authoritative
+            .snapshot
+            .characters
+            .retain(|character| character.id != super::cora_id());
+
+        let ada_id = EntityId::new(1).unwrap();
+        let mut app = App::new();
+        let ada_visual = app
+            .world_mut()
+            .spawn((CharacterVisual { id: ada_id }, Transform::default()))
+            .id();
+        let cora_visual = app
+            .world_mut()
+            .spawn((
+                CharacterVisual {
+                    id: super::cora_id(),
+                },
+                Transform::default(),
+            ))
+            .id();
+        let mut cache = PresentationCache {
+            central_chunk: Some(ChunkCoord::new(0, 0)),
+            ..Default::default()
+        };
+        cache.characters.insert(ada_id, ada_visual);
+        cache.characters.insert(super::cora_id(), cora_visual);
+        app.insert_resource(authoritative)
+            .insert_resource(cache)
+            .add_systems(Update, sync_presentation);
+
+        app.update();
+
+        let cache = app.world().resource::<PresentationCache>();
+        assert_eq!(cache.characters.get(&ada_id), Some(&ada_visual));
+        assert!(!cache.characters.contains_key(&super::cora_id()));
+        assert_eq!(
+            app.world()
+                .entity(ada_visual)
+                .get::<Transform>()
+                .unwrap()
+                .translation,
+            Vec3::new(-24.0, 0.0, 10.0)
+        );
+        assert!(app.world().get_entity(cora_visual).is_err());
     }
 }
