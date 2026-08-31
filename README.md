@@ -87,7 +87,7 @@ Run a deterministic headless scenario:
 cargo run -p progressus-headless -- --seed 42 --ticks 100000
 ```
 
-Verify that Bevy has not entered the application/simulation/worldgen dependency boundary:
+Verify that Bevy has not entered the complete headless/application/simulation/worldgen dependency chain:
 
 ```bash
 ./scripts/verify-core-dependency-boundary.sh
