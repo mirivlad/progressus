@@ -221,8 +221,7 @@ impl Simulation {
     }
 
     fn is_walkable(&self, position: WorldCell) -> Result<bool, SimulationError> {
-        let (chunk_coordinate, local) = position.split();
-        Ok(self.generator.generate(chunk_coordinate)?.terrain_at(local) == Some(Terrain::Grass))
+        Ok(self.effective_terrain_at(position)? == Terrain::Grass)
     }
 }
 
@@ -424,12 +423,72 @@ mod tests {
         );
     }
 
+    #[test]
+    fn grass_overridden_to_blocked_terrain_blocks_validation_and_persisted_step() {
+        for blocked in [Terrain::Rock, Terrain::Water] {
+            let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+            let (start, direction) = find_raw_grass_with_neighbor(&simulation, Terrain::Grass);
+            let target = direction.adjacent(start).unwrap();
+            let cora = cora();
+            place_on_grass(&mut simulation, cora, start);
+
+            simulation.set_terrain_override(target, blocked).unwrap();
+            assert_eq!(
+                simulation.set_movement_direction(cora, direction),
+                Err(SimulationError::MovementDestinationBlocked(target)),
+            );
+
+            simulation
+                .set_terrain_override(target, Terrain::Grass)
+                .unwrap();
+            simulation.set_movement_direction(cora, direction).unwrap();
+            simulation.set_terrain_override(target, blocked).unwrap();
+            simulation.advance_ticks(1).unwrap();
+
+            assert_eq!(character(&simulation, cora).position(), start);
+            assert_eq!(character(&simulation, cora).movement(), MovementState::Idle);
+        }
+    }
+
+    #[test]
+    fn blocked_terrain_overridden_to_grass_allows_validation_and_step() {
+        for blocked in [Terrain::Water, Terrain::Rock] {
+            let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+            let (start, direction) = find_raw_grass_with_neighbor(&simulation, blocked);
+            let target = direction.adjacent(start).unwrap();
+            let cora = cora();
+            place_on_grass(&mut simulation, cora, start);
+
+            simulation
+                .set_terrain_override(target, Terrain::Grass)
+                .unwrap();
+            simulation.set_movement_direction(cora, direction).unwrap();
+            simulation.advance_ticks(1).unwrap();
+            assert_eq!(character(&simulation, cora).position(), target);
+
+            simulation.stop_movement(cora).unwrap();
+            simulation.set_terrain_override(target, blocked).unwrap();
+            simulation
+                .characters
+                .get_mut(&cora)
+                .unwrap()
+                .set_position(start);
+            assert_eq!(
+                simulation.set_movement_direction(cora, direction),
+                Err(SimulationError::MovementDestinationBlocked(target)),
+            );
+        }
+    }
+
     fn character(simulation: &Simulation, id: EntityId) -> &Character {
         simulation.characters.get(&id).unwrap()
     }
 
     fn place_on_grass(simulation: &mut Simulation, id: EntityId, position: WorldCell) {
-        assert_eq!(terrain_at(simulation, position), Terrain::Grass);
+        assert_eq!(
+            simulation.effective_terrain_at(position).unwrap(),
+            Terrain::Grass
+        );
         simulation
             .characters
             .get_mut(&id)
@@ -458,7 +517,7 @@ mod tests {
         for y in -64..=64 {
             for x in -64..=64 {
                 let position = WorldCell::new(x, y);
-                if terrain_at(simulation, position) != Terrain::Grass {
+                if raw_terrain_at(simulation, position) != Terrain::Grass {
                     continue;
                 }
                 for accepted in [
@@ -467,7 +526,7 @@ mod tests {
                     Direction::North,
                     Direction::South,
                 ] {
-                    if terrain_at(simulation, accepted.adjacent(position).unwrap())
+                    if raw_terrain_at(simulation, accepted.adjacent(position).unwrap())
                         != Terrain::Grass
                     {
                         continue;
@@ -478,7 +537,7 @@ mod tests {
                         Direction::North,
                         Direction::South,
                     ] {
-                        if terrain_at(simulation, blocked.adjacent(position).unwrap())
+                        if raw_terrain_at(simulation, blocked.adjacent(position).unwrap())
                             != Terrain::Grass
                         {
                             return (position, accepted, blocked);
@@ -498,7 +557,7 @@ mod tests {
                 let north_from_east = Direction::North.adjacent(east).unwrap();
                 if [position, east, north_from_east]
                     .into_iter()
-                    .all(|cell| terrain_at(simulation, cell) == Terrain::Grass)
+                    .all(|cell| raw_terrain_at(simulation, cell) == Terrain::Grass)
                 {
                     return position;
                 }
@@ -514,7 +573,7 @@ mod tests {
         for y in -64..=64 {
             for x in -64..=64 {
                 let position = WorldCell::new(x, y);
-                if terrain_at(simulation, position) != Terrain::Grass {
+                if raw_terrain_at(simulation, position) != Terrain::Grass {
                     continue;
                 }
                 for direction in [
@@ -523,7 +582,7 @@ mod tests {
                     Direction::North,
                     Direction::South,
                 ] {
-                    if terrain_at(simulation, direction.adjacent(position).unwrap())
+                    if raw_terrain_at(simulation, direction.adjacent(position).unwrap())
                         == target_terrain
                     {
                         return (position, direction);
@@ -534,12 +593,38 @@ mod tests {
         panic!("expected adjacent {target_terrain:?} terrain fixture");
     }
 
-    fn terrain_at(simulation: &Simulation, position: WorldCell) -> Terrain {
-        let (chunk_coordinate, local) = position.split();
+    fn raw_terrain_at(simulation: &Simulation, position: WorldCell) -> Terrain {
+        let (coordinate, local) = position.split();
         simulation
-            .generated_chunk(chunk_coordinate)
+            .generated_chunk(coordinate)
             .unwrap()
             .terrain_at(local)
             .unwrap()
+    }
+
+    fn find_raw_grass_with_neighbor(
+        simulation: &Simulation,
+        neighbor: Terrain,
+    ) -> (WorldCell, Direction) {
+        for y in -64..=64 {
+            for x in -64..=64 {
+                let start = WorldCell::new(x, y);
+                if raw_terrain_at(simulation, start) != Terrain::Grass {
+                    continue;
+                }
+                for direction in [
+                    Direction::East,
+                    Direction::West,
+                    Direction::North,
+                    Direction::South,
+                ] {
+                    let target = direction.adjacent(start).unwrap();
+                    if raw_terrain_at(simulation, target) == neighbor {
+                        return (start, direction);
+                    }
+                }
+            }
+        }
+        panic!("expected raw grass next to {neighbor:?}");
     }
 }

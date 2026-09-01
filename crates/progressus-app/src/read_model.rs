@@ -1,4 +1,4 @@
-use progressus_sim::{Character, GeneratedChunk, MovementState};
+use progressus_sim::{Character, EffectiveChunk, MovementState};
 
 use crate::{
     CHUNK_SIDE, ChunkCoord, EntityId, LocalCell, SimulationTick, Terrain, WorldCell,
@@ -32,8 +32,8 @@ impl ChunkSnapshot {
     }
 }
 
-impl From<GeneratedChunk> for ChunkSnapshot {
-    fn from(chunk: GeneratedChunk) -> Self {
+impl From<EffectiveChunk> for ChunkSnapshot {
+    fn from(chunk: EffectiveChunk) -> Self {
         Self {
             coordinate: chunk.coordinate(),
             side: CHUNK_SIDE,
