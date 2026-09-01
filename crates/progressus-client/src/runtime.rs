@@ -2,14 +2,18 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use progressus_app::{
     Application, ApplicationError, ChunkCoord, ClientSnapshot, Command, EntityId, NewGameOptions,
     SnapshotQuery, WorldSeed,
 };
 
 use crate::interaction::{TickScheduler, movement_command};
+use crate::navigation::{SelectedCharacter, VisualMotion, quantize_local_click, select_nearest};
 use crate::presentation::PresentationError;
-use crate::render::{PresentationCache, camera_controls, setup_camera, sync_presentation};
+use crate::render::{
+    NavigationDebug, PresentationCache, camera_controls, setup_camera, sync_presentation,
+};
 
 impl Resource for TickScheduler {}
 
@@ -51,8 +55,14 @@ impl AuthoritativeClient {
         std::mem::take(&mut self.snapshot_dirty)
     }
 
-    fn refresh_lightweight_snapshot(&mut self) -> Result<(), ClientError> {
-        self.snapshot = self.application.snapshot(SnapshotQuery::default())?;
+    fn refresh_lightweight_snapshot(
+        &mut self,
+        navigation_for: Option<EntityId>,
+    ) -> Result<(), ClientError> {
+        self.snapshot = self.application.snapshot(SnapshotQuery {
+            navigation_for,
+            ..SnapshotQuery::default()
+        })?;
         self.snapshot_dirty = true;
         Ok(())
     }
@@ -67,6 +77,7 @@ pub(crate) fn advance_authority(
     time: Res<Time>,
     mut scheduler: ResMut<TickScheduler>,
     mut authoritative: ResMut<AuthoritativeClient>,
+    selected: Res<SelectedCharacter>,
 ) {
     let mut command_attempted = false;
     if let Some(command) = movement_command(&keys, cora_id()) {
@@ -85,9 +96,79 @@ pub(crate) fn advance_authority(
         return;
     }
     if (command_attempted || tick_due)
-        && let Err(error) = authoritative.refresh_lightweight_snapshot()
+        && let Err(error) = authoritative.refresh_lightweight_snapshot(selected.0)
     {
         error!("authoritative snapshot failed: {error}");
+    }
+}
+
+pub(crate) fn pointer_navigation(
+    buttons: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    mut selected: ResMut<SelectedCharacter>,
+    mut motion: ResMut<VisualMotion>,
+    mut authoritative: ResMut<AuthoritativeClient>,
+    cache: Res<PresentationCache>,
+) {
+    if !buttons.just_pressed(MouseButton::Left) && !buttons.just_pressed(MouseButton::Right) {
+        return;
+    }
+    let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), cameras.single()) else {
+        return;
+    };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
+    let Some(world) = camera.viewport_to_world_2d(camera_transform, cursor).ok() else {
+        return;
+    };
+    let Some(center) = cache.central_chunk else {
+        return;
+    };
+    let Some(origin_cell) = center.world_cell(progressus_app::LocalCell::new(0, 0)) else {
+        return;
+    };
+    let Ok(origin) = progressus_app::WorldPosition::from_cell_center(origin_cell) else {
+        return;
+    };
+    let Ok(target) = quantize_local_click(origin, world.x, world.y) else {
+        warn!("pointer position cannot be represented as an authoritative world position");
+        return;
+    };
+
+    if buttons.just_pressed(MouseButton::Left) {
+        selected.0 = select_nearest(
+            authoritative
+                .snapshot()
+                .characters
+                .iter()
+                .map(|character| (character.id, character.position)),
+            target,
+            progressus_app::SUBUNITS_PER_CELL / 2,
+        );
+        if selected.0.is_none() {
+            motion.clear();
+        }
+        if let Err(error) = authoritative.refresh_lightweight_snapshot(selected.0) {
+            error!("authoritative snapshot failed after selection: {error}");
+        }
+        return;
+    }
+
+    let Some(character_id) = selected.0 else {
+        return;
+    };
+    match authoritative.application.execute(Command::MoveTo {
+        character_id,
+        destination: target,
+    }) {
+        Ok(()) => {
+            if let Err(error) = authoritative.refresh_lightweight_snapshot(Some(character_id)) {
+                error!("authoritative snapshot failed after move command: {error}");
+            }
+        }
+        Err(error) => warn!("move command rejected: {error}"),
     }
 }
 
@@ -147,6 +228,9 @@ pub fn run() -> Result<(), ClientError> {
         .insert_resource(AuthoritativeClient::new()?)
         .insert_resource(TickScheduler::default())
         .insert_resource(PresentationCache::default())
+        .insert_resource(NavigationDebug::default())
+        .insert_resource(SelectedCharacter::default())
+        .insert_resource(VisualMotion::default())
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Progressus — Prototype 01".to_owned(),
@@ -157,7 +241,15 @@ pub fn run() -> Result<(), ClientError> {
         .add_systems(Startup, setup_camera)
         .add_systems(
             Update,
-            (advance_authority, sync_presentation, camera_controls).chain(),
+            (
+                pointer_navigation,
+                advance_authority,
+                sync_presentation,
+                crate::render::interpolate_selected_visual,
+                crate::render::draw_navigation_debug,
+                camera_controls,
+            )
+                .chain(),
         )
         .run();
     Ok(())
@@ -179,6 +271,7 @@ mod tests {
 
     use super::{AuthoritativeClient, advance_authority};
     use crate::interaction::TickScheduler;
+    use crate::navigation::{SelectedCharacter, VisualMotion};
     use crate::render::{CharacterVisual, PresentationCache, TerrainRoot, sync_presentation};
 
     const TERRAIN_CELL_COUNT: usize = 9 * (CHUNK_SIDE as usize) * (CHUNK_SIDE as usize);
@@ -194,6 +287,8 @@ mod tests {
         let mut app = App::new();
         app.insert_resource(authoritative)
             .insert_resource(PresentationCache::default())
+            .insert_resource(SelectedCharacter::default())
+            .insert_resource(VisualMotion::default())
             .add_systems(Update, sync_presentation);
         app
     }
@@ -279,6 +374,8 @@ mod tests {
         cache.characters.insert(super::cora_id(), cora_visual);
         app.insert_resource(authoritative)
             .insert_resource(cache)
+            .insert_resource(SelectedCharacter(Some(super::cora_id())))
+            .insert_resource(VisualMotion::default())
             .add_systems(Update, sync_presentation);
 
         app.update();
@@ -295,6 +392,7 @@ mod tests {
             Vec3::new(-24.0, 0.0, 10.0)
         );
         assert!(app.world().get_entity(cora_visual).is_err());
+        assert_eq!(app.world().resource::<SelectedCharacter>().0, None);
     }
 
     #[test]
@@ -320,7 +418,7 @@ mod tests {
                 &mut authoritative.application,
                 super::cora_id(),
             );
-            authoritative.refresh_lightweight_snapshot().unwrap();
+            authoritative.refresh_lightweight_snapshot(None).unwrap();
             crossing_from
         };
         app.update();
@@ -379,7 +477,7 @@ mod tests {
                 .application
                 .execute(Command::AdvanceTicks { count: 4 })
                 .unwrap();
-            authoritative.refresh_lightweight_snapshot().unwrap();
+            authoritative.refresh_lightweight_snapshot(None).unwrap();
         }
         app.update();
 
@@ -543,7 +641,12 @@ mod tests {
             .collect::<Vec<_>>();
         chunks.sort_unstable();
         chunks.dedup();
-        let terrain = application.snapshot(SnapshotQuery { chunks }).unwrap();
+        let terrain = application
+            .snapshot(SnapshotQuery {
+                chunks,
+                ..SnapshotQuery::default()
+            })
+            .unwrap();
 
         candidates
             .into_iter()
@@ -651,7 +754,7 @@ mod tests {
                 character_id: super::cora_id(),
             })
             .unwrap();
-        authoritative.refresh_lightweight_snapshot().unwrap();
+        authoritative.refresh_lightweight_snapshot(None).unwrap();
         let blocked_from = authoritative
             .snapshot()
             .characters
@@ -666,6 +769,8 @@ mod tests {
         app.insert_resource(authoritative)
             .insert_resource(TickScheduler::default())
             .insert_resource(PresentationCache::default())
+            .insert_resource(SelectedCharacter::default())
+            .insert_resource(VisualMotion::default())
             .insert_resource(ButtonInput::<KeyCode>::default())
             .insert_resource(Time::<()>::default())
             .add_systems(Update, (advance_authority, sync_presentation).chain());
@@ -747,7 +852,7 @@ mod tests {
                 .find(|character| character.id == super::cora_id())
                 .unwrap()
                 .movement,
-            MovementState::Moving {
+            MovementState::ManualDirectional {
                 direction: blocked_direction
             }
         );

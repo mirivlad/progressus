@@ -7,6 +7,7 @@ use progressus_app::{
     WorldCell, WorldPosition,
 };
 
+use crate::navigation::{SelectedCharacter, VisualMotion, interpolate_trace};
 use crate::presentation::{
     CharacterSyncAction, VisibleChunkWindow, character_sync_actions, controlled_character,
     terrain_refresh_needed,
@@ -35,6 +36,9 @@ pub(crate) struct PresentationCache {
     pub(crate) characters: BTreeMap<EntityId, Entity>,
 }
 
+#[derive(Resource, Default)]
+pub(crate) struct NavigationDebug(pub(crate) bool);
+
 pub(crate) fn setup_camera(mut commands: Commands) {
     commands.spawn(Camera2d);
 }
@@ -43,6 +47,8 @@ pub(crate) fn sync_presentation(
     mut commands: Commands,
     mut authoritative: ResMut<AuthoritativeClient>,
     mut cache: ResMut<PresentationCache>,
+    mut selected: ResMut<SelectedCharacter>,
+    mut motion: ResMut<VisualMotion>,
 ) {
     if !authoritative.take_snapshot_dirty() {
         return;
@@ -50,6 +56,22 @@ pub(crate) fn sync_presentation(
 
     let rendered_center = cache.central_chunk;
     sync_characters(&mut commands, &authoritative, &mut cache, rendered_center);
+
+    if let Some(id) = selected.0 {
+        if !authoritative
+            .snapshot()
+            .characters
+            .iter()
+            .any(|character| character.id == id)
+        {
+            selected.0 = None;
+            motion.clear();
+        } else if let Some(navigation) = authoritative.snapshot().navigation.as_ref()
+            && navigation.character_id == id
+        {
+            motion.replace(id, navigation.last_tick_motion_trace.clone());
+        }
+    }
 
     let Some(controlled) = controlled_character(&authoritative.snapshot().characters) else {
         warn!("controlled character is missing from authoritative snapshot");
@@ -189,12 +211,128 @@ fn character_translation(character: &CharacterSnapshot, origin: WorldCell) -> Ve
     world_position_translation(character.position, origin, CHARACTER_Z)
 }
 
-fn world_position_translation(position: WorldPosition, origin: WorldPosition, z: f32) -> Vec3 {
+pub(crate) fn world_position_translation(
+    position: WorldPosition,
+    origin: WorldPosition,
+    z: f32,
+) -> Vec3 {
     let relative_x =
         (position.x_subunits() - origin.x_subunits()) as f32 / SUBUNITS_PER_CELL as f32;
     let relative_y =
         (position.y_subunits() - origin.y_subunits()) as f32 / SUBUNITS_PER_CELL as f32;
     Vec3::new(relative_x * CELL_SIZE, relative_y * CELL_SIZE, z)
+}
+
+pub(crate) fn interpolate_selected_visual(
+    time: Res<Time>,
+    mut motion: ResMut<VisualMotion>,
+    selected: Res<SelectedCharacter>,
+    authoritative: Res<AuthoritativeClient>,
+    cache: Res<PresentationCache>,
+    mut transforms: Query<&mut Transform, With<CharacterVisual>>,
+) {
+    let Some(id) = selected.0 else {
+        return;
+    };
+    if motion.character_id != Some(id) || motion.trace.is_empty() {
+        return;
+    }
+    let Some(center) = cache.central_chunk else {
+        return;
+    };
+    let Some(origin_cell) = center.world_cell(LocalCell::new(0, 0)) else {
+        return;
+    };
+    let Ok(origin) = WorldPosition::from_cell_center(origin_cell) else {
+        return;
+    };
+    let Some(entity) = cache.characters.get(&id) else {
+        return;
+    };
+    let Ok(mut transform) = transforms.get_mut(*entity) else {
+        return;
+    };
+    motion.elapsed_seconds += time.delta_secs();
+    let position = interpolate_trace(
+        &motion.trace,
+        motion.elapsed_seconds / crate::interaction::TICK_INTERVAL.as_secs_f32(),
+    );
+    transform.translation = world_position_translation(position, origin, CHARACTER_Z);
+
+    if motion.elapsed_seconds >= crate::interaction::TICK_INTERVAL.as_secs_f32()
+        && authoritative.snapshot().navigation.is_none()
+    {
+        motion.clear();
+    }
+}
+
+pub(crate) fn draw_navigation_debug(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut debug: ResMut<NavigationDebug>,
+    selected: Res<SelectedCharacter>,
+    authoritative: Res<AuthoritativeClient>,
+    cache: Res<PresentationCache>,
+    mut gizmos: Gizmos,
+) {
+    if keys.just_pressed(KeyCode::F3) {
+        debug.0 = !debug.0;
+    }
+    if !debug.0 {
+        return;
+    }
+    let (Some(id), Some(center)) = (selected.0, cache.central_chunk) else {
+        return;
+    };
+    let Some(navigation) = authoritative.snapshot().navigation.as_ref() else {
+        return;
+    };
+    if navigation.character_id != id {
+        return;
+    }
+    let Some(origin_cell) = center.world_cell(LocalCell::new(0, 0)) else {
+        return;
+    };
+    let Ok(origin) = WorldPosition::from_cell_center(origin_cell) else {
+        return;
+    };
+    let to_visual = |position| world_position_translation(position, origin, CHARACTER_Z + 1.0);
+    if let Some(character) = authoritative
+        .snapshot()
+        .characters
+        .iter()
+        .find(|character| character.id == id)
+    {
+        let authority = to_visual(character.position).truncate();
+        gizmos.line_2d(
+            authority + Vec2::new(-4.0, 0.0),
+            authority + Vec2::new(4.0, 0.0),
+            Color::WHITE,
+        );
+        gizmos.line_2d(
+            authority + Vec2::new(0.0, -4.0),
+            authority + Vec2::new(0.0, 4.0),
+            Color::WHITE,
+        );
+        let mut previous = authority;
+        for waypoint in &navigation.remaining_waypoints {
+            let next = to_visual(*waypoint).truncate();
+            gizmos.line_2d(previous, next, Color::srgb(0.95, 0.2, 0.8));
+            previous = next;
+        }
+    }
+    if let Some(destination) = navigation.destination {
+        let destination = to_visual(destination).truncate();
+        gizmos.line_2d(
+            destination + Vec2::new(-3.0, -3.0),
+            destination + Vec2::new(3.0, 3.0),
+            Color::srgb(0.2, 1.0, 1.0),
+        );
+        gizmos.line_2d(
+            destination + Vec2::new(-3.0, 3.0),
+            destination + Vec2::new(3.0, -3.0),
+            Color::srgb(0.2, 1.0, 1.0),
+        );
+    }
 }
 
 fn world_translation(world_cell: WorldCell, origin: WorldCell, z: f32) -> Vec3 {
