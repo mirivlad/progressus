@@ -170,7 +170,8 @@ mod tests {
     };
     use progressus_app::{
         Application, CHUNK_SIDE, CharacterSnapshot, ChunkCoord, ClientSnapshot, Command, Direction,
-        EntityId, LocalCell, MovementState, SnapshotQuery, Terrain, WorldCell,
+        EntityId, LocalCell, MovementState, SUBUNITS_PER_CELL, SnapshotQuery, Terrain, WorldCell,
+        WorldPosition,
     };
 
     use super::{AuthoritativeClient, advance_authority};
@@ -321,7 +322,10 @@ mod tests {
         };
         app.update();
 
-        assert_eq!(character(&app, super::cora_id()).position, crossing_from);
+        assert_eq!(
+            character(&app, super::cora_id()).containing_cell,
+            crossing_from
+        );
         assert_eq!(crossing_from.x(), 31);
         let crossing_center = crossing_from.split().0;
         assert_eq!(crossing_center.x(), 0);
@@ -370,13 +374,13 @@ mod tests {
                 .unwrap();
             authoritative
                 .application
-                .execute(Command::AdvanceTicks { count: 1 })
+                .execute(Command::AdvanceTicks { count: 4 })
                 .unwrap();
             authoritative.refresh_lightweight_snapshot().unwrap();
         }
         app.update();
 
-        let crossing_to = character(&app, super::cora_id()).position;
+        let crossing_to = character(&app, super::cora_id()).containing_cell;
         assert_eq!(crossing_to, WorldCell::new(32, crossing_from.y()));
         let new_center = crossing_to.split().0;
         assert_eq!(new_center, ChunkCoord::new(1, crossing_center.y()));
@@ -420,7 +424,9 @@ mod tests {
         };
         assert_eq!(terrain_root_count, 1);
 
-        let render_origin = new_center.world_cell(LocalCell::new(0, 0)).unwrap();
+        let render_origin =
+            WorldPosition::from_cell_center(new_center.world_cell(LocalCell::new(0, 0)).unwrap())
+                .unwrap();
         for authoritative in &app
             .world()
             .resource::<AuthoritativeClient>()
@@ -428,8 +434,12 @@ mod tests {
             .characters
         {
             let expected = Vec3::new(
-                (authoritative.position.x() - render_origin.x()) as f32 * 12.0,
-                (authoritative.position.y() - render_origin.y()) as f32 * 12.0,
+                (authoritative.position.x_subunits() - render_origin.x_subunits()) as f32
+                    / SUBUNITS_PER_CELL as f32
+                    * 12.0,
+                (authoritative.position.y_subunits() - render_origin.y_subunits()) as f32
+                    / SUBUNITS_PER_CELL as f32
+                    * 12.0,
                 10.0,
             );
             assert_eq!(
@@ -485,7 +495,7 @@ mod tests {
                 })
                 .unwrap();
             application
-                .execute(Command::AdvanceTicks { count: 1 })
+                .execute(Command::AdvanceTicks { count: 4 })
                 .unwrap();
             snapshot = application.snapshot(SnapshotQuery::default()).unwrap();
             let reached = snapshot_character_position(&snapshot, character_id);
@@ -545,7 +555,7 @@ mod tests {
             .iter()
             .find(|character| character.id == id)
             .unwrap()
-            .position
+            .containing_cell
     }
 
     fn snapshot_terrain_at(snapshot: &ClientSnapshot, position: WorldCell) -> Option<Terrain> {
@@ -615,7 +625,7 @@ mod tests {
     }
 
     #[test]
-    fn rejected_edge_movement_resyncs_from_authority_without_changing_presentation() {
+    fn blocked_edge_intent_resyncs_from_authority_without_manual_presentation_changes() {
         let mut authoritative = AuthoritativeClient::new().unwrap();
         let (path, blocked_direction, blocked_key) =
             blocked_step_from_public_snapshots(&authoritative);
@@ -629,7 +639,7 @@ mod tests {
                 .unwrap();
             authoritative
                 .application
-                .execute(Command::AdvanceTicks { count: 1 })
+                .execute(Command::AdvanceTicks { count: 4 })
                 .unwrap();
         }
         authoritative
@@ -645,7 +655,7 @@ mod tests {
             .iter()
             .find(|character| character.id == super::cora_id())
             .unwrap()
-            .position;
+            .containing_cell;
         let blocked_target = blocked_direction.adjacent(blocked_from).unwrap();
         assert_ne!(terrain_at(&authoritative, blocked_target), Terrain::Grass);
 
@@ -699,7 +709,11 @@ mod tests {
             .iter_mut()
             .find(|character| character.id == super::cora_id())
             .unwrap()
-            .position = WorldCell::new(blocked_from.x() + 7, blocked_from.y() + 11);
+            .position = WorldPosition::from_cell_center(WorldCell::new(
+            blocked_from.x() + 7,
+            blocked_from.y() + 11,
+        ))
+        .unwrap();
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(blocked_key);
@@ -707,7 +721,33 @@ mod tests {
         app.update();
 
         let authoritative = app.world().resource::<AuthoritativeClient>();
-        assert_eq!(authoritative.snapshot(), &authoritative_before);
+        assert_eq!(
+            authoritative
+                .snapshot()
+                .characters
+                .iter()
+                .find(|character| character.id == super::cora_id())
+                .unwrap()
+                .position,
+            authoritative_before
+                .characters
+                .iter()
+                .find(|character| character.id == super::cora_id())
+                .unwrap()
+                .position
+        );
+        assert_eq!(
+            authoritative
+                .snapshot()
+                .characters
+                .iter()
+                .find(|character| character.id == super::cora_id())
+                .unwrap()
+                .movement,
+            MovementState::Moving {
+                direction: blocked_direction
+            }
+        );
         assert!(!authoritative.snapshot_dirty);
         let cache = app.world().resource::<PresentationCache>();
         assert_eq!(cache.terrain_root, root_before);
@@ -730,7 +770,7 @@ mod tests {
             .iter()
             .find(|character| character.id == super::cora_id())
             .unwrap()
-            .position;
+            .containing_cell;
         let center = start.split().0;
         let chunks = (-1..=1)
             .flat_map(|y| (-1..=1).map(move |x| ChunkCoord::new(center.x() + x, center.y() + y)))

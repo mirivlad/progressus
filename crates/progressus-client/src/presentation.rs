@@ -2,7 +2,7 @@
 mod tests {
     use std::collections::BTreeSet;
 
-    use progressus_app::{CharacterSnapshot, ChunkCoord, MovementState, WorldCell};
+    use progressus_app::{CharacterSnapshot, ChunkCoord, MovementState, WorldCell, WorldPosition};
 
     use super::{
         CharacterSyncAction, VisibleChunkWindow, character_sync_actions, terrain_refresh_needed,
@@ -44,7 +44,8 @@ mod tests {
         let snapshots = vec![CharacterSnapshot {
             id: progressus_app::EntityId::new(3).unwrap(),
             name: "Cora".to_owned(),
-            position: WorldCell::new(32, 0),
+            position: WorldPosition::from_cell_center(WorldCell::new(32, 0)).unwrap(),
+            containing_cell: WorldCell::new(32, 0),
             movement: MovementState::Idle,
         }];
 

@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use progressus_app::{
-    CHUNK_SIDE, CharacterSnapshot, ChunkCoord, EntityId, LocalCell, Terrain, WorldCell,
+    CHUNK_SIDE, CharacterSnapshot, ChunkCoord, EntityId, LocalCell, SUBUNITS_PER_CELL, Terrain,
+    WorldCell, WorldPosition,
 };
 
 use crate::presentation::{
@@ -54,7 +55,7 @@ pub(crate) fn sync_presentation(
         warn!("controlled character is missing from authoritative snapshot");
         return;
     };
-    let current_center = controlled.position.split().0;
+    let current_center = controlled.containing_cell.split().0;
 
     if terrain_refresh_needed(cache.central_chunk, current_center) {
         let window = match VisibleChunkWindow::around(current_center) {
@@ -183,7 +184,17 @@ fn position_characters(
 }
 
 fn character_translation(character: &CharacterSnapshot, origin: WorldCell) -> Vec3 {
-    world_translation(character.position, origin, CHARACTER_Z)
+    let origin = WorldPosition::from_cell_center(origin)
+        .expect("a valid world cell has a representable fixed-point center");
+    world_position_translation(character.position, origin, CHARACTER_Z)
+}
+
+fn world_position_translation(position: WorldPosition, origin: WorldPosition, z: f32) -> Vec3 {
+    let relative_x =
+        (position.x_subunits() - origin.x_subunits()) as f32 / SUBUNITS_PER_CELL as f32;
+    let relative_y =
+        (position.y_subunits() - origin.y_subunits()) as f32 / SUBUNITS_PER_CELL as f32;
+    Vec3::new(relative_x * CELL_SIZE, relative_y * CELL_SIZE, z)
 }
 
 fn world_translation(world_cell: WorldCell, origin: WorldCell, z: f32) -> Vec3 {
@@ -240,10 +251,10 @@ pub(crate) fn camera_controls(
 #[cfg(test)]
 mod tests {
     use bevy::ecs::world::{CommandQueue, World};
-    use bevy::prelude::Visibility;
-    use progressus_app::{ChunkSnapshot, Terrain};
+    use bevy::prelude::{Vec3, Visibility};
+    use progressus_app::{ChunkSnapshot, Terrain, WorldCell, WorldPosition};
 
-    use super::{CHUNK_SIDE, LocalCell, spawn_terrain};
+    use super::{CHARACTER_Z, CHUNK_SIDE, LocalCell, spawn_terrain, world_position_translation};
 
     #[test]
     fn terrain_root_has_visibility_for_sprite_children() {
@@ -267,5 +278,22 @@ mod tests {
         queue.apply(&mut world);
 
         assert!(world.entity(root).contains::<Visibility>());
+    }
+
+    #[test]
+    fn fixed_point_character_positions_are_aligned_to_terrain_cell_centers() {
+        let origin = WorldPosition::from_cell_center(WorldCell::new(0, 0)).unwrap();
+        assert_eq!(
+            world_position_translation(origin, origin, CHARACTER_Z),
+            Vec3::new(0.0, 0.0, CHARACTER_Z)
+        );
+        assert_eq!(
+            world_position_translation(
+                origin.checked_translate(256, 0).unwrap(),
+                origin,
+                CHARACTER_Z,
+            ),
+            Vec3::new(3.0, 0.0, CHARACTER_Z)
+        );
     }
 }

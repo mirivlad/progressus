@@ -6,8 +6,9 @@ mod read_model;
 use progressus_sim::{Simulation, SimulationError};
 
 pub use progressus_sim::{
-    CHUNK_SIDE, ChunkCoord, Direction, EntityId, InteractionRadius, LocalCell, MovementSpeed,
-    MovementState, SimulationTick, Terrain, WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
+    CHUNK_SIDE, ChunkCoord, DEFAULT_CHARACTER_SPEED, Direction, EntityId, InteractionRadius,
+    LocalCell, MovementSpeed, MovementState, SUBUNITS_PER_CELL, SimulationTick, Terrain, WorldCell,
+    WorldPosition, WorldSeed, WorldgenVersion,
 };
 pub use read_model::{CharacterSnapshot, ChunkSnapshot, ClientSnapshot};
 

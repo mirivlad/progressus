@@ -14,8 +14,14 @@ fn long_run_prints_deterministic_client_summary() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("seed=42 tick=100000 worldgen_version=1 chunks=3 characters=5"));
-    assert!(stdout.contains("character id=1 name=Ada position=(-2, 0)"));
-    assert!(stdout.contains("character id=5 name=Elin position=(2, 0)"));
+    assert!(stdout.contains(
+        "character id=1 name=Ada position_subunits=(-1536, 512) containing_cell=(-2, 0)"
+    ));
+    assert!(
+        stdout.contains(
+            "character id=5 name=Elin position_subunits=(2560, 512) containing_cell=(2, 0)"
+        )
+    );
     assert!(stdout.contains("terrain grass="));
     assert!(stdout.contains(" water="));
     assert!(stdout.contains(" rock="));

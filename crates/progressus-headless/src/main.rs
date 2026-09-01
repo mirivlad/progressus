@@ -5,8 +5,8 @@ use std::process::ExitCode;
 use std::{cmp::Ordering, collections::BTreeMap};
 
 use progressus_app::{
-    Application, ChunkCoord, ClientSnapshot, Command, Direction, EntityId, NewGameOptions,
-    SnapshotQuery, Terrain, WorldCell, WorldSeed,
+    Application, ChunkCoord, ClientSnapshot, Command, DEFAULT_CHARACTER_SPEED, Direction, EntityId,
+    NewGameOptions, SUBUNITS_PER_CELL, SnapshotQuery, Terrain, WorldCell, WorldPosition, WorldSeed,
 };
 
 const USAGE: &str =
@@ -91,11 +91,13 @@ fn run_ticks(application: &mut Application, seed: u64, ticks: u64) -> Result<(),
     );
     for character in &snapshot.characters {
         println!(
-            "character id={} name={} position=({}, {})",
+            "character id={} name={} position_subunits=({}, {}) containing_cell=({}, {})",
             character.id.value(),
             character.name,
-            character.position.x(),
-            character.position.y()
+            character.position.x_subunits(),
+            character.position.y_subunits(),
+            character.containing_cell.x(),
+            character.containing_cell.y()
         );
     }
 
@@ -120,7 +122,7 @@ fn run_travel(
     requested_boundaries: u64,
 ) -> Result<(), Box<dyn Error>> {
     let mut snapshot = application.snapshot(SnapshotQuery::default())?;
-    let mut position = character_position(&snapshot, WALKER_CHARACTER_ID)?;
+    let mut position = character_exact_position(&snapshot, WALKER_CHARACTER_ID)?.containing_cell();
     let (start_chunk, _) = position.split();
     let mut max_chunk_x = start_chunk.x();
     let mut crossed_boundaries = 0_u64;
@@ -169,32 +171,51 @@ fn run_travel(
                     &format!("movement command was rejected: {error}"),
                 )
             })?;
-        application
-            .execute(Command::AdvanceTicks { count: 1 })
-            .map_err(|error| {
-                travel_failure(
-                    seed,
-                    position,
-                    max_chunk_x,
-                    crossed_boundaries,
-                    steps,
-                    &format!("simulation tick failed: {error}"),
-                )
-            })?;
-        snapshot = application.snapshot(SnapshotQuery::default())?;
-        let actual = character_position(&snapshot, WALKER_CHARACTER_ID)?;
-        if actual != target {
+        let target_position = WorldPosition::from_cell_center(target).map_err(|error| {
+            travel_failure(
+                seed,
+                position,
+                max_chunk_x,
+                crossed_boundaries,
+                steps,
+                &format!("target center is outside the fixed-point world: {error:?}"),
+            )
+        })?;
+        let mut actual = character_exact_position(&snapshot, WALKER_CHARACTER_ID)?;
+        let ticks_per_step = SUBUNITS_PER_CELL
+            .checked_div(i128::from(DEFAULT_CHARACTER_SPEED.subunits_per_tick()))
+            .expect("default movement speed is nonzero");
+        for _ in 0..ticks_per_step {
+            application
+                .execute(Command::AdvanceTicks { count: 1 })
+                .map_err(|error| {
+                    travel_failure(
+                        seed,
+                        position,
+                        max_chunk_x,
+                        crossed_boundaries,
+                        steps,
+                        &format!("simulation tick failed: {error}"),
+                    )
+                })?;
+            snapshot = application.snapshot(SnapshotQuery::default())?;
+            actual = character_exact_position(&snapshot, WALKER_CHARACTER_ID)?;
+            if actual == target_position {
+                break;
+            }
+        }
+        if actual != target_position {
             return Err(Box::new(travel_failure(
                 seed,
-                actual,
+                actual.containing_cell(),
                 max_chunk_x,
                 crossed_boundaries,
                 steps + 1,
-                "authoritative position did not match the chosen cell",
+                "authoritative position did not reach the chosen cell center",
             )));
         }
 
-        position = actual;
+        position = actual.containing_cell();
         let count = visit_counts.entry(position).or_insert(0);
         *count = count.checked_add(1).ok_or_else(|| {
             travel_failure(
@@ -285,7 +306,10 @@ fn terrain_at(snapshot: &ClientSnapshot, cell: WorldCell) -> Option<Terrain> {
         .and_then(|chunk| chunk.terrain_at(local))
 }
 
-fn character_position(snapshot: &ClientSnapshot, id: EntityId) -> Result<WorldCell, CliError> {
+fn character_exact_position(
+    snapshot: &ClientSnapshot,
+    id: EntityId,
+) -> Result<WorldPosition, CliError> {
     snapshot
         .characters
         .iter()
