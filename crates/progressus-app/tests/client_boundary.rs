@@ -234,3 +234,51 @@ fn selected_navigation_snapshot_is_detached_and_default_query_omits_route() {
         .clear();
     assert_eq!(application.snapshot(query).unwrap(), expected);
 }
+
+#[test]
+fn rejected_move_to_keeps_the_selected_navigation_snapshot() {
+    let mut application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(2),
+    })
+    .unwrap();
+    let cora = EntityId::new(3).unwrap();
+    let accepted = WorldPosition::from_subunits(800, 900).unwrap();
+    application
+        .execute(Command::MoveTo {
+            character_id: cora,
+            destination: accepted,
+        })
+        .unwrap();
+    let query = SnapshotQuery {
+        chunks: vec![ChunkCoord::new(0, 0)],
+        navigation_for: Some(cora),
+    };
+    let before = application.snapshot(query.clone()).unwrap();
+    let blocked = before
+        .chunks
+        .first()
+        .unwrap()
+        .cells
+        .iter()
+        .enumerate()
+        .find_map(|(index, terrain)| {
+            (*terrain != Terrain::Grass).then(|| {
+                let x = (index % usize::from(CHUNK_SIDE)) as u16;
+                let y = (index / usize::from(CHUNK_SIDE)) as u16;
+                ChunkCoord::new(0, 0)
+                    .world_cell(LocalCell::new(x, y))
+                    .unwrap()
+            })
+        })
+        .unwrap();
+
+    assert!(
+        application
+            .execute(Command::MoveTo {
+                character_id: cora,
+                destination: WorldPosition::from_cell_center(blocked).unwrap(),
+            })
+            .is_err()
+    );
+    assert_eq!(application.snapshot(query).unwrap(), before);
+}

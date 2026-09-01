@@ -56,12 +56,12 @@ The first executable headless foundation is implemented:
 - a deterministic five-character new-game scenario;
 - authoritative `WorldPosition`: signed fixed-point (`1024` subunits per world cell) for all characters, with Euclidean coarse-cell containment and no authoritative floats;
 - bootstrap cardinal movement at `256` subunits per tick, with sequential effective-terrain checks, exact blocked-boundary stops, and multi-cell traversal for higher speeds;
-- `SetMovementDirection` and `StopMovement` through `progressus-app`, with detached snapshots that expose exact position, containing cell, and `MovementState`;
+- bounded deterministic cardinal A* and exact `MoveTo` routes through `progressus-app`, with detached selected navigation snapshots and live effective-terrain transition checks;
 - immutable deterministic base terrain plus sparse, in-memory effective-terrain overrides that affect authoritative movement and terrain snapshots;
 - a headless consumer that runs without Bevy, a window, or a graphics context, including a bounded external least-visited walker that crosses generated chunk boundaries through the public application API.
-- a native Bevy bootstrap client for seed `0`: a 2D 3×3 Cora-centered terrain window, five snapshot-driven characters, arrow-key movement and Space to stop Cora, plus presentation-only camera pan/zoom.
+- a native Bevy bootstrap client for seed `0`: a 2D 3×3 Cora-centered terrain window, five snapshot-driven characters, left-click selection, right-click exact `MoveTo`, trace-based interpolation, F3 route diagnostics, and presentation-only camera pan/zoom.
 
-The sparse terrain state is not yet save/load data, a residency or unload policy, or a terrain gameplay command. Continuous positions are now an authoritative bootstrap, but navigation is not complete: control is still persistent cardinal direction, with no `MoveTo`, pathfinding, jobs/AI interruption policy, pawn collision, physical footprints, speed modifiers, save/load, or residency. The current boundary keeps the visual client dependent on `progressus-app` without giving it ownership of simulation truth; Bevy converts exact snapshots to local presentation floats only after subtracting a nearby cell-center origin.
+The sparse terrain state is not yet save/load data, a residency or unload policy, or a terrain gameplay command. Continuous positions and bounded exact click-to-move are now an authoritative bootstrap, not complete navigation: there is no diagonal or hierarchical search, auto-repath, jobs/AI interruption policy, pawn collision, physical footprints, speed modifiers, save/load, or residency. The current boundary keeps the visual client dependent on `progressus-app` without giving it ownership of simulation truth; Bevy converts exact snapshots to local presentation floats only after subtracting a nearby cell-center origin.
 
 The immediate goal is not to build the entire game. The first prototype exists to prove the dangerous fundamentals:
 

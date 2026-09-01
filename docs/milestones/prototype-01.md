@@ -97,7 +97,7 @@ Characters can navigate walkable generated terrain and cross chunk boundaries.
 
 Pathfinding must not require a single finite global grid.
 
-**Partially advanced (bootstrap):** characters retain `Idle` or persistent cardinal direction state and carry an authoritative `WorldPosition` with signed integer `1024`-subunit precision. The bootstrap speed is `256` subunits/tick; one tick may advance within a cell, while higher speeds can cross several sequentially checked cells. Terrain is checked only at actual transitions through effective terrain. Water, rock, and the representable-world edge stop at the last valid subunit without wrap or snap; a blocked neighbour does not prevent approach within the current cell. Commands and detached exact-position snapshots cross `progressus-app`; a bounded headless walker proves 64 positive chunk-boundary crossings while preserving character ID. This is still bootstrap movement, not complete navigation: no `MoveTo` or obstacle pathfinding, jobs/AI interruption policy, collision/physical footprint, speed modifiers, chunk residency, or persistence exists.
+**Partially advanced (bootstrap):** characters retain `Idle`, persistent cardinal direction, or private `Navigating` state and carry an authoritative `WorldPosition` with signed integer `1024`-subunit precision. The bootstrap speed is `256` subunits/tick; one tick may advance within a cell, while higher speeds can cross several sequentially checked cells. A bounded deterministic cardinal A* finds an effective-terrain route without a finite global map; `MoveTo` follows exact fixed-point waypoints, rechecks every cell transition, and stops at the canonical boundary if terrain becomes blocked. Commands and detached exact-position/selected-route snapshots cross `progressus-app`; a bounded headless walker proves 64 positive chunk-boundary crossings while preserving character ID. This is still bootstrap navigation, not complete navigation: no diagonal or hierarchical search, auto-repath, jobs/AI interruption policy, collision/physical footprint, speed modifiers, chunk residency, or persistence exists.
 
 ### P01-SIM-05 — Jobs
 
@@ -203,7 +203,7 @@ Generate a set of neighboring chunks in two different orders. Results must match
 
 Move an entity across multiple chunk boundaries and verify final position and identity.
 
-**Partially advanced:** simulation tests cover `x=31 -> x=32` and `x=0 -> x=-1` with the same `EntityId` at fixed-point resolution; the headless application-boundary scenario drives ID 3 across 64 positive chunk boundaries for seed 0, ending at coarse cell `(2048, 580)` after 5,050 chosen-cell steps (20,200 default-speed ticks). Long-distance negative traversal and residency/unload behavior remain future coverage.
+**Partially advanced:** simulation tests cover manual and routed `x=31 -> x=32` and manual `x=0 -> x=-1` with the same `EntityId` at fixed-point resolution; the headless application-boundary scenario drives ID 3 across 64 positive chunk boundaries for seed 0, ending at coarse cell `(2048, 580)` after 5,050 chosen-cell steps (20,200 default-speed ticks). Long-distance negative traversal and residency/unload behavior remain future coverage.
 
 ### TEST-P01-04 — Item ownership invariant
 
@@ -232,7 +232,7 @@ The exact tick count should be chosen once simulation speed is measurable.
 
 Only enough interface is required to operate and inspect the prototype.
 
-**Partially advanced (bootstrap):** the native Bevy client opens seed `0`, renders five snapshot-driven characters and a 3×3 Cora-centered terrain window, accepts Cora's arrow/Stop movement input, and provides presentation-only pan/zoom. Terrain refreshes on initial display and an authoritative central-chunk change, not every render frame; its non-authoritative scheduler runs at a nominal 4 Hz without catch-up. This proves rendering/input and normal chunk-window refresh only. The remaining interface, navigation/pathfinding, jobs/AI, speed/collision, persistence, residency, resources, construction, and save/load criteria are incomplete.
+**Partially advanced (bootstrap):** the native Bevy client opens seed `0`, renders five snapshot-driven characters and a 3×3 Cora-centered terrain window, accepts Cora's arrow/Stop movement input plus left-click selection and right-click exact `MoveTo`, and provides presentation-only pan/zoom. F3 draws authority/destination/remaining-route diagnostics; selected sprite interpolation follows the latest detached motion-trace polyline. Terrain refreshes on initial display and an authoritative central-chunk change, not every render frame; its non-authoritative scheduler runs at a nominal 4 Hz without catch-up. This proves rendering/input, normal chunk-window refresh, and a visual route probe only. The remaining interface, richer navigation, jobs/AI, speed/collision, persistence, residency, resources, construction, and save/load criteria are incomplete.
 
 Minimum capabilities:
 
