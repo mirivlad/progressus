@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -28,6 +30,8 @@ pub struct Simulation {
     id_allocator: EntityIdAllocator,
     characters: BTreeMap<EntityId, Character>,
     modified_world: ModifiedWorld,
+    #[cfg(test)]
+    base_terrain_query_count: Cell<u64>,
 }
 
 impl Simulation {
@@ -57,6 +61,8 @@ impl Simulation {
             id_allocator,
             characters,
             modified_world: ModifiedWorld::default(),
+            #[cfg(test)]
+            base_terrain_query_count: Cell::new(0),
         })
     }
 
@@ -144,7 +150,11 @@ impl Simulation {
 
     pub fn effective_terrain_at(&self, position: WorldCell) -> Result<Terrain, SimulationError> {
         let (coordinate, local) = position.split();
-        Ok(self.resolve_terrain(coordinate, local, self.base_terrain_at(position)?))
+        if let Some(override_terrain) = self.modified_world.override_at(coordinate, local) {
+            return Ok(override_terrain);
+        }
+
+        self.base_terrain_at(position)
     }
 
     pub fn effective_chunk(
@@ -168,6 +178,10 @@ impl Simulation {
     }
 
     fn base_terrain_at(&self, position: WorldCell) -> Result<Terrain, SimulationError> {
+        #[cfg(test)]
+        self.base_terrain_query_count
+            .set(self.base_terrain_query_count.get() + 1);
+
         let (coordinate, local) = position.split();
         self.generated_chunk(coordinate)?
             .terrain_at(local)
@@ -421,6 +435,23 @@ mod tests {
             first.characters().cloned().collect::<Vec<_>>(),
             second.characters().cloned().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn effective_terrain_point_lookup_uses_override_without_base_query() {
+        let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        let position = WorldCell::new(0, 0);
+
+        simulation
+            .set_terrain_override(position, Terrain::Rock)
+            .unwrap();
+        simulation.base_terrain_query_count.set(0);
+
+        assert_eq!(
+            simulation.effective_terrain_at(position).unwrap(),
+            Terrain::Rock
+        );
+        assert_eq!(simulation.base_terrain_query_count.get(), 0);
     }
 
     #[test]
