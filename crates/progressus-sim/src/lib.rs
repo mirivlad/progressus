@@ -5,7 +5,9 @@ mod simulation;
 mod world_state;
 
 pub use clock::SimulationTick;
-pub use entity::{Character, Direction, EntityId, MovementState};
+pub use entity::{
+    Character, DEFAULT_CHARACTER_SPEED, Direction, EntityId, MovementSpeed, MovementState,
+};
 pub use position::{
     InteractionRadius, SUBUNITS_PER_CELL, WorldPosition, WorldPositionError,
     within_interaction_range,

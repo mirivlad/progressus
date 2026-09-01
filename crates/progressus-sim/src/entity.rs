@@ -1,4 +1,4 @@
-use crate::{SimulationError, WorldCell};
+use crate::{SimulationError, WorldCell, WorldPosition};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Direction {
@@ -25,6 +25,25 @@ pub enum MovementState {
     Moving { direction: Direction },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MovementSpeed(u32);
+
+impl MovementSpeed {
+    pub const fn new(subunits_per_tick: u32) -> Option<Self> {
+        if subunits_per_tick == 0 {
+            None
+        } else {
+            Some(Self(subunits_per_tick))
+        }
+    }
+
+    pub const fn subunits_per_tick(self) -> u32 {
+        self.0
+    }
+}
+
+pub const DEFAULT_CHARACTER_SPEED: MovementSpeed = MovementSpeed(256);
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct EntityId(u64);
 
@@ -42,16 +61,18 @@ impl EntityId {
 pub struct Character {
     id: EntityId,
     name: String,
-    position: WorldCell,
+    position: WorldPosition,
+    speed: MovementSpeed,
     movement: MovementState,
 }
 
 impl Character {
-    pub(crate) fn new(id: EntityId, name: &str, position: WorldCell) -> Self {
+    pub(crate) fn new(id: EntityId, name: &str, position: WorldPosition) -> Self {
         Self {
             id,
             name: name.to_owned(),
             position,
+            speed: DEFAULT_CHARACTER_SPEED,
             movement: MovementState::Idle,
         }
     }
@@ -64,15 +85,19 @@ impl Character {
         &self.name
     }
 
-    pub const fn position(&self) -> WorldCell {
+    pub const fn position(&self) -> WorldPosition {
         self.position
+    }
+
+    pub const fn speed(&self) -> MovementSpeed {
+        self.speed
     }
 
     pub const fn movement(&self) -> MovementState {
         self.movement
     }
 
-    pub(crate) fn set_position(&mut self, position: WorldCell) {
+    pub(crate) fn set_position(&mut self, position: WorldPosition) {
         self.position = position;
     }
 

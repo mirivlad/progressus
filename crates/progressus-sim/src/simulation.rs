@@ -12,7 +12,7 @@ use crate::world_state::ModifiedWorld;
 use crate::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, Direction, EffectiveChunk,
     EntityId, GeneratedChunk, LocalCell, MovementState, SimulationTick, Terrain, WorldCell,
-    WorldSeed, WorldgenVersion,
+    WorldPosition, WorldPositionError, WorldSeed, WorldgenVersion,
 };
 
 const INITIAL_CHARACTERS: [(&str, i64); 5] = [
@@ -49,7 +49,7 @@ impl Simulation {
             }
 
             let id = id_allocator.allocate()?;
-            let character = Character::new(id, name, position);
+            let character = Character::new(id, name, WorldPosition::from_cell_center(position)?);
             if characters.insert(id, character).is_some() {
                 return Err(SimulationError::DuplicateEntityId(id));
             }
@@ -102,7 +102,8 @@ impl Simulation {
             .characters
             .get(&id)
             .ok_or(SimulationError::UnknownCharacter(id))?
-            .position();
+            .position()
+            .containing_cell();
         let target = direction
             .adjacent(position)
             .ok_or(SimulationError::MovementCoordinateOverflow(position))?;
@@ -206,7 +207,9 @@ impl Simulation {
                     .expect("character ID came from the character map");
                 match character.movement() {
                     MovementState::Idle => continue,
-                    MovementState::Moving { direction } => (character.position(), direction),
+                    MovementState::Moving { direction } => {
+                        (character.position().containing_cell(), direction)
+                    }
                 }
             };
 
@@ -222,7 +225,7 @@ impl Simulation {
                 self.characters
                     .get_mut(&id)
                     .expect("character ID came from the character map")
-                    .set_position(target);
+                    .set_position(WorldPosition::from_cell_center(target)?);
             } else {
                 self.characters
                     .get_mut(&id)
@@ -248,6 +251,7 @@ pub enum SimulationError {
     UnknownCharacter(EntityId),
     MovementCoordinateOverflow(WorldCell),
     MovementDestinationBlocked(WorldCell),
+    Position(WorldPositionError),
     Worldgen(WorldgenError),
 }
 
@@ -278,6 +282,9 @@ impl Display for SimulationError {
                 position.x(),
                 position.y()
             ),
+            Self::Position(_) => {
+                formatter.write_str("world position is outside the representable world-cell range")
+            }
             Self::Worldgen(error) => Display::fmt(error, formatter),
         }
     }
@@ -295,6 +302,12 @@ impl Error for SimulationError {
 impl From<WorldgenError> for SimulationError {
     fn from(error: WorldgenError) -> Self {
         Self::Worldgen(error)
+    }
+}
+
+impl From<WorldPositionError> for SimulationError {
+    fn from(error: WorldPositionError) -> Self {
+        Self::Position(error)
     }
 }
 
@@ -320,7 +333,7 @@ mod tests {
         assert_eq!(character(&simulation, cora).id(), cora);
         assert_eq!(
             character(&simulation, cora).position(),
-            WorldCell::new(32, 0)
+            position_at_cell(WorldCell::new(32, 0))
         );
 
         place_on_grass(&mut simulation, cora, WorldCell::new(0, 0));
@@ -331,7 +344,7 @@ mod tests {
         assert_eq!(character(&simulation, cora).id(), cora);
         assert_eq!(
             character(&simulation, cora).position(),
-            WorldCell::new(-1, 0)
+            position_at_cell(WorldCell::new(-1, 0))
         );
     }
 
@@ -373,7 +386,7 @@ mod tests {
 
         assert_eq!(
             character(&simulation, cora).position(),
-            WorldCell::new(position.x() + 1, position.y() + 1)
+            position_at_cell(WorldCell::new(position.x() + 1, position.y() + 1))
         );
         assert_eq!(
             character(&simulation, cora).movement(),
@@ -398,7 +411,7 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
         let cora = cora();
         let controlled_character = simulation.characters.get_mut(&cora).unwrap();
-        controlled_character.set_position(WorldCell::new(i64::MAX, 0));
+        controlled_character.set_position(position_at_cell(WorldCell::new(i64::MAX, 0)));
         controlled_character.set_movement(MovementState::Moving {
             direction: Direction::East,
         });
@@ -407,7 +420,7 @@ mod tests {
 
         assert_eq!(
             character(&simulation, cora).position(),
-            WorldCell::new(i64::MAX, 0)
+            position_at_cell(WorldCell::new(i64::MAX, 0))
         );
         assert_eq!(character(&simulation, cora).movement(), MovementState::Idle);
     }
@@ -476,7 +489,10 @@ mod tests {
             simulation.set_terrain_override(target, blocked).unwrap();
             simulation.advance_ticks(1).unwrap();
 
-            assert_eq!(character(&simulation, cora).position(), start);
+            assert_eq!(
+                character(&simulation, cora).position(),
+                position_at_cell(start)
+            );
             assert_eq!(character(&simulation, cora).movement(), MovementState::Idle);
         }
     }
@@ -495,7 +511,10 @@ mod tests {
                 .unwrap();
             simulation.set_movement_direction(cora, direction).unwrap();
             simulation.advance_ticks(1).unwrap();
-            assert_eq!(character(&simulation, cora).position(), target);
+            assert_eq!(
+                character(&simulation, cora).position(),
+                position_at_cell(target)
+            );
 
             simulation.stop_movement(cora).unwrap();
             simulation.set_terrain_override(target, blocked).unwrap();
@@ -503,7 +522,7 @@ mod tests {
                 .characters
                 .get_mut(&cora)
                 .unwrap()
-                .set_position(start);
+                .set_position(position_at_cell(start));
             assert_eq!(
                 simulation.set_movement_direction(cora, direction),
                 Err(SimulationError::MovementDestinationBlocked(target)),
@@ -515,6 +534,10 @@ mod tests {
         simulation.characters.get(&id).unwrap()
     }
 
+    fn position_at_cell(cell: WorldCell) -> WorldPosition {
+        WorldPosition::from_cell_center(cell).unwrap()
+    }
+
     fn place_on_grass(simulation: &mut Simulation, id: EntityId, position: WorldCell) {
         assert_eq!(
             simulation.effective_terrain_at(position).unwrap(),
@@ -524,7 +547,7 @@ mod tests {
             .characters
             .get_mut(&id)
             .unwrap()
-            .set_position(position);
+            .set_position(position_at_cell(position));
     }
 
     fn persisted_movement_stops_on(terrain: Terrain) {
@@ -540,7 +563,10 @@ mod tests {
 
         simulation.advance_ticks(1).unwrap();
 
-        assert_eq!(character(&simulation, cora).position(), position);
+        assert_eq!(
+            character(&simulation, cora).position(),
+            position_at_cell(position)
+        );
         assert_eq!(character(&simulation, cora).movement(), MovementState::Idle);
     }
 

@@ -1,4 +1,4 @@
-use progressus_sim::{Character, EffectiveChunk, MovementState};
+use progressus_sim::{Character, EffectiveChunk, MovementState, WorldPosition};
 
 use crate::{
     CHUNK_SIDE, ChunkCoord, EntityId, LocalCell, SimulationTick, Terrain, WorldCell,
@@ -46,7 +46,8 @@ impl From<EffectiveChunk> for ChunkSnapshot {
 pub struct CharacterSnapshot {
     pub id: EntityId,
     pub name: String,
-    pub position: WorldCell,
+    pub position: WorldPosition,
+    pub containing_cell: WorldCell,
     pub movement: MovementState,
 }
 
@@ -56,6 +57,7 @@ impl From<&Character> for CharacterSnapshot {
             id: character.id(),
             name: character.name().to_owned(),
             position: character.position(),
+            containing_cell: character.position().containing_cell(),
             movement: character.movement(),
         }
     }

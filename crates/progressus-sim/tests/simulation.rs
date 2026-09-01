@@ -1,4 +1,4 @@
-use progressus_sim::{EntityId, Terrain, WorldCell, WorldSeed};
+use progressus_sim::{EntityId, Terrain, WorldCell, WorldPosition, WorldSeed};
 use progressus_sim::{Simulation, SimulationTick};
 
 #[test]
@@ -20,9 +20,12 @@ fn new_game_has_five_stable_characters_on_walkable_cells() {
     for (character, (id, name, x)) in characters.iter().zip(expected) {
         assert_eq!(character.id(), EntityId::new(id).unwrap());
         assert_eq!(character.name(), name);
-        assert_eq!(character.position(), WorldCell::new(x, 0));
+        assert_eq!(
+            character.position(),
+            WorldPosition::from_cell_center(WorldCell::new(x, 0)).unwrap()
+        );
 
-        let (chunk_coordinate, local) = character.position().split();
+        let (chunk_coordinate, local) = character.position().containing_cell().split();
         let chunk = simulation.generated_chunk(chunk_coordinate).unwrap();
         assert_eq!(chunk.terrain_at(local), Some(Terrain::Grass));
     }

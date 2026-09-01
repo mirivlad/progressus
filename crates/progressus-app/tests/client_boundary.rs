@@ -1,7 +1,7 @@
 use progressus_app::{
     Application, CHUNK_SIDE, CharacterSnapshot, ChunkCoord, Command, Direction, EntityId,
     LocalCell, MovementState, NewGameOptions, SimulationTick, SnapshotQuery, Terrain, WorldCell,
-    WorldSeed, WorldgenVersion,
+    WorldPosition, WorldSeed, WorldgenVersion,
 };
 
 fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
@@ -53,31 +53,36 @@ fn snapshot_is_bounded_ordered_and_renderable() {
             CharacterSnapshot {
                 id: EntityId::new(1).unwrap(),
                 name: "Ada".to_owned(),
-                position: WorldCell::new(-2, 0),
+                position: WorldPosition::from_cell_center(WorldCell::new(-2, 0)).unwrap(),
+                containing_cell: WorldCell::new(-2, 0),
                 movement: MovementState::Idle,
             },
             CharacterSnapshot {
                 id: EntityId::new(2).unwrap(),
                 name: "Borin".to_owned(),
-                position: WorldCell::new(-1, 0),
+                position: WorldPosition::from_cell_center(WorldCell::new(-1, 0)).unwrap(),
+                containing_cell: WorldCell::new(-1, 0),
                 movement: MovementState::Idle,
             },
             CharacterSnapshot {
                 id: EntityId::new(3).unwrap(),
                 name: "Cora".to_owned(),
-                position: WorldCell::new(0, 0),
+                position: WorldPosition::from_cell_center(WorldCell::new(0, 0)).unwrap(),
+                containing_cell: WorldCell::new(0, 0),
                 movement: MovementState::Idle,
             },
             CharacterSnapshot {
                 id: EntityId::new(4).unwrap(),
                 name: "Dain".to_owned(),
-                position: WorldCell::new(1, 0),
+                position: WorldPosition::from_cell_center(WorldCell::new(1, 0)).unwrap(),
+                containing_cell: WorldCell::new(1, 0),
                 movement: MovementState::Idle,
             },
             CharacterSnapshot {
                 id: EntityId::new(5).unwrap(),
                 name: "Elin".to_owned(),
-                position: WorldCell::new(2, 0),
+                position: WorldPosition::from_cell_center(WorldCell::new(2, 0)).unwrap(),
+                containing_cell: WorldCell::new(2, 0),
                 movement: MovementState::Idle,
             },
         ]
@@ -154,7 +159,12 @@ fn movement_commands_are_applied_and_published_through_snapshots() {
         .iter()
         .find(|character| character.id == cora)
         .unwrap();
-    assert_eq!(cora.position, WorldCell::new(1, 0));
+    assert_eq!(
+        cora.position,
+        WorldPosition::from_cell_center(WorldCell::new(1, 0)).unwrap()
+    );
+    assert_eq!(cora.containing_cell, WorldCell::new(1, 0));
+    assert_eq!(cora.position.containing_cell(), cora.containing_cell);
     assert_eq!(
         cora.movement,
         MovementState::Moving {
