@@ -15,7 +15,7 @@
 - Every valid position maps by Euclidean division to one representable `WorldCell(i64)`.
 - `DEFAULT_CHARACTER_SPEED = 256 subunits/tick` is bootstrap gameplay data, not coordinate-format data.
 - Keep only `SetMovementDirection` and `StopMovement`; do not add `MoveTo`, A*, jobs, collision, physics, navigation footprints, or persistence.
-- Movement uses only `effective_terrain_at`. It may never enter a blocked target; positive blocked motion stops at `B - 1`, negative at `B`, then becomes idle and drops that tick's remainder.
+- Movement uses only `effective_terrain_at`. A blocked target forbids only the actual transition: first consume any budget that remains inside source; once the tick could enter it, stop at `B - 1` positive or `B` negative, become idle, and drop that tick's remainder.
 - Direct terrain mutation may strand an existing pawn in newly blocked terrain; do not eject/snap it. The invariant forbids movement from entering a blocked cell.
 - `InteractionRadius` is reach only; zero represents a point item. It is not collision or a navigation footprint.
 - Preserve `progressus-client -> progressus-app -> progressus-sim -> progressus-worldgen`; Bevy remains absent below client.
@@ -218,7 +218,9 @@ git push origin HEAD
 
 Use test-only position/speed helpers and real `set_terrain_override` calls. Add independent tests for: 128-subunit partial motion; 256-speed exact next center after four ticks; two distinct speeds; multiple grass-cell crossings in one tick; positive/negative chunk crossings; deterministic equality; coordinate overflow; Stop at a noncenter point; and valid noncenter direction replacement.
 
-For every direction, accept a grass target, move part way, override that target to water/rock, then verify the exact stop. East from cell 0 stops at x=1023; west from cell 0 stops at x=0; north/south have equivalent y values. Repeat the four cases near negative cells. Assert `effective_terrain_at(position.containing_cell()) == Grass`, `MovementState::Idle`, and that a large speed's unused remainder did not cross another cell. Finally issue reverse movement and assert it starts at the retained point, not a center.
+For every direction, set movement while its neighbour is grass, move part way, then override that neighbour to water/rock. With a small speed and a distant boundary, assert several ticks consume their complete budget inside source and retain `MovementState::Moving`; only the tick that could enter stops exactly. East from cell 0 stops at x=1023; west from cell 0 stops at x=0; north/south have equivalent y values. Repeat the four cases near negative cells. Assert `effective_terrain_at(position.containing_cell()) == Grass`, `MovementState::Idle`, and that a large speed's unused remainder did not cross another cell. Finally issue reverse movement and assert it starts at the retained point, not a center.
+
+Add table-driven positive/negative x/y world-limit cases. A pawn starts at the extreme cell center and may move inside that cell; only an outward transition stops at the final valid subunit without wrapping. Also replace old tests that expect `MovementDestinationBlocked` from `SetMovementDirection`: a blocked neighbour command is accepted and deterministically stops only at its boundary.
 
 - [ ] **Step 2: Verify RED**
 
@@ -228,7 +230,7 @@ Expected: partial-position and boundary assertions fail because current code ass
 
 - [ ] **Step 3: Implement checked boundary consumption**
 
-`set_movement_direction` derives the source from `position.containing_cell()`, validates its adjacent effective-terrain target before changing state, and preserves old state on error.
+`set_movement_direction` replaces persistent direction from the exact current position without a terrain lookup. It preserves prior state only for true command errors such as an unknown entity; blocked terrain is handled when movement reaches a transition.
 
 For each moving character in stable ID order, initialize `remaining` from speed and repeat:
 
@@ -236,15 +238,19 @@ For each moving character in stable ID order, initialize `remaining` from speed 
 source = position.containing_cell()
 target = direction.adjacent(source), or idle normally on coordinate limit
 entry_distance = subunits until the first point belonging to target
-if target is blocked:
-    translate min(remaining, entry_distance - 1) in direction
-    set Idle and discard remaining
+if target is blocked or does not exist beyond a world-domain edge:
+    if remaining < entry_distance:
+        translate remaining in direction
+        keep Moving and finish tick
+    else:
+        translate entry_distance - 1 in direction
+        set Idle and discard remaining
 else:
     translate min(remaining, entry_distance) in direction
     subtract translated distance and continue while remaining > 0
 ```
 
-For east/north, `entry_distance = upper_boundary - coordinate`; for west/south, `entry_distance = coordinate - lower_boundary + 1`. Compute boundaries with checked `i128` arithmetic. Apply all deltas through `WorldPosition::checked_translate`. Any arithmetic or adjacent-cell overflow is a normal idle stop at the last exact position. Do not validate source terrain: direct mutation may strand a pawn there, and this increment must not eject/snap it.
+For east/north, `entry_distance = upper_boundary - coordinate`; for west/south, `entry_distance = coordinate - lower_boundary + 1`. The same formulas apply to an outward representable-world edge, where the external target is treated as impassable. Compute boundaries with checked `i128` arithmetic. Apply all deltas through `WorldPosition::checked_translate`. Any arithmetic failure is a normal idle stop at the last exact position. Do not validate source terrain: direct mutation may strand a pawn there, and this increment must not eject/snap it.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -282,7 +288,7 @@ git push origin HEAD
 
 - [ ] **Step 1: Write failing consumer tests**
 
-Migrate snapshot fixtures to `WorldPosition::from_cell_center(...)` plus matching `containing_cell`. Add a render assertion for `WorldPosition::from_subunits(768, 512)` relative to origin `(0, 0)`: x translation is `3.0` pixels with `CELL_SIZE = 12`.
+Migrate snapshot fixtures to `WorldPosition::from_cell_center(...)` plus matching `containing_cell`. Add a render assertion that `WorldPosition::from_cell_center(WorldCell::new(0, 0))` is exactly the center of terrain tile `(0, 0)`, then assert `WorldPosition::from_subunits(768, 512)` relative to that cell **center** has x translation `3.0` pixels with `CELL_SIZE = 12`.
 
 Change headless travel tests so the walker sends one direction command and advances exactly one ordinary tick at a time until snapshot `position` equals the selected target cell center. It must not choose its next neighbour only because `containing_cell` changed at a boundary. Bound this inner wait and include seed, entity ID, exact subunits, containing cell, target, and wait ticks in failure output.
 
@@ -297,7 +303,7 @@ Expected: fixture type and one-tick walker assertions fail.
 
 - [ ] **Step 3: Implement boundary-only presentation conversion**
 
-Derive terrain central chunk from `CharacterSnapshot.containing_cell`. In `render.rs`, make the terrain origin a `WorldPosition` and convert only after local subtraction:
+Derive terrain central chunk from `CharacterSnapshot.containing_cell`. In `render.rs`, make the terrain origin `WorldPosition::from_cell_center(origin_cell)` and convert only after local subtraction:
 
 ```rust
 let x = (position.x_subunits() - origin.x_subunits()) as f32

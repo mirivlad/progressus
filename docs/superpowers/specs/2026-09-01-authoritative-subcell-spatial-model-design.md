@@ -122,11 +122,16 @@ The following concepts must not be conflated:
 | presentation position | disposable render-space value derived from a snapshot | Bevy transform and optional visual smoothing |
 
 The client may convert a nearby `WorldPosition` to Bevy `f32` coordinates after
-subtracting a local presentation origin. That conversion is never stored in
-`Simulation`, sent back as authoritative state, or used to decide movement or
-passability. A click is quantized at the client/application boundary into an
-explicit `WorldPosition`; once a command contains that value, authoritative
-results depend only on that command sequence and ticks, not on FPS.
+subtracting a local presentation origin. The origin is the **center** of the
+`WorldCell` rendered at tile coordinate `(0, 0)`, not that cell's fixed-point
+lower-left corner. Thus `WorldPosition::from_cell_center(WorldCell(0, 0))`
+renders at the center of terrain tile `(0, 0)`, while `(768, 512)` relative to
+that center renders at `256 / 1024 * CELL_SIZE = 3` pixels on x. This conversion
+is never stored in `Simulation`, sent back as authoritative state, or used to
+decide movement or passability. A click is quantized at the client/application
+boundary into an explicit `WorldPosition`; once a command contains that value,
+authoritative results depend only on that command sequence and ticks, not on
+FPS.
 
 ## 6. Living entities and movement migration
 
@@ -157,8 +162,12 @@ authoritative state. Snapshot construction derives `containing_cell` from
 violation.
 
 The present cardinal `SetMovementDirection` / `StopMovement` boundary remains
-the only movement-control boundary during this migration. A later `MoveTo`
-command belongs to the pathfinding increment, not this one.
+the only movement-control boundary during this migration. Setting a cardinal
+direction means to start or replace movement from the pawn's exact current
+position; it does not pre-validate terrain in the adjacent coarse cell. Unknown
+entity and coordinate/value errors remain atomic command errors, but a blocked
+neighbour is a later movement outcome at the actual transition boundary. A
+later `MoveTo` command belongs to the pathfinding increment, not this one.
 
 The replacement movement implementation advances an exact position by an
 integer `speed_subunits_per_tick`, never by one cell merely because a tick
@@ -171,12 +180,17 @@ or cause an implicit snap to a cell center.
 
 ### Blocked-cell boundary invariant
 
-An authoritative point pawn must never have a `containing_cell()` whose
-effective terrain is impassable after a movement step. Cells use the canonical
-half-open axis intervals from section 4. Therefore, when an attempted cardinal
-transition would first enter a blocked cell, movement consumes only the largest
-integer distance that leaves the point in its current walkable cell, then
-becomes `Idle` and discards the remainder of that tick's movement distance.
+Movement must never transition a pawn into a `containing_cell()` whose effective
+terrain is impassable. Cells use the canonical half-open axis intervals from
+section 4. A blocked neighbour forbids the transition, not motion within the
+current cell: if `remaining` distance cannot yet reach that neighbour's first
+representable position, the pawn consumes all `remaining` within its source
+cell and stays `Moving`. The terrain is checked again next tick.
+
+Only when the current tick's remaining distance would actually enter a blocked
+cell does movement consume the largest integer distance that leaves the point
+in its current walkable cell, become `Idle`, and discard the rest of that
+tick's movement distance.
 
 For a boundary coordinate `B` between two cells on the moving axis:
 
@@ -191,11 +205,16 @@ the geometric boundary of a terrain cell it is forbidden to occupy.
 
 The implementation examines each coarse-cell boundary in travel order. If a
 large speed would cross several cells, it consumes the valid portions and
-checks every next cell through `effective_terrain_at`; the first blocked cell
-ends the tick. Reverse movement after a boundary stop begins from the retained
-exact position with no snap. Existing direction-replacement semantics retain
-their atomic validation rule: an invalid replacement does not erase a valid
-ongoing movement state.
+checks every next cell through `effective_terrain_at`; the first reachable
+blocked cell ends the tick. Reverse movement after a boundary stop begins from
+the retained exact position with no snap. Direction replacement is atomic for
+actual command errors, but terrain blockage never rejects a direction command.
+
+The representable `WorldCell(i64)` domain edge is the same kind of external
+impassable region. A pawn in an extreme cell may move inside it; only a tick
+that would leave the domain reaches the furthest valid subunit (`B - 1`
+positive, `B` negative), becomes `Idle`, and discards the remainder. It never
+wraps or snaps to the cell center.
 
 This specification deliberately does not impose a new final route/turning
 geometry. The next `MoveTo` increment will define route waypoints as exact
@@ -300,21 +319,25 @@ The implementation plan must include focused RED/GREEN tests for at least:
    exact sub-cell position;
 7. deterministic equality for identical seeds, effective terrain mutations,
    commands, and tick counts;
-8. blocked destinations and terrain changed to blocked while a pawn is moving,
-   with no illegal snap or raw-worldgen lookup;
+8. a small-speed pawn approaching a destination made blocked: it remains
+   `Moving` until that tick could cross the boundary, then stops exactly before
+   it, without raw-worldgen lookup;
 9. `StopMovement` and directional replacement at a non-center exact position;
 10. snapshots carrying the exact `WorldPosition` and a containing cell derived
     from it, without a simulation/client mutable alias;
 11. point and radius interaction geometry across cell interiors and cell
     borders, including a safe far-apart/overflow-resistant comparison; and
-12. all existing modified-world effective-terrain, app-boundary, headless,
+12. positive/negative representable world-edge stops on both axes, with no
+    wrap and with valid interior movement before the stop; and
+13. all existing modified-world effective-terrain, app-boundary, headless,
     client, worldgen, and Bevy dependency-boundary tests.
 
 Blocked-boundary coverage must separately prove blocked transitions east, west,
 north, and south; repeat them near negative coordinates; verify the resulting
 `containing_cell()` is always walkable; verify the tick remainder is discarded
 after the first blocked boundary; and verify reverse movement resumes from the
-retained exact position without a snap.
+retained exact position without a snap. Client coverage must also prove center
+to tile-center alignment before exercising a non-center 3-pixel offset.
 
 The subsequent pathfinding/client increment additionally needs authoritative
 tests for exact final destinations, route invalidation on changed terrain,
