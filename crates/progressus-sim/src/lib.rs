@@ -1,5 +1,6 @@
 mod clock;
 mod entity;
+mod exploration;
 mod pathfinding;
 mod position;
 mod simulation;
@@ -9,6 +10,7 @@ pub use clock::SimulationTick;
 pub use entity::{
     Character, DEFAULT_CHARACTER_SPEED, Direction, EntityId, MovementSpeed, MovementState,
 };
+pub use exploration::CHARACTER_VISION_RADIUS_CELLS;
 pub use position::{
     InteractionRadius, SUBUNITS_PER_CELL, WorldPosition, WorldPositionError,
     within_interaction_range,

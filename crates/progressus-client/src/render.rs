@@ -8,10 +8,7 @@ use progressus_app::{
 };
 
 use crate::navigation::{SelectedCharacter, VisualMotion, interpolate_trace};
-use crate::presentation::{
-    CharacterSyncAction, VisibleChunkWindow, character_sync_actions, controlled_character,
-    terrain_refresh_needed,
-};
+use crate::presentation::{CharacterSyncAction, VisibleChunkWindow, character_sync_actions};
 use crate::runtime::AuthoritativeClient;
 
 const CELL_SIZE: f32 = 12.0;
@@ -20,6 +17,7 @@ const CHARACTER_Z: f32 = 10.0;
 const CAMERA_PAN_SPEED: f32 = 500.0;
 const MIN_CAMERA_SCALE: f32 = 0.25;
 const MAX_CAMERA_SCALE: f32 = 8.0;
+const PRESENTATION_CHUNK_MARGIN: i64 = 1;
 
 #[derive(Component)]
 pub(crate) struct TerrainRoot;
@@ -31,8 +29,11 @@ pub(crate) struct CharacterVisual {
 
 #[derive(Resource, Default)]
 pub(crate) struct PresentationCache {
+    pub(crate) render_origin: Option<WorldCell>,
     pub(crate) central_chunk: Option<ChunkCoord>,
+    pub(crate) visible_window: Option<VisibleChunkWindow>,
     pub(crate) terrain_root: Option<Entity>,
+    pub(crate) exploration_revision: Option<u64>,
     pub(crate) characters: BTreeMap<EntityId, Entity>,
 }
 
@@ -49,45 +50,65 @@ pub(crate) fn sync_presentation(
     mut cache: ResMut<PresentationCache>,
     mut selected: ResMut<SelectedCharacter>,
     mut motion: ResMut<VisualMotion>,
+    cameras: Query<(&Transform, &Projection), With<Camera2d>>,
 ) {
-    if !authoritative.take_snapshot_dirty() {
-        return;
-    }
-
-    let rendered_center = cache.central_chunk;
-    sync_characters(&mut commands, &authoritative, &mut cache, rendered_center);
-
-    if let Some(id) = selected.0 {
-        if !authoritative
+    let snapshot_dirty = authoritative.take_snapshot_dirty();
+    if cache.render_origin.is_none() {
+        cache.render_origin = authoritative
             .snapshot()
             .characters
             .iter()
-            .any(|character| character.id == id)
-        {
-            selected.0 = None;
-            motion.clear();
-        } else if let Some(navigation) = authoritative.snapshot().navigation.as_ref()
-            && navigation.character_id == id
-        {
-            motion.replace(id, navigation.last_tick_motion_trace.clone());
+            .find(|character| character.id == crate::runtime::cora_id())
+            .map(|character| character.containing_cell)
+            .or_else(|| {
+                cache
+                    .central_chunk
+                    .and_then(|center| center.world_cell(LocalCell::new(0, 0)))
+            });
+    }
+    let Some(origin) = cache.render_origin else {
+        warn!("cannot render terrain without an authoritative character origin");
+        return;
+    };
+
+    if snapshot_dirty {
+        sync_characters(&mut commands, &authoritative, &mut cache, Some(origin));
+
+        if let Some(id) = selected.0 {
+            if !authoritative
+                .snapshot()
+                .characters
+                .iter()
+                .any(|character| character.id == id)
+            {
+                selected.0 = None;
+                motion.clear();
+            } else if let Some(navigation) = authoritative.snapshot().navigation.as_ref()
+                && navigation.character_id == id
+            {
+                motion.replace(
+                    id,
+                    authoritative.snapshot().tick,
+                    navigation.last_tick_motion_trace.clone(),
+                );
+            }
         }
     }
 
-    let Some(controlled) = controlled_character(&authoritative.snapshot().characters) else {
-        warn!("controlled character is missing from authoritative snapshot");
-        return;
-    };
-    let current_center = controlled.containing_cell.split().0;
+    let (current_center, current_window) = camera_window(cameras.iter().next(), origin)
+        .unwrap_or_else(|| {
+            let center = origin.split().0;
+            (
+                center,
+                VisibleChunkWindow::around(center)
+                    .expect("a render origin has a representable radius-one window"),
+            )
+        });
 
-    if terrain_refresh_needed(cache.central_chunk, current_center) {
-        let window = match VisibleChunkWindow::around(current_center) {
-            Ok(window) => window,
-            Err(error) => {
-                error!("presentation sync failed: {error}");
-                return;
-            }
-        };
-        let terrain = match authoritative.terrain_snapshot(window.coordinates().to_vec()) {
+    if cache.visible_window.as_ref() != Some(&current_window)
+        || cache.exploration_revision != Some(authoritative.snapshot().exploration_revision)
+    {
+        let terrain = match authoritative.terrain_snapshot(current_window.coordinates().to_vec()) {
             Ok(terrain) => terrain,
             Err(error) => {
                 error!("presentation sync failed: {error}");
@@ -95,17 +116,62 @@ pub(crate) fn sync_presentation(
             }
         };
 
-        let origin = current_center
-            .world_cell(LocalCell::new(0, 0))
-            .expect("a chunk derived from a world cell has a valid lower-left cell");
+        let render_origin = cache.render_origin.expect("origin was established above");
         if let Some(previous_root) = cache.terrain_root {
             commands.entity(previous_root).despawn();
         }
-        let new_root = spawn_terrain(&mut commands, &terrain.chunks, origin);
+        let new_root = spawn_terrain(&mut commands, &terrain.chunks, render_origin);
         cache.terrain_root = Some(new_root);
         cache.central_chunk = Some(current_center);
-        position_characters(&mut commands, &authoritative, &cache, origin);
+        cache.visible_window = Some(current_window);
+        cache.exploration_revision = Some(authoritative.snapshot().exploration_revision);
+        position_characters(&mut commands, &authoritative, &cache, render_origin);
     }
+}
+
+fn camera_window(
+    camera: Option<(&Transform, &Projection)>,
+    origin: WorldCell,
+) -> Option<(ChunkCoord, VisibleChunkWindow)> {
+    let (transform, projection) = camera?;
+    let center = camera_chunk(transform, origin)?;
+    let (minimum, maximum) = match projection {
+        Projection::Orthographic(projection) => (
+            camera_world_cell(
+                transform.translation.x + projection.area.min.x,
+                transform.translation.y + projection.area.min.y,
+                origin,
+            )?
+            .split()
+            .0,
+            camera_world_cell(
+                transform.translation.x + projection.area.max.x,
+                transform.translation.y + projection.area.max.y,
+                origin,
+            )?
+            .split()
+            .0,
+        ),
+        _ => (center, center),
+    };
+    VisibleChunkWindow::covering(center, minimum, maximum, PRESENTATION_CHUNK_MARGIN)
+        .ok()
+        .map(|window| (center, window))
+}
+
+fn camera_chunk(camera: &Transform, origin: WorldCell) -> Option<ChunkCoord> {
+    camera_world_cell(camera.translation.x, camera.translation.y, origin).map(|cell| cell.split().0)
+}
+
+fn camera_world_cell(x: f32, y: f32, origin: WorldCell) -> Option<WorldCell> {
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    let x = i128::from(origin.x()).checked_add((x / CELL_SIZE).floor() as i128)?;
+    let y = i128::from(origin.y()).checked_add((y / CELL_SIZE).floor() as i128)?;
+    let x = i64::try_from(x).ok()?;
+    let y = i64::try_from(y).ok()?;
+    Some(WorldCell::new(x, y))
 }
 
 fn spawn_terrain(
@@ -124,9 +190,9 @@ fn spawn_terrain(
                         .coordinate
                         .world_cell(local)
                         .expect("a successfully generated chunk contains valid world cells");
-                    let terrain = chunk
-                        .terrain_at(local)
-                        .expect("a chunk snapshot contains every advertised cell");
+                    let Some(terrain) = chunk.known_terrain_at(local) else {
+                        continue;
+                    };
                     parent.spawn((
                         Sprite::from_color(terrain_color(terrain), Vec2::splat(CELL_SIZE)),
                         Transform::from_translation(world_translation(
@@ -144,13 +210,9 @@ fn sync_characters(
     commands: &mut Commands,
     authoritative: &AuthoritativeClient,
     cache: &mut PresentationCache,
-    rendered_center: Option<ChunkCoord>,
+    rendered_origin: Option<WorldCell>,
 ) {
-    let origin = rendered_center.map(|center| {
-        center
-            .world_cell(LocalCell::new(0, 0))
-            .expect("a chunk derived from a world cell has a valid lower-left cell")
-    });
+    let origin = rendered_origin;
     let rendered = cache.characters.keys().copied().collect::<BTreeSet<_>>();
     for action in character_sync_actions(&rendered, &authoritative.snapshot().characters) {
         match action {
@@ -237,10 +299,7 @@ pub(crate) fn interpolate_selected_visual(
     if motion.character_id != Some(id) || motion.trace.is_empty() {
         return;
     }
-    let Some(center) = cache.central_chunk else {
-        return;
-    };
-    let Some(origin_cell) = center.world_cell(LocalCell::new(0, 0)) else {
+    let Some(origin_cell) = cache.render_origin else {
         return;
     };
     let Ok(origin) = WorldPosition::from_cell_center(origin_cell) else {
@@ -280,7 +339,7 @@ pub(crate) fn draw_navigation_debug(
     if !debug.0 {
         return;
     }
-    let (Some(id), Some(center)) = (selected.0, cache.central_chunk) else {
+    let (Some(id), Some(origin_cell)) = (selected.0, cache.render_origin) else {
         return;
     };
     let Some(navigation) = authoritative.snapshot().navigation.as_ref() else {
@@ -289,9 +348,6 @@ pub(crate) fn draw_navigation_debug(
     if navigation.character_id != id {
         return;
     }
-    let Some(origin_cell) = center.world_cell(LocalCell::new(0, 0)) else {
-        return;
-    };
     let Ok(origin) = WorldPosition::from_cell_center(origin_cell) else {
         return;
     };
@@ -390,7 +446,7 @@ pub(crate) fn camera_controls(
 mod tests {
     use bevy::ecs::world::{CommandQueue, World};
     use bevy::prelude::{Vec3, Visibility};
-    use progressus_app::{ChunkSnapshot, Terrain, WorldCell, WorldPosition};
+    use progressus_app::{ChunkSnapshot, KnownTerrain, Terrain, WorldCell, WorldPosition};
 
     use super::{CHARACTER_Z, CHUNK_SIDE, LocalCell, spawn_terrain, world_position_translation};
 
@@ -401,7 +457,10 @@ mod tests {
         let chunks = [ChunkSnapshot {
             coordinate: progressus_app::ChunkCoord::new(0, 0),
             side: CHUNK_SIDE,
-            cells: vec![Terrain::Grass; usize::from(CHUNK_SIDE) * usize::from(CHUNK_SIDE)],
+            cells: vec![
+                KnownTerrain::Known(Terrain::Grass);
+                usize::from(CHUNK_SIDE) * usize::from(CHUNK_SIDE)
+            ],
         }];
         let root = {
             let mut commands = bevy::prelude::Commands::new(&mut queue, &world);

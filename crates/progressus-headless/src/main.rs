@@ -105,14 +105,16 @@ fn run_ticks(application: &mut Application, seed: u64, ticks: u64) -> Result<(),
     let mut grass = 0_usize;
     let mut water = 0_usize;
     let mut rock = 0_usize;
+    let mut unknown = 0_usize;
     for terrain in snapshot.chunks.iter().flat_map(|chunk| chunk.cells.iter()) {
         match terrain {
-            Terrain::Grass => grass += 1,
-            Terrain::Water => water += 1,
-            Terrain::Rock => rock += 1,
+            progressus_app::KnownTerrain::Known(Terrain::Grass) => grass += 1,
+            progressus_app::KnownTerrain::Known(Terrain::Water) => water += 1,
+            progressus_app::KnownTerrain::Known(Terrain::Rock) => rock += 1,
+            progressus_app::KnownTerrain::Unknown => unknown += 1,
         }
     }
-    println!("terrain grass={grass} water={water} rock={rock}");
+    println!("terrain grass={grass} water={water} rock={rock} unknown={unknown}");
 
     Ok(())
 }
@@ -307,7 +309,7 @@ fn terrain_at(snapshot: &ClientSnapshot, cell: WorldCell) -> Option<Terrain> {
         .chunks
         .iter()
         .find(|chunk| chunk.coordinate == coordinate)
-        .and_then(|chunk| chunk.terrain_at(local))
+        .and_then(|chunk| chunk.known_terrain_at(local))
 }
 
 fn character_exact_position(

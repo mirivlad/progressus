@@ -1,5 +1,5 @@
 use bevy::prelude::Resource;
-use progressus_app::{EntityId, SUBUNITS_PER_CELL, WorldPosition};
+use progressus_app::{EntityId, SUBUNITS_PER_CELL, SimulationTick, WorldPosition};
 
 pub(crate) const CELL_SIZE: f32 = 12.0;
 
@@ -9,19 +9,30 @@ pub(crate) struct SelectedCharacter(pub(crate) Option<EntityId>);
 #[derive(Resource, Default)]
 pub(crate) struct VisualMotion {
     pub(crate) character_id: Option<EntityId>,
+    pub(crate) source_tick: Option<SimulationTick>,
     pub(crate) trace: Vec<WorldPosition>,
     pub(crate) elapsed_seconds: f32,
 }
 
 impl VisualMotion {
-    pub(crate) fn replace(&mut self, character_id: EntityId, trace: Vec<WorldPosition>) {
+    pub(crate) fn replace(
+        &mut self,
+        character_id: EntityId,
+        source_tick: SimulationTick,
+        trace: Vec<WorldPosition>,
+    ) {
+        if self.character_id == Some(character_id) && self.source_tick == Some(source_tick) {
+            return;
+        }
         self.character_id = Some(character_id);
+        self.source_tick = Some(source_tick);
         self.trace = trace;
         self.elapsed_seconds = 0.0;
     }
 
     pub(crate) fn clear(&mut self) {
         self.character_id = None;
+        self.source_tick = None;
         self.trace.clear();
         self.elapsed_seconds = 0.0;
     }
@@ -88,9 +99,9 @@ pub(crate) fn interpolate_trace(trace: &[WorldPosition], fraction: f32) -> World
 
 #[cfg(test)]
 mod tests {
-    use progressus_app::{EntityId, WorldCell, WorldPosition};
+    use progressus_app::{EntityId, SimulationTick, WorldCell, WorldPosition};
 
-    use super::{interpolate_trace, quantize_local_click, select_nearest};
+    use super::{VisualMotion, interpolate_trace, quantize_local_click, select_nearest};
 
     #[test]
     fn nearest_selection_breaks_equal_distance_by_entity_id() {
@@ -138,5 +149,22 @@ mod tests {
             WorldPosition::from_subunits(10, 10).unwrap(),
         ];
         assert_eq!(interpolate_trace(&trace, 0.5), trace[1]);
+    }
+
+    #[test]
+    fn identical_authoritative_tick_does_not_restart_visual_motion() {
+        let id = EntityId::new(3).unwrap();
+        let trace = vec![
+            WorldPosition::from_subunits(0, 0).unwrap(),
+            WorldPosition::from_subunits(100, 0).unwrap(),
+        ];
+        let mut motion = VisualMotion::default();
+        motion.replace(id, SimulationTick::new(8), trace.clone());
+        motion.elapsed_seconds = 0.125;
+
+        motion.replace(id, SimulationTick::new(8), trace);
+
+        assert_eq!(motion.elapsed_seconds, 0.125);
+        assert_eq!(motion.source_tick, Some(SimulationTick::new(8)));
     }
 }

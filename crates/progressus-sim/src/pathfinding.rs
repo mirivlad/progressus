@@ -21,12 +21,21 @@ struct OpenNode {
     cell: WorldCell,
 }
 
+#[cfg(test)]
 pub(crate) fn find_path(
     simulation: &Simulation,
     start: WorldCell,
     goal: WorldCell,
 ) -> Result<Result<Vec<WorldCell>, PathfindingError>, SimulationError> {
-    find_path_with_budget(simulation, start, goal, PATHFINDING_NODE_BUDGET)
+    find_path_with_budget(simulation, start, goal, PATHFINDING_NODE_BUDGET, false)
+}
+
+pub(crate) fn find_explored_path(
+    simulation: &Simulation,
+    start: WorldCell,
+    goal: WorldCell,
+) -> Result<Result<Vec<WorldCell>, PathfindingError>, SimulationError> {
+    find_path_with_budget(simulation, start, goal, PATHFINDING_NODE_BUDGET, true)
 }
 
 fn find_path_with_budget(
@@ -34,9 +43,10 @@ fn find_path_with_budget(
     start: WorldCell,
     goal: WorldCell,
     budget: usize,
+    require_explored: bool,
 ) -> Result<Result<Vec<WorldCell>, PathfindingError>, SimulationError> {
     let mut chunks = BTreeMap::<ChunkCoord, EffectiveChunk>::new();
-    if !is_walkable(simulation, goal, &mut chunks)? {
+    if !is_walkable(simulation, goal, &mut chunks, require_explored)? {
         return Ok(Err(PathfindingError::PathNotFound));
     }
 
@@ -77,7 +87,7 @@ fn find_path_with_budget(
             let Some(next) = direction.adjacent(node.cell) else {
                 continue;
             };
-            if next == start || !is_walkable(simulation, next, &mut chunks)? {
+            if next == start || !is_walkable(simulation, next, &mut chunks, require_explored)? {
                 continue;
             }
             let next_cost = cost + 1;
@@ -106,7 +116,11 @@ fn is_walkable(
     simulation: &Simulation,
     cell: WorldCell,
     chunks: &mut BTreeMap<ChunkCoord, EffectiveChunk>,
+    require_explored: bool,
 ) -> Result<bool, SimulationError> {
+    if require_explored && !simulation.is_explored(cell) {
+        return Ok(false);
+    }
     let (coordinate, local) = cell.split();
     if let Entry::Vacant(entry) = chunks.entry(coordinate) {
         entry.insert(simulation.effective_chunk(coordinate)?);
@@ -218,8 +232,14 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(
-            find_path_with_budget(&simulation, WorldCell::new(0, 0), WorldCell::new(2, 0), 1)
-                .unwrap(),
+            find_path_with_budget(
+                &simulation,
+                WorldCell::new(0, 0),
+                WorldCell::new(2, 0),
+                1,
+                false,
+            )
+            .unwrap(),
             Err(PathfindingError::PathNotFound)
         );
 
@@ -227,8 +247,14 @@ mod tests {
             .set_terrain_override(WorldCell::new(1, 0), Terrain::Grass)
             .unwrap();
         assert_eq!(
-            find_path_with_budget(&simulation, WorldCell::new(0, 0), WorldCell::new(2, 0), 1)
-                .unwrap(),
+            find_path_with_budget(
+                &simulation,
+                WorldCell::new(0, 0),
+                WorldCell::new(2, 0),
+                1,
+                false,
+            )
+            .unwrap(),
             Err(PathfindingError::SearchBudgetExceeded)
         );
     }

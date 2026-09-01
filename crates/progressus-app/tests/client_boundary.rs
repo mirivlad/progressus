@@ -1,7 +1,7 @@
 use progressus_app::{
     Application, CHUNK_SIDE, CharacterSnapshot, ChunkCoord, Command, Direction, EntityId,
-    LocalCell, MovementState, NewGameOptions, SimulationTick, SnapshotQuery, Terrain, WorldCell,
-    WorldPosition, WorldSeed, WorldgenVersion,
+    KnownTerrain, LocalCell, MovementState, NewGameOptions, SimulationTick, SnapshotQuery, Terrain,
+    WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
 };
 
 fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
@@ -37,11 +37,7 @@ fn snapshot_is_bounded_ordered_and_renderable() {
             .iter()
             .map(|chunk| chunk.coordinate)
             .collect::<Vec<_>>(),
-        vec![
-            ChunkCoord::new(-1, 0),
-            ChunkCoord::new(0, 0),
-            ChunkCoord::new(1, 0)
-        ]
+        vec![ChunkCoord::new(-1, 0), ChunkCoord::new(0, 0)]
     );
     assert!(snapshot.chunks.iter().all(|chunk| {
         chunk.side == CHUNK_SIDE
@@ -132,10 +128,27 @@ fn chunk_snapshots_map_local_coordinates_without_simulation_access() {
     let chunk = &snapshot.chunks[0];
 
     assert_eq!(
-        chunk.terrain_at(LocalCell::new(30, 0)),
+        chunk.known_terrain_at(LocalCell::new(30, 0)),
         Some(Terrain::Grass)
     );
     assert_eq!(chunk.terrain_at(LocalCell::new(CHUNK_SIDE, 0)), None);
+}
+
+#[test]
+fn terrain_query_does_not_publish_undiscovered_terrain() {
+    let application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(42),
+    })
+    .unwrap();
+
+    let snapshot = application
+        .snapshot(SnapshotQuery {
+            chunks: vec![ChunkCoord::new(100, -100)],
+            ..SnapshotQuery::default()
+        })
+        .unwrap();
+
+    assert!(snapshot.chunks.is_empty());
 }
 
 #[test]
@@ -262,7 +275,7 @@ fn rejected_move_to_keeps_the_selected_navigation_snapshot() {
         .iter()
         .enumerate()
         .find_map(|(index, terrain)| {
-            (*terrain != Terrain::Grass).then(|| {
+            matches!(terrain, KnownTerrain::Known(Terrain::Water | Terrain::Rock)).then(|| {
                 let x = (index % usize::from(CHUNK_SIDE)) as u16;
                 let y = (index / usize::from(CHUNK_SIDE)) as u16;
                 ChunkCoord::new(0, 0)

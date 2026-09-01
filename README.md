@@ -59,9 +59,9 @@ The first executable headless foundation is implemented:
 - bounded deterministic cardinal A* and exact `MoveTo` routes through `progressus-app`, with detached selected navigation snapshots and live effective-terrain transition checks;
 - immutable deterministic base terrain plus sparse, in-memory effective-terrain overrides that affect authoritative movement and terrain snapshots;
 - a headless consumer that runs without Bevy, a window, or a graphics context, including a bounded external least-visited walker that crosses generated chunk boundaries through the public application API.
-- a native Bevy bootstrap client for seed `0`: a 2D 3×3 Cora-centered terrain window, five snapshot-driven characters, left-click selection, right-click exact `MoveTo`, trace-based interpolation, F3 route diagnostics, and presentation-only camera pan/zoom.
+- a native Bevy bootstrap client for seed `0`: snapshot-driven characters, left-click selection, right-click exact `MoveTo`, trace-based interpolation, F3 route diagnostics, and presentation-only camera pan/zoom over the camera-visible explored terrain.
 
-The sparse terrain state is not yet save/load data, a residency or unload policy, or a terrain gameplay command. Continuous positions and bounded exact click-to-move are now an authoritative bootstrap, not complete navigation: there is no diagonal or hierarchical search, auto-repath, jobs/AI interruption policy, pawn collision, physical footprints, speed modifiers, save/load, or residency. The current boundary keeps the visual client dependent on `progressus-app` without giving it ownership of simulation truth; Bevy converts exact snapshots to local presentation floats only after subtracting a nearby cell-center origin.
+The sparse terrain state is not yet save/load data, a residency or unload policy, or a terrain gameplay command. Discovery is likewise an in-memory authoritative bootstrap: every character monotonically reveals a radius-five Euclidean disk of cells, while snapshots publish only `KnownTerrain` and player `MoveTo` cannot target or traverse unknown terrain. Continuous positions and bounded exact click-to-move are now an authoritative bootstrap, not complete navigation: there is no diagonal or hierarchical search, auto-repath, jobs/AI interruption policy, pawn collision, physical footprints, speed modifiers, save/load, or residency. The current boundary keeps the visual client dependent on `progressus-app` without giving it ownership of simulation truth; Bevy converts exact snapshots to local presentation floats only after subtracting a nearby cell-center origin.
 
 The immediate goal is not to build the entire game. The first prototype exists to prove the dangerous fundamentals:
 
@@ -103,7 +103,7 @@ Run the native visual bootstrap (requires a local display and GPU for the manual
 cargo run -p progressus-client
 ```
 
-It opens seed `0` as a 2D visual bootstrap with a 3×3 Cora-centered terrain window, five snapshot-driven characters, arrow-key movement and Space to stop Cora, and presentation-only pan/zoom. Terrain is queried initially and when Cora's central chunk changes, not once per FPS frame.
+It opens seed `0` as a 2D visual bootstrap with five snapshot-driven characters, arrow-key movement and Space to stop Cora, and presentation-only pan/zoom. Terrain is queried for the camera viewport plus a small margin only when that window or the authoritative exploration revision changes; undiscovered terrain remains an unknown background and camera movement never discovers it.
 
 Verify that Bevy has not entered the complete headless/application/simulation/worldgen dependency chain:
 

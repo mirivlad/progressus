@@ -28,6 +28,21 @@ mod tests {
     }
 
     #[test]
+    fn viewport_window_covers_its_chunk_bounds_and_margin() {
+        let window = VisibleChunkWindow::covering(
+            ChunkCoord::new(2, 3),
+            ChunkCoord::new(1, 2),
+            ChunkCoord::new(3, 4),
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(window.coordinates().first(), Some(&ChunkCoord::new(0, 1)));
+        assert_eq!(window.coordinates().last(), Some(&ChunkCoord::new(4, 5)));
+        assert_eq!(window.coordinates().len(), 25);
+    }
+
+    #[test]
     fn terrain_rebuild_happens_only_for_initial_or_changed_center() {
         let center = ChunkCoord::new(0, 0);
         assert!(terrain_refresh_needed(None, center));
@@ -77,17 +92,34 @@ pub struct VisibleChunkWindow {
 
 impl VisibleChunkWindow {
     pub fn around(center: ChunkCoord) -> Result<Self, PresentationError> {
-        let mut coordinates = Vec::with_capacity(9);
-        for y_offset in -VISIBLE_CHUNK_RADIUS..=VISIBLE_CHUNK_RADIUS {
-            let y = center
-                .y()
-                .checked_add(y_offset)
-                .ok_or(PresentationError::VisibleWindowOutOfRange { center })?;
-            for x_offset in -VISIBLE_CHUNK_RADIUS..=VISIBLE_CHUNK_RADIUS {
-                let x = center
-                    .x()
-                    .checked_add(x_offset)
-                    .ok_or(PresentationError::VisibleWindowOutOfRange { center })?;
+        Self::covering(center, center, center, VISIBLE_CHUNK_RADIUS)
+    }
+
+    pub fn covering(
+        center: ChunkCoord,
+        minimum: ChunkCoord,
+        maximum: ChunkCoord,
+        margin: i64,
+    ) -> Result<Self, PresentationError> {
+        let minimum_x = minimum
+            .x()
+            .checked_sub(margin)
+            .ok_or(PresentationError::VisibleWindowOutOfRange { center })?;
+        let maximum_x = maximum
+            .x()
+            .checked_add(margin)
+            .ok_or(PresentationError::VisibleWindowOutOfRange { center })?;
+        let minimum_y = minimum
+            .y()
+            .checked_sub(margin)
+            .ok_or(PresentationError::VisibleWindowOutOfRange { center })?;
+        let maximum_y = maximum
+            .y()
+            .checked_add(margin)
+            .ok_or(PresentationError::VisibleWindowOutOfRange { center })?;
+        let mut coordinates = Vec::new();
+        for y in minimum_y..=maximum_y {
+            for x in minimum_x..=maximum_x {
                 coordinates.push(ChunkCoord::new(x, y));
             }
         }

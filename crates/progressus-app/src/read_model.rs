@@ -1,14 +1,12 @@
-use progressus_sim::{Character, EffectiveChunk, MovementState, WorldPosition};
+use progressus_sim::{Character, MovementState, WorldPosition};
 
-use crate::{
-    CHUNK_SIDE, ChunkCoord, EntityId, LocalCell, SimulationTick, Terrain, WorldCell,
-    WorldgenVersion,
-};
+use crate::{ChunkCoord, EntityId, LocalCell, SimulationTick, Terrain, WorldCell, WorldgenVersion};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClientSnapshot {
     pub tick: SimulationTick,
     pub worldgen_version: WorldgenVersion,
+    pub exploration_revision: u64,
     pub chunks: Vec<ChunkSnapshot>,
     pub characters: Vec<CharacterSnapshot>,
     pub navigation: Option<NavigationSnapshot>,
@@ -20,6 +18,12 @@ pub struct NavigationSnapshot {
     pub destination: Option<WorldPosition>,
     pub remaining_waypoints: Vec<WorldPosition>,
     pub last_tick_motion_trace: Vec<WorldPosition>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KnownTerrain {
+    Unknown,
+    Known(Terrain),
 }
 
 impl From<&Character> for NavigationSnapshot {
@@ -38,11 +42,11 @@ pub struct ChunkSnapshot {
     pub coordinate: ChunkCoord,
     pub side: u16,
     /// Terrain in row-major order: `index = local_y * side + local_x`.
-    pub cells: Vec<Terrain>,
+    pub cells: Vec<KnownTerrain>,
 }
 
 impl ChunkSnapshot {
-    pub fn terrain_at(&self, local: LocalCell) -> Option<Terrain> {
+    pub fn terrain_at(&self, local: LocalCell) -> Option<KnownTerrain> {
         if local.x() >= self.side || local.y() >= self.side {
             return None;
         }
@@ -50,14 +54,11 @@ impl ChunkSnapshot {
         let index = usize::from(local.y()) * usize::from(self.side) + usize::from(local.x());
         self.cells.get(index).copied()
     }
-}
 
-impl From<EffectiveChunk> for ChunkSnapshot {
-    fn from(chunk: EffectiveChunk) -> Self {
-        Self {
-            coordinate: chunk.coordinate(),
-            side: CHUNK_SIDE,
-            cells: chunk.cells().to_vec(),
+    pub fn known_terrain_at(&self, local: LocalCell) -> Option<Terrain> {
+        match self.terrain_at(local)? {
+            KnownTerrain::Unknown => None,
+            KnownTerrain::Known(terrain) => Some(terrain),
         }
     }
 }

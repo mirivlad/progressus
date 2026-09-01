@@ -123,10 +123,7 @@ pub(crate) fn pointer_navigation(
     let Some(world) = camera.viewport_to_world_2d(camera_transform, cursor).ok() else {
         return;
     };
-    let Some(center) = cache.central_chunk else {
-        return;
-    };
-    let Some(origin_cell) = center.world_cell(progressus_app::LocalCell::new(0, 0)) else {
+    let Some(origin_cell) = cache.render_origin else {
         return;
     };
     let Ok(origin) = progressus_app::WorldPosition::from_cell_center(origin_cell) else {
@@ -260,12 +257,12 @@ mod tests {
     use std::collections::{BTreeMap, VecDeque, btree_map::Entry};
 
     use bevy::prelude::{
-        App, ButtonInput, Children, Entity, IntoScheduleConfigs, KeyCode, Time, Transform, Update,
-        Vec3,
+        App, ButtonInput, Camera2d, Children, Entity, IntoScheduleConfigs, KeyCode, Time,
+        Transform, Update, Vec3,
     };
     use progressus_app::{
         Application, CHUNK_SIDE, CharacterSnapshot, ChunkCoord, ClientSnapshot, Command, Direction,
-        EntityId, LocalCell, MovementState, SUBUNITS_PER_CELL, SnapshotQuery, Terrain, WorldCell,
+        EntityId, MovementState, SUBUNITS_PER_CELL, SnapshotQuery, Terrain, WorldCell,
         WorldPosition,
     };
 
@@ -410,7 +407,8 @@ mod tests {
             app.world().resource::<PresentationCache>().central_chunk,
             Some(ChunkCoord::new(0, 0))
         );
-        assert_eq!(initial_children.len(), TERRAIN_CELL_COUNT);
+        assert!(!initial_children.is_empty());
+        assert!(initial_children.len() < TERRAIN_CELL_COUNT);
 
         let crossing_from = {
             let mut authoritative = app.world_mut().resource_mut::<AuthoritativeClient>();
@@ -430,7 +428,6 @@ mod tests {
         assert_eq!(crossing_from.x(), 31);
         let crossing_center = crossing_from.split().0;
         assert_eq!(crossing_center.x(), 0);
-        let crossing_origin = crossing_center.world_cell(LocalCell::new(0, 0)).unwrap();
         let (root_before, center_before, characters_before) = {
             let cache = app.world().resource::<PresentationCache>();
             (
@@ -440,8 +437,8 @@ mod tests {
             )
         };
         let children_before = terrain_children(&app, root_before);
-        assert_eq!(center_before, Some(crossing_center));
-        assert_eq!(children_before.len(), TERRAIN_CELL_COUNT);
+        assert_eq!(center_before, Some(ChunkCoord::new(0, 0)));
+        assert!(!children_before.is_empty());
 
         mark_snapshot_dirty(&mut app);
         app.update();
@@ -457,11 +454,7 @@ mod tests {
                 .get::<Transform>()
                 .unwrap()
                 .translation,
-            Vec3::new(
-                31.0 * 12.0,
-                (crossing_from.y() - crossing_origin.y()) as f32 * 12.0,
-                10.0,
-            )
+            Vec3::new(31.0 * 12.0, crossing_from.y() as f32 * 12.0, 10.0,)
         );
 
         {
@@ -487,37 +480,14 @@ mod tests {
         assert_eq!(new_center, ChunkCoord::new(1, crossing_center.y()));
         let (new_root, characters) = {
             let cache = app.world().resource::<PresentationCache>();
-            assert_eq!(cache.central_chunk, Some(new_center));
+            assert_eq!(cache.central_chunk, Some(ChunkCoord::new(0, 0)));
             (cache.terrain_root.unwrap(), cache.characters.clone())
         };
         assert_ne!(new_root, root_before);
         assert!(app.world().get_entity(root_before).is_err());
         let new_children = terrain_children(&app, new_root);
-        assert_eq!(new_children.len(), TERRAIN_CELL_COUNT);
-        let (min_x, max_x, min_y, max_y) = new_children.iter().fold(
-            (
-                f32::INFINITY,
-                f32::NEG_INFINITY,
-                f32::INFINITY,
-                f32::NEG_INFINITY,
-            ),
-            |(min_x, max_x, min_y, max_y), entity| {
-                let translation = app
-                    .world()
-                    .entity(*entity)
-                    .get::<Transform>()
-                    .unwrap()
-                    .translation;
-                (
-                    min_x.min(translation.x),
-                    max_x.max(translation.x),
-                    min_y.min(translation.y),
-                    max_y.max(translation.y),
-                )
-            },
-        );
-        assert_eq!((min_x, max_x), (-32.0 * 12.0, 63.0 * 12.0));
-        assert_eq!((min_y, max_y), (-32.0 * 12.0, 63.0 * 12.0));
+        assert!(!new_children.is_empty());
+        assert!(new_children.len() < TERRAIN_CELL_COUNT);
         let terrain_root_count = {
             let world = app.world_mut();
             let mut terrain_roots = world.query::<&TerrainRoot>();
@@ -525,9 +495,7 @@ mod tests {
         };
         assert_eq!(terrain_root_count, 1);
 
-        let render_origin =
-            WorldPosition::from_cell_center(new_center.world_cell(LocalCell::new(0, 0)).unwrap())
-                .unwrap();
+        let render_origin = WorldPosition::from_cell_center(WorldCell::new(0, 0)).unwrap();
         for authoritative in &app
             .world()
             .resource::<AuthoritativeClient>()
@@ -551,6 +519,73 @@ mod tests {
                     .translation,
                 expected
             );
+        }
+    }
+
+    #[test]
+    fn terrain_window_follows_camera_without_moving_or_selecting_cora() {
+        let mut app = presentation_app(AuthoritativeClient::new().unwrap());
+        let camera = app.world_mut().spawn((Camera2d, Transform::default())).id();
+
+        app.update();
+        let first_root = app
+            .world()
+            .resource::<PresentationCache>()
+            .terrain_root
+            .unwrap();
+        let cora_before = character(&app, super::cora_id());
+        let exploration_before = app
+            .world()
+            .resource::<AuthoritativeClient>()
+            .snapshot()
+            .exploration_revision;
+
+        app.world_mut()
+            .entity_mut(camera)
+            .get_mut::<Transform>()
+            .unwrap()
+            .translation
+            .x = 32.0 * 12.0;
+        app.update();
+
+        let cache = app.world().resource::<PresentationCache>();
+        assert_eq!(cache.central_chunk, Some(ChunkCoord::new(1, 0)));
+        assert_ne!(cache.terrain_root, Some(first_root));
+        assert_eq!(character(&app, super::cora_id()), cora_before);
+        assert_eq!(app.world().resource::<SelectedCharacter>().0, None);
+        assert_eq!(
+            app.world()
+                .resource::<AuthoritativeClient>()
+                .snapshot()
+                .exploration_revision,
+            exploration_before
+        );
+    }
+
+    #[test]
+    fn static_camera_keeps_explored_terrain_and_character_presentation_alive() {
+        let mut app = presentation_app(AuthoritativeClient::new().unwrap());
+        app.world_mut().spawn((Camera2d, Transform::default()));
+
+        app.update();
+        let root = app
+            .world()
+            .resource::<PresentationCache>()
+            .terrain_root
+            .unwrap();
+        let terrain = terrain_children(&app, root);
+        assert!(!terrain.is_empty());
+
+        for _ in 0..8 {
+            app.update();
+        }
+
+        let cache = app.world().resource::<PresentationCache>();
+        assert_eq!(cache.terrain_root, Some(root));
+        assert_eq!(terrain_children(&app, root), terrain);
+        assert_eq!(cache.characters.len(), 5);
+        for entity in cache.characters.values() {
+            assert!(app.world().get_entity(*entity).is_ok());
         }
     }
 
@@ -670,7 +705,7 @@ mod tests {
             .chunks
             .iter()
             .find(|candidate| candidate.coordinate == chunk)
-            .and_then(|candidate| candidate.terrain_at(local))
+            .and_then(|candidate| candidate.known_terrain_at(local))
     }
 
     #[test]
@@ -893,7 +928,7 @@ mod tests {
                         let local = progressus_app::LocalCell::new(local_x, local_y);
                         (
                             chunk.coordinate.world_cell(local).unwrap(),
-                            chunk.terrain_at(local).unwrap(),
+                            chunk.known_terrain_at(local),
                         )
                     })
                 })
@@ -912,7 +947,7 @@ mod tests {
         while let Some(position) = frontier.pop_front() {
             for (direction, key) in directions {
                 let neighbor = direction.adjacent(position).unwrap();
-                let Some(terrain) = terrain_by_cell.get(&neighbor) else {
+                let Some(Some(terrain)) = terrain_by_cell.get(&neighbor) else {
                     continue;
                 };
                 if *terrain != Terrain::Grass {
@@ -939,7 +974,7 @@ mod tests {
     fn terrain_at(authoritative: &AuthoritativeClient, position: WorldCell) -> Terrain {
         let (chunk, local) = position.split();
         authoritative.terrain_snapshot(vec![chunk]).unwrap().chunks[0]
-            .terrain_at(local)
+            .known_terrain_at(local)
             .unwrap()
     }
 }

@@ -10,8 +10,9 @@ pub use progressus_sim::{
     LocalCell, MovementSpeed, MovementState, SUBUNITS_PER_CELL, SimulationTick, Terrain, WorldCell,
     WorldPosition, WorldSeed, WorldgenVersion,
 };
-pub use read_model::NavigationSnapshot;
-pub use read_model::{CharacterSnapshot, ChunkSnapshot, ClientSnapshot};
+pub use read_model::{
+    CharacterSnapshot, ChunkSnapshot, ClientSnapshot, KnownTerrain, NavigationSnapshot,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NewGameOptions {
@@ -81,10 +82,44 @@ impl Application {
         let chunks = query
             .chunks
             .into_iter()
-            .map(|coordinate| {
-                self.simulation
-                    .effective_chunk(coordinate)
-                    .map(ChunkSnapshot::from)
+            .filter_map(|coordinate| {
+                let any_known = (0..CHUNK_SIDE).any(|y| {
+                    (0..CHUNK_SIDE).any(|x| {
+                        let cell = coordinate
+                            .world_cell(LocalCell::new(x, y))
+                            .expect("valid chunk-local cells produce world cells");
+                        self.simulation.is_explored(cell)
+                    })
+                });
+                if !any_known {
+                    return None;
+                }
+                let effective = match self.simulation.effective_chunk(coordinate) {
+                    Ok(chunk) => chunk,
+                    Err(error) => return Some(Err(error)),
+                };
+                let cells = (0..CHUNK_SIDE)
+                    .flat_map(|y| (0..CHUNK_SIDE).map(move |x| LocalCell::new(x, y)))
+                    .map(|local| {
+                        let cell = coordinate
+                            .world_cell(local)
+                            .expect("valid chunk-local cells produce world cells");
+                        if self.simulation.is_explored(cell) {
+                            KnownTerrain::Known(
+                                effective
+                                    .terrain_at(local)
+                                    .expect("effective chunks contain every local cell"),
+                            )
+                        } else {
+                            KnownTerrain::Unknown
+                        }
+                    })
+                    .collect();
+                Some(Ok(ChunkSnapshot {
+                    coordinate,
+                    side: CHUNK_SIDE,
+                    cells,
+                }))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let characters = self
@@ -96,6 +131,7 @@ impl Application {
         Ok(ClientSnapshot {
             tick: self.simulation.tick(),
             worldgen_version: self.simulation.worldgen_version(),
+            exploration_revision: self.simulation.exploration_revision(),
             chunks,
             characters,
             navigation: query.navigation_for.and_then(|id| {
@@ -178,6 +214,56 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(snapshot.chunks[0].terrain_at(local), Some(Terrain::Rock));
+        assert_eq!(
+            snapshot.chunks[0].known_terrain_at(local),
+            Some(Terrain::Rock)
+        );
+    }
+
+    #[test]
+    fn snapshot_publishes_newly_explored_terrain_only_after_authoritative_movement() {
+        let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        for x in 0..=3 {
+            simulation
+                .set_terrain_override(WorldCell::new(x, 0), Terrain::Grass)
+                .unwrap();
+        }
+        let mut application = Application::from_simulation_for_test(simulation);
+        let coordinate = ChunkCoord::new(0, 0);
+        let newly_visible = LocalCell::new(8, 0);
+
+        assert_eq!(
+            application
+                .snapshot(SnapshotQuery {
+                    chunks: vec![coordinate],
+                    ..SnapshotQuery::default()
+                })
+                .unwrap()
+                .chunks[0]
+                .terrain_at(newly_visible),
+            Some(KnownTerrain::Unknown)
+        );
+
+        application
+            .execute(Command::SetMovementDirection {
+                character_id: EntityId::new(3).unwrap(),
+                direction: Direction::East,
+            })
+            .unwrap();
+        application
+            .execute(Command::AdvanceTicks { count: 12 })
+            .unwrap();
+
+        assert!(
+            application
+                .snapshot(SnapshotQuery {
+                    chunks: vec![coordinate],
+                    ..SnapshotQuery::default()
+                })
+                .unwrap()
+                .chunks[0]
+                .known_terrain_at(newly_visible)
+                .is_some()
+        );
     }
 }

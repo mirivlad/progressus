@@ -8,7 +8,8 @@ use progressus_worldgen::{WorldGenerator, WorldgenError};
 
 use crate::clock::SimulationClock;
 use crate::entity::{EntityIdAllocator, NavigationRoute};
-use crate::pathfinding::{PathfindingError, find_path};
+use crate::exploration::ExploredWorld;
+use crate::pathfinding::{PathfindingError, find_explored_path};
 use crate::world_state::ModifiedWorld;
 use crate::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, Direction, EffectiveChunk,
@@ -31,6 +32,8 @@ pub struct Simulation {
     id_allocator: EntityIdAllocator,
     characters: BTreeMap<EntityId, Character>,
     modified_world: ModifiedWorld,
+    explored_world: ExploredWorld,
+    last_discovery_cells: BTreeMap<EntityId, WorldCell>,
     #[cfg(test)]
     base_terrain_query_count: Cell<u64>,
 }
@@ -56,12 +59,23 @@ impl Simulation {
             }
         }
 
+        let mut explored_world = ExploredWorld::default();
+        for character in characters.values() {
+            explored_world.reveal_around(character.position().containing_cell());
+        }
+        let last_discovery_cells = characters
+            .iter()
+            .map(|(id, character)| (*id, character.position().containing_cell()))
+            .collect();
+
         Ok(Self {
             generator,
             clock: SimulationClock::new(0),
             id_allocator,
             characters,
             modified_world: ModifiedWorld::default(),
+            explored_world,
+            last_discovery_cells,
             #[cfg(test)]
             base_terrain_query_count: Cell::new(0),
         })
@@ -77,6 +91,14 @@ impl Simulation {
 
     pub fn next_entity_id(&self) -> Option<EntityId> {
         self.id_allocator.peek()
+    }
+
+    pub fn is_explored(&self, position: WorldCell) -> bool {
+        self.explored_world.contains(position)
+    }
+
+    pub const fn exploration_revision(&self) -> u64 {
+        self.explored_world.revision()
     }
 
     pub fn advance_ticks(&mut self, count: u64) -> Result<(), SimulationError> {
@@ -120,12 +142,17 @@ impl Simulation {
             self.stop_movement(id)?;
             return Ok(());
         }
+        if !self.is_explored(destination.containing_cell()) {
+            return Err(SimulationError::MoveToDestinationUndiscovered(
+                destination.containing_cell(),
+            ));
+        }
         if !self.is_walkable(destination.containing_cell())? {
             return Err(SimulationError::MoveToDestinationBlocked(
                 destination.containing_cell(),
             ));
         }
-        let cells = find_path(
+        let cells = find_explored_path(
             self,
             current.containing_cell(),
             destination.containing_cell(),
@@ -226,6 +253,13 @@ impl Simulation {
 
     fn advance_characters_one_tick(&mut self) -> Result<(), SimulationError> {
         let ids = self.characters.keys().copied().collect::<Vec<_>>();
+        for id in &ids {
+            let character = self
+                .characters
+                .get_mut(id)
+                .expect("character ID came from the character map");
+            character.set_last_tick_motion_trace(vec![character.position()]);
+        }
         for id in ids {
             let (mut position, direction, mut remaining) = {
                 let character = self
@@ -286,6 +320,17 @@ impl Simulation {
                 .get_mut(&id)
                 .expect("character ID came from the character map")
                 .set_last_tick_motion_trace(vec![trace_start, position]);
+        }
+
+        let discovery_cells = self
+            .characters
+            .iter()
+            .map(|(id, character)| (*id, character.position().containing_cell()))
+            .collect::<Vec<_>>();
+        for (id, cell) in discovery_cells {
+            if self.last_discovery_cells.insert(id, cell) != Some(cell) {
+                self.explored_world.reveal_around(cell);
+            }
         }
 
         Ok(())
@@ -529,6 +574,7 @@ pub enum SimulationError {
     MovementCoordinateOverflow(WorldCell),
     MovementDestinationBlocked(WorldCell),
     MoveToDestinationBlocked(WorldCell),
+    MoveToDestinationUndiscovered(WorldCell),
     MoveToPathNotFound,
     MoveToSearchBudgetExceeded,
     Position(WorldPositionError),
@@ -565,6 +611,12 @@ impl Display for SimulationError {
             Self::MoveToDestinationBlocked(position) => write!(
                 formatter,
                 "move-to destination ({}, {}) is not walkable",
+                position.x(),
+                position.y()
+            ),
+            Self::MoveToDestinationUndiscovered(position) => write!(
+                formatter,
+                "move-to destination ({}, {}) is undiscovered",
                 position.x(),
                 position.y()
             ),
@@ -608,6 +660,136 @@ mod tests {
 
     fn cora() -> EntityId {
         EntityId::new(3).unwrap()
+    }
+
+    #[test]
+    fn initial_characters_reveal_the_union_of_radius_five_disks() {
+        let simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+
+        assert!(simulation.is_explored(WorldCell::new(-7, 0)));
+        assert!(simulation.is_explored(WorldCell::new(7, 0)));
+        assert!(simulation.is_explored(WorldCell::new(4, 4)));
+        assert!(!simulation.is_explored(WorldCell::new(-8, 0)));
+        assert!(!simulation.is_explored(WorldCell::new(0, 6)));
+    }
+
+    #[test]
+    fn discovery_updates_only_after_a_character_enters_a_new_cell() {
+        let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        let cora = cora();
+        place_on_grass(&mut simulation, cora, WorldCell::new(20, 0));
+        simulation
+            .set_terrain_override(WorldCell::new(21, 0), Terrain::Grass)
+            .unwrap();
+        simulation.advance_ticks(1).unwrap();
+        let revision = simulation.exploration_revision();
+
+        simulation
+            .set_movement_direction(cora, Direction::East)
+            .unwrap();
+        simulation.advance_ticks(1).unwrap();
+        assert_eq!(simulation.exploration_revision(), revision);
+        assert!(!simulation.is_explored(WorldCell::new(26, 0)));
+
+        simulation.advance_ticks(1).unwrap();
+        assert!(simulation.exploration_revision() > revision);
+        assert!(simulation.is_explored(WorldCell::new(26, 0)));
+    }
+
+    #[test]
+    fn any_character_can_reveal_negative_and_distant_cells() {
+        let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        let ada = EntityId::new(1).unwrap();
+        let distant = WorldCell::new(-100, -20);
+        place_on_grass(&mut simulation, ada, distant);
+        assert!(!simulation.is_explored(WorldCell::new(-105, -20)));
+
+        simulation.advance_ticks(1).unwrap();
+
+        assert!(simulation.is_explored(WorldCell::new(-105, -20)));
+        assert!(simulation.is_explored(WorldCell::new(-97, -16)));
+    }
+
+    #[test]
+    fn player_move_to_rejects_an_undiscovered_destination_and_path_gap() {
+        let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        let cora = cora();
+        let destination = WorldCell::new(20, 0);
+        for x in 0..=20 {
+            simulation
+                .set_terrain_override(WorldCell::new(x, 0), Terrain::Grass)
+                .unwrap();
+        }
+        assert_eq!(
+            simulation.move_to(cora, WorldPosition::from_cell_center(destination).unwrap()),
+            Err(SimulationError::MoveToDestinationUndiscovered(destination))
+        );
+
+        place_on_grass(&mut simulation, EntityId::new(1).unwrap(), destination);
+        simulation.advance_ticks(1).unwrap();
+        assert!(simulation.is_explored(destination));
+        assert!(!simulation.is_explored(WorldCell::new(12, 0)));
+        assert_eq!(
+            simulation.move_to(cora, WorldPosition::from_cell_center(destination).unwrap()),
+            Err(SimulationError::MoveToPathNotFound)
+        );
+    }
+
+    #[test]
+    fn exact_destinations_remain_still_after_arrival_and_idle_ticks() {
+        let destinations = [
+            WorldPosition::from_subunits(512, 512).unwrap(),
+            WorldPosition::from_subunits(256, 256).unwrap(),
+            WorldPosition::from_subunits(900, 777).unwrap(),
+            WorldPosition::from_subunits(1023, 900).unwrap(),
+            WorldPosition::from_subunits(1024, 900).unwrap(),
+            WorldPosition::from_subunits(-1024, 900).unwrap(),
+            WorldPosition::from_subunits(1024, 1024).unwrap(),
+        ];
+
+        for destination in destinations {
+            let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+            let cora = cora();
+            simulation
+                .set_terrain_override(destination.containing_cell(), Terrain::Grass)
+                .unwrap();
+            simulation.move_to(cora, destination).unwrap();
+            simulation.advance_ticks(20).unwrap();
+
+            assert_eq!(character(&simulation, cora).position(), destination);
+            assert_eq!(character(&simulation, cora).movement(), MovementState::Idle);
+            assert_eq!(character(&simulation, cora).navigation_destination(), None);
+            simulation.advance_ticks(3).unwrap();
+            assert_eq!(character(&simulation, cora).position(), destination);
+            assert_eq!(
+                character(&simulation, cora).last_tick_motion_trace(),
+                &[destination]
+            );
+        }
+    }
+
+    #[test]
+    fn exact_destination_near_blocked_terrain_remains_still_after_arrival() {
+        for blocked in [Terrain::Water, Terrain::Rock] {
+            let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+            let cora = cora();
+            let (cell, direction) = find_raw_grass_with_neighbor(&simulation, blocked);
+            place_on_grass(&mut simulation, cora, cell);
+            simulation.advance_ticks(1).unwrap();
+            let destination = near_cell_edge(cell, direction);
+
+            simulation.move_to(cora, destination).unwrap();
+            simulation.advance_ticks(20).unwrap();
+
+            assert_eq!(character(&simulation, cora).position(), destination);
+            assert_eq!(character(&simulation, cora).movement(), MovementState::Idle);
+            simulation.advance_ticks(3).unwrap();
+            assert_eq!(character(&simulation, cora).position(), destination);
+            assert_eq!(
+                character(&simulation, cora).last_tick_motion_trace(),
+                &[destination]
+            );
+        }
     }
 
     #[test]
@@ -968,6 +1150,7 @@ mod tests {
                 .unwrap();
         }
         place_on_grass(&mut simulation, cora, start);
+        simulation.advance_ticks(1).unwrap();
         character_mut(&mut simulation, cora).set_speed(MovementSpeed::new(4_096).unwrap());
         let destination = WorldPosition::from_cell_center(destination_cell).unwrap();
         simulation.move_to(cora, destination).unwrap();
@@ -1236,6 +1419,16 @@ mod tests {
             Direction::West => origin.checked_translate(0, 512).unwrap(),
             Direction::North => origin.checked_translate(512, 1023).unwrap(),
             Direction::South => origin.checked_translate(512, 0).unwrap(),
+        }
+    }
+
+    fn near_cell_edge(cell: WorldCell, direction: Direction) -> WorldPosition {
+        let origin = WorldPosition::from_cell_origin(cell).unwrap();
+        match direction {
+            Direction::East => origin.checked_translate(1022, 512).unwrap(),
+            Direction::West => origin.checked_translate(1, 512).unwrap(),
+            Direction::North => origin.checked_translate(512, 1022).unwrap(),
+            Direction::South => origin.checked_translate(512, 1).unwrap(),
         }
     }
 
