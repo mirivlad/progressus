@@ -23,7 +23,7 @@ fn new_game_has_five_stable_characters_on_walkable_cells() {
         assert_eq!(character.position(), WorldCell::new(x, 0));
 
         let (chunk_coordinate, local) = character.position().split();
-        let chunk = simulation.generate_chunk(chunk_coordinate).unwrap();
+        let chunk = simulation.generated_chunk(chunk_coordinate).unwrap();
         assert_eq!(chunk.terrain_at(local), Some(Terrain::Grass));
     }
 }

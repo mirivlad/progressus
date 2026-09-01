@@ -72,7 +72,7 @@ impl Application {
             .into_iter()
             .map(|coordinate| {
                 self.simulation
-                    .generate_chunk(coordinate)
+                    .generated_chunk(coordinate)
                     .map(ChunkSnapshot::from)
             })
             .collect::<Result<Vec<_>, _>>()?;

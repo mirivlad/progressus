@@ -6,9 +6,11 @@ use progressus_worldgen::{WorldGenerator, WorldgenError};
 
 use crate::clock::SimulationClock;
 use crate::entity::EntityIdAllocator;
+use crate::world_state::ModifiedWorld;
 use crate::{
-    CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, Direction, EntityId, GeneratedChunk,
-    MovementState, SimulationTick, Terrain, WorldCell, WorldSeed, WorldgenVersion,
+    CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, Direction, EffectiveChunk,
+    EntityId, GeneratedChunk, LocalCell, MovementState, SimulationTick, Terrain, WorldCell,
+    WorldSeed, WorldgenVersion,
 };
 
 const INITIAL_CHARACTERS: [(&str, i64); 5] = [
@@ -25,6 +27,7 @@ pub struct Simulation {
     clock: SimulationClock,
     id_allocator: EntityIdAllocator,
     characters: BTreeMap<EntityId, Character>,
+    modified_world: ModifiedWorld,
 }
 
 impl Simulation {
@@ -53,6 +56,7 @@ impl Simulation {
             clock: SimulationClock::new(0),
             id_allocator,
             characters,
+            modified_world: ModifiedWorld::default(),
         })
     }
 
@@ -119,11 +123,63 @@ impl Simulation {
         self.characters.values()
     }
 
-    pub fn generate_chunk(
+    pub fn generated_chunk(
         &self,
         coordinate: ChunkCoord,
     ) -> Result<GeneratedChunk, SimulationError> {
         self.generator.generate(coordinate).map_err(Into::into)
+    }
+
+    pub fn set_terrain_override(
+        &mut self,
+        position: WorldCell,
+        terrain: Terrain,
+    ) -> Result<(), SimulationError> {
+        let (coordinate, local) = position.split();
+        let base = self.base_terrain_at(position)?;
+        self.modified_world
+            .set_override(coordinate, local, base, terrain);
+        Ok(())
+    }
+
+    pub fn effective_terrain_at(&self, position: WorldCell) -> Result<Terrain, SimulationError> {
+        let (coordinate, local) = position.split();
+        Ok(self.resolve_terrain(coordinate, local, self.base_terrain_at(position)?))
+    }
+
+    pub fn effective_chunk(
+        &self,
+        coordinate: ChunkCoord,
+    ) -> Result<EffectiveChunk, SimulationError> {
+        let generated = self.generated_chunk(coordinate)?;
+        let mut cells = Vec::with_capacity(usize::from(CHUNK_SIDE).pow(2));
+
+        for y in 0..CHUNK_SIDE {
+            for x in 0..CHUNK_SIDE {
+                let local = LocalCell::new(x, y);
+                let base = generated
+                    .terrain_at(local)
+                    .expect("generated chunks contain every valid local cell");
+                cells.push(self.resolve_terrain(coordinate, local, base));
+            }
+        }
+
+        Ok(EffectiveChunk::new(coordinate, cells))
+    }
+
+    fn base_terrain_at(&self, position: WorldCell) -> Result<Terrain, SimulationError> {
+        let (coordinate, local) = position.split();
+        self.generated_chunk(coordinate)?
+            .terrain_at(local)
+            .ok_or(SimulationError::Worldgen(
+                WorldgenError::CoordinateOutOfRange(coordinate),
+            ))
+    }
+
+    fn resolve_terrain(&self, coordinate: ChunkCoord, local: LocalCell, base: Terrain) -> Terrain {
+        self.modified_world
+            .override_at(coordinate, local)
+            .unwrap_or(base)
     }
 
     fn advance_characters_one_tick(&mut self) -> Result<(), SimulationError> {
@@ -481,7 +537,7 @@ mod tests {
     fn terrain_at(simulation: &Simulation, position: WorldCell) -> Terrain {
         let (chunk_coordinate, local) = position.split();
         simulation
-            .generate_chunk(chunk_coordinate)
+            .generated_chunk(chunk_coordinate)
             .unwrap()
             .terrain_at(local)
             .unwrap()
