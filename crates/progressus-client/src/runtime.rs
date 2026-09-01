@@ -169,8 +169,8 @@ mod tests {
         Vec3,
     };
     use progressus_app::{
-        CHUNK_SIDE, CharacterSnapshot, ChunkCoord, Command, Direction, EntityId, MovementState,
-        Terrain, WorldCell,
+        Application, CHUNK_SIDE, CharacterSnapshot, ChunkCoord, ClientSnapshot, Command, Direction,
+        EntityId, LocalCell, MovementState, SnapshotQuery, Terrain, WorldCell,
     };
 
     use super::{AuthoritativeClient, advance_authority};
@@ -178,6 +178,13 @@ mod tests {
     use crate::render::{CharacterVisual, PresentationCache, TerrainRoot, sync_presentation};
 
     const TERRAIN_CELL_COUNT: usize = 9 * (CHUNK_SIDE as usize) * (CHUNK_SIDE as usize);
+    const CROSSING_WALK_STEP_LIMIT: u64 = 1_024;
+    const WALKER_DIRECTIONS: [Direction; 4] = [
+        Direction::East,
+        Direction::North,
+        Direction::South,
+        Direction::West,
+    ];
 
     fn presentation_app(authoritative: AuthoritativeClient) -> App {
         let mut app = App::new();
@@ -222,18 +229,6 @@ mod tests {
             .iter()
             .copied()
             .collect()
-    }
-
-    fn set_detached_character_position(app: &mut App, id: EntityId, position: WorldCell) {
-        let mut authoritative = app.world_mut().resource_mut::<AuthoritativeClient>();
-        authoritative
-            .snapshot
-            .characters
-            .iter_mut()
-            .find(|character| character.id == id)
-            .unwrap()
-            .position = position;
-        authoritative.snapshot_dirty = true;
     }
 
     #[test]
@@ -304,7 +299,34 @@ mod tests {
 
         app.update();
 
-        let (initial_root, initial_center, initial_characters) = {
+        let initial_root = {
+            let cache = app.world().resource::<PresentationCache>();
+            cache.terrain_root.unwrap()
+        };
+        let initial_children = terrain_children(&app, initial_root);
+        assert_eq!(
+            app.world().resource::<PresentationCache>().central_chunk,
+            Some(ChunkCoord::new(0, 0))
+        );
+        assert_eq!(initial_children.len(), TERRAIN_CELL_COUNT);
+
+        let crossing_from = {
+            let mut authoritative = app.world_mut().resource_mut::<AuthoritativeClient>();
+            let crossing_from = walk_to_selected_positive_x_crossing(
+                &mut authoritative.application,
+                super::cora_id(),
+            );
+            authoritative.refresh_lightweight_snapshot().unwrap();
+            crossing_from
+        };
+        app.update();
+
+        assert_eq!(character(&app, super::cora_id()).position, crossing_from);
+        assert_eq!(crossing_from.x(), 31);
+        let crossing_center = crossing_from.split().0;
+        assert_eq!(crossing_center.x(), 0);
+        let crossing_origin = crossing_center.world_cell(LocalCell::new(0, 0)).unwrap();
+        let (root_before, center_before, characters_before) = {
             let cache = app.world().resource::<PresentationCache>();
             (
                 cache.terrain_root.unwrap(),
@@ -312,46 +334,59 @@ mod tests {
                 cache.characters.clone(),
             )
         };
-        let initial_children = terrain_children(&app, initial_root);
-        assert_eq!(initial_center, Some(ChunkCoord::new(0, 0)));
-        assert_eq!(initial_children.len(), TERRAIN_CELL_COUNT);
+        let children_before = terrain_children(&app, root_before);
+        assert_eq!(center_before, Some(crossing_center));
+        assert_eq!(children_before.len(), TERRAIN_CELL_COUNT);
 
         mark_snapshot_dirty(&mut app);
         app.update();
 
         let cache = app.world().resource::<PresentationCache>();
-        assert_eq!(cache.terrain_root, Some(initial_root));
-        assert_eq!(cache.central_chunk, initial_center);
-        assert_eq!(cache.characters, initial_characters);
-        assert_eq!(terrain_children(&app, initial_root), initial_children);
-
-        let cora_y = character(&app, super::cora_id()).position.y();
-        set_detached_character_position(&mut app, super::cora_id(), WorldCell::new(31, cora_y));
-        app.update();
-
-        assert_eq!(
-            app.world().resource::<PresentationCache>().terrain_root,
-            Some(initial_root)
-        );
+        assert_eq!(cache.terrain_root, Some(root_before));
+        assert_eq!(cache.central_chunk, center_before);
+        assert_eq!(cache.characters, characters_before);
+        assert_eq!(terrain_children(&app, root_before), children_before);
         assert_eq!(
             app.world()
                 .entity(character_entity(&app, super::cora_id()))
                 .get::<Transform>()
                 .unwrap()
                 .translation,
-            Vec3::new(31.0 * 12.0, cora_y as f32 * 12.0, 10.0)
+            Vec3::new(
+                31.0 * 12.0,
+                (crossing_from.y() - crossing_origin.y()) as f32 * 12.0,
+                10.0,
+            )
         );
 
-        set_detached_character_position(&mut app, super::cora_id(), WorldCell::new(32, cora_y));
+        {
+            let mut authoritative = app.world_mut().resource_mut::<AuthoritativeClient>();
+            authoritative
+                .application
+                .execute(Command::SetMovementDirection {
+                    character_id: super::cora_id(),
+                    direction: Direction::East,
+                })
+                .unwrap();
+            authoritative
+                .application
+                .execute(Command::AdvanceTicks { count: 1 })
+                .unwrap();
+            authoritative.refresh_lightweight_snapshot().unwrap();
+        }
         app.update();
 
+        let crossing_to = character(&app, super::cora_id()).position;
+        assert_eq!(crossing_to, WorldCell::new(32, crossing_from.y()));
+        let new_center = crossing_to.split().0;
+        assert_eq!(new_center, ChunkCoord::new(1, crossing_center.y()));
         let (new_root, characters) = {
             let cache = app.world().resource::<PresentationCache>();
-            assert_eq!(cache.central_chunk, Some(ChunkCoord::new(1, 0)));
+            assert_eq!(cache.central_chunk, Some(new_center));
             (cache.terrain_root.unwrap(), cache.characters.clone())
         };
-        assert_ne!(new_root, initial_root);
-        assert!(app.world().get_entity(initial_root).is_err());
+        assert_ne!(new_root, root_before);
+        assert!(app.world().get_entity(root_before).is_err());
         let new_children = terrain_children(&app, new_root);
         assert_eq!(new_children.len(), TERRAIN_CELL_COUNT);
         let (min_x, max_x, min_y, max_y) = new_children.iter().fold(
@@ -385,6 +420,7 @@ mod tests {
         };
         assert_eq!(terrain_root_count, 1);
 
+        let render_origin = new_center.world_cell(LocalCell::new(0, 0)).unwrap();
         for authoritative in &app
             .world()
             .resource::<AuthoritativeClient>()
@@ -392,8 +428,8 @@ mod tests {
             .characters
         {
             let expected = Vec3::new(
-                (authoritative.position.x() - 32) as f32 * 12.0,
-                authoritative.position.y() as f32 * 12.0,
+                (authoritative.position.x() - render_origin.x()) as f32 * 12.0,
+                (authoritative.position.y() - render_origin.y()) as f32 * 12.0,
                 10.0,
             );
             assert_eq!(
@@ -405,6 +441,120 @@ mod tests {
                 expected
             );
         }
+    }
+
+    fn walk_to_selected_positive_x_crossing(
+        application: &mut Application,
+        character_id: EntityId,
+    ) -> WorldCell {
+        let mut snapshot = application.snapshot(SnapshotQuery::default()).unwrap();
+        let mut position = snapshot_character_position(&snapshot, character_id);
+        let mut visit_counts = BTreeMap::from([(position, 1_u64)]);
+
+        for steps in 0..CROSSING_WALK_STEP_LIMIT {
+            let direction = select_least_visited_grass_direction(
+                application,
+                position,
+                &visit_counts,
+            )
+            .unwrap_or_else(|| {
+                panic!(
+                    "least-visited walker has no adjacent grass cell before the x=0 -> x=1 crossing; character_id={} position=({}, {}) steps={steps} limit={CROSSING_WALK_STEP_LIMIT}",
+                    character_id.value(),
+                    position.x(),
+                    position.y(),
+                )
+            });
+            let target = direction.adjacent(position).unwrap_or_else(|| {
+                panic!(
+                    "least-visited walker selected an overflowing step; character_id={} position=({}, {}) direction={direction:?} steps={steps} limit={CROSSING_WALK_STEP_LIMIT}",
+                    character_id.value(),
+                    position.x(),
+                    position.y(),
+                )
+            });
+
+            if position.x() == 31 && target.x() == 32 && target.y() == position.y() {
+                return position;
+            }
+
+            application
+                .execute(Command::SetMovementDirection {
+                    character_id,
+                    direction,
+                })
+                .unwrap();
+            application
+                .execute(Command::AdvanceTicks { count: 1 })
+                .unwrap();
+            snapshot = application.snapshot(SnapshotQuery::default()).unwrap();
+            let reached = snapshot_character_position(&snapshot, character_id);
+            assert_eq!(
+                reached,
+                target,
+                "authoritative walker step did not reach the selected grass cell; character_id={} from=({}, {}) direction={direction:?} steps={} limit={CROSSING_WALK_STEP_LIMIT}",
+                character_id.value(),
+                position.x(),
+                position.y(),
+                steps + 1,
+            );
+            position = reached;
+            *visit_counts.entry(reached).or_insert(0) += 1;
+        }
+
+        panic!(
+            "least-visited walker did not select a reachable x=31 -> x=32 grass crossing; character_id={} position=({}, {}) steps={CROSSING_WALK_STEP_LIMIT} limit={CROSSING_WALK_STEP_LIMIT}",
+            character_id.value(),
+            position.x(),
+            position.y(),
+        );
+    }
+
+    fn select_least_visited_grass_direction(
+        application: &Application,
+        position: WorldCell,
+        visit_counts: &BTreeMap<WorldCell, u64>,
+    ) -> Option<Direction> {
+        let candidates = WALKER_DIRECTIONS
+            .into_iter()
+            .enumerate()
+            .filter_map(|(order, direction)| {
+                direction
+                    .adjacent(position)
+                    .map(|cell| (order, direction, cell))
+            })
+            .collect::<Vec<_>>();
+        let mut chunks = candidates
+            .iter()
+            .map(|(_, _, cell)| cell.split().0)
+            .collect::<Vec<_>>();
+        chunks.sort_unstable();
+        chunks.dedup();
+        let terrain = application.snapshot(SnapshotQuery { chunks }).unwrap();
+
+        candidates
+            .into_iter()
+            .filter(|(_, _, cell)| snapshot_terrain_at(&terrain, *cell) == Some(Terrain::Grass))
+            .min_by_key(|(order, _, cell)| (visit_counts.get(cell).copied().unwrap_or(0), *order))
+            .map(|(_, direction, _)| direction)
+    }
+
+    fn snapshot_character_position(snapshot: &ClientSnapshot, id: EntityId) -> WorldCell {
+        snapshot
+            .characters
+            .iter()
+            .find(|character| character.id == id)
+            .unwrap()
+            .position
+    }
+
+    fn snapshot_terrain_at(snapshot: &ClientSnapshot, position: WorldCell) -> Option<Terrain> {
+        let (chunk, local) = position.split();
+        snapshot
+            .chunks
+            .iter()
+            .find(|candidate| candidate.coordinate == chunk)
+            .and_then(|candidate| candidate.terrain_at(local))
     }
 
     #[test]
