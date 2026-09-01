@@ -1,6 +1,6 @@
 # Authoritative sub-cell spatial model
 
-**Status:** Approved for planning
+**Status:** Implemented (bootstrap)
 **Date:** 2026-09-01
 
 ## 1. Goal

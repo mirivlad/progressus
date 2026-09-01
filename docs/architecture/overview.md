@@ -84,9 +84,9 @@ The current movement bootstrap makes this boundary concrete with:
 
 - `SetMovementDirection { character_id, direction }` and `StopMovement { character_id }` application commands;
 - authoritative `MovementState::{Idle, Moving { direction }}` on characters;
-- one checked cardinal cell transition at most per simulation tick, with grass-only passability and a normal idle stop on water, rock, or coordinate overflow;
-- detached `CharacterSnapshot.movement` values;
-- a headless-only least-visited walker that queries neighboring terrain through snapshots, submits ordinary commands, advances one tick, and observes a fresh snapshot before selecting again.
+- exact authoritative `WorldPosition` values with signed integer `1024`-subunit cells, plus derived containing cells in detached snapshots;
+- cardinal bootstrap movement at `256` subunits per tick; every coarse transition is checked against effective terrain, and water, rock, or the representable-world edge cause a normal exact-boundary idle stop;
+- a headless-only least-visited walker that queries neighboring terrain through snapshots, submits ordinary commands, advances four default-speed ticks to the chosen center, and observes a fresh snapshot before selecting again.
 
 The walker is an external deterministic test driver, not authoritative navigation: it stores no route, does not run BFS/Dijkstra/A*, and does not alter simulation or world-generation state. This bootstrap does not yet provide general obstacle navigation, jobs/AI movement policy, speed/collision, chunk residency, or persistence.
 
@@ -522,4 +522,4 @@ For seed `0`, the client first requests a lightweight character snapshot, derive
 
 The presentation scheduler is non-authoritative: it requests at most one simulation tick every approximately 250 ms (nominally 4 Hz) and discards a long-frame backlog rather than catching up. Rendering frame time never becomes simulation input.
 
-This bootstrap proves rendering, input, snapshot-driven mapping, normal chunk-window refresh, and effective-terrain snapshots. It does not implement navigation or pathfinding, jobs/AI, speed or collision, chunk residency, persistence, resources, construction, or save/load. The existing `WorldCell + Direction`, one-cell-per-tick movement is bootstrap-only; living movement must migrate to authoritative deterministic sub-cell integer/fixed-point state before it is complete, per [`ADR-0004`](../adr/0004-grid-world-continuous-living-movement.md). Coordinate and provisional chunk-geometry decisions are specified by [`ADR-0003`](../adr/0003-bootstrap-world-coordinates.md).
+This bootstrap proves rendering, input, snapshot-driven mapping, normal chunk-window refresh, effective-terrain snapshots, and deterministic sub-cell living positions required by [`ADR-0004`](../adr/0004-grid-world-continuous-living-movement.md). It does not implement `MoveTo` navigation or pathfinding, jobs/AI, speed modifiers or collision, chunk residency, persistence, resources, construction, or save/load. Coordinates and provisional chunk geometry remain specified by [`ADR-0003`](../adr/0003-bootstrap-world-coordinates.md).

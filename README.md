@@ -54,13 +54,14 @@ The first executable headless foundation is implemented:
 - signed positive/negative world coordinates;
 - a checked simulation clock and stable Progressus entity IDs;
 - a deterministic five-character new-game scenario;
-- bootstrap cardinal character movement: at most one grass-cell step per simulation tick, with deterministic stops before water, rock, or coordinate overflow;
-- `SetMovementDirection` and `StopMovement` through `progressus-app`, with detached snapshots that expose `MovementState`;
+- authoritative `WorldPosition`: signed fixed-point (`1024` subunits per world cell) for all characters, with Euclidean coarse-cell containment and no authoritative floats;
+- bootstrap cardinal movement at `256` subunits per tick, with sequential effective-terrain checks, exact blocked-boundary stops, and multi-cell traversal for higher speeds;
+- `SetMovementDirection` and `StopMovement` through `progressus-app`, with detached snapshots that expose exact position, containing cell, and `MovementState`;
 - immutable deterministic base terrain plus sparse, in-memory effective-terrain overrides that affect authoritative movement and terrain snapshots;
 - a headless consumer that runs without Bevy, a window, or a graphics context, including a bounded external least-visited walker that crosses generated chunk boundaries through the public application API.
 - a native Bevy bootstrap client for seed `0`: a 2D 3×3 Cora-centered terrain window, five snapshot-driven characters, arrow-key movement and Space to stop Cora, plus presentation-only camera pan/zoom.
 
-The sparse terrain state is not yet save/load data, a residency or unload policy, or a terrain gameplay command. This is direction-driven movement and client bootstrap work, not complete navigation: the existing `WorldCell + Direction`, one-cell-per-tick movement is bootstrap-only. Before living movement is complete, it must become authoritative deterministic sub-cell movement using a Progressus-owned integer/fixed-point representation, as required by [`ADR-0004`](docs/adr/0004-grid-world-continuous-living-movement.md). Full pathfinding around obstacles, jobs/AI interruption policy, speed/collision, chunk residency, save/load, physical items, resources, and construction remain Prototype 01 work. The current boundary keeps the visual client dependent on `progressus-app` without giving it ownership of simulation truth.
+The sparse terrain state is not yet save/load data, a residency or unload policy, or a terrain gameplay command. Continuous positions are now an authoritative bootstrap, but navigation is not complete: control is still persistent cardinal direction, with no `MoveTo`, pathfinding, jobs/AI interruption policy, pawn collision, physical footprints, speed modifiers, save/load, or residency. The current boundary keeps the visual client dependent on `progressus-app` without giving it ownership of simulation truth; Bevy converts exact snapshots to local presentation floats only after subtracting a nearby cell-center origin.
 
 The immediate goal is not to build the entire game. The first prototype exists to prove the dangerous fundamentals:
 
@@ -90,7 +91,7 @@ Run a deterministic headless scenario:
 cargo run -p progressus-headless -- --seed 42 --ticks 100000
 ```
 
-Run the bounded external traversal proof (seed 0 crosses 64 positive chunk boundaries in 5,050 ticks):
+Run the bounded external traversal proof (seed 0 crosses 64 positive chunk boundaries in 5,050 chosen-cell steps; each default step takes four simulation ticks):
 
 ```bash
 cargo run -p progressus-headless -- --seed 0 --travel-chunks 64

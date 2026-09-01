@@ -49,7 +49,7 @@ A character can move across many chunk boundaries in positive and negative coord
 
 The acceptance test should cover enough distance to catch hidden finite-grid assumptions.
 
-**Partially advanced (bootstrap):** deterministic cardinal movement crosses the immediate positive and negative chunk boundaries, and the external headless walker crosses 64 positive boundaries without a finite global grid or preloaded route. Long-distance traversal across both signs, chunk residency, and general navigation remain incomplete.
+**Partially advanced (bootstrap):** deterministic fixed-point cardinal movement crosses the immediate positive and negative chunk boundaries, and the external headless walker crosses 64 positive boundaries without a finite global grid or preloaded route. Long-distance traversal across both signs, chunk residency, and general navigation remain incomplete.
 
 ### P01-WORLD-04 — Sparse residency
 
@@ -97,7 +97,7 @@ Characters can navigate walkable generated terrain and cross chunk boundaries.
 
 Pathfinding must not require a single finite global grid.
 
-**Partially advanced (bootstrap):** characters retain `Idle` or persistent cardinal direction state, validate a new direction before replacing existing state, and move at most one grass cell per tick. Each persisted step rechecks coordinate range and effective terrain; water, rock, and overflow stop movement normally without changing position. Commands and detached movement snapshots cross `progressus-app`; a bounded headless walker proves 64 positive chunk-boundary crossings while preserving character ID. This `WorldCell + Direction` movement is bootstrap-only, not complete navigation: before living movement is complete, the authoritative simulation must use deterministic sub-cell integer/fixed-point state as required by [`ADR-0004`](../adr/0004-grid-world-continuous-living-movement.md). Obstacle pathfinding, jobs/AI interruption policy, speed/collision, chunk residency, and persistence remain incomplete.
+**Partially advanced (bootstrap):** characters retain `Idle` or persistent cardinal direction state and carry an authoritative `WorldPosition` with signed integer `1024`-subunit precision. The bootstrap speed is `256` subunits/tick; one tick may advance within a cell, while higher speeds can cross several sequentially checked cells. Terrain is checked only at actual transitions through effective terrain. Water, rock, and the representable-world edge stop at the last valid subunit without wrap or snap; a blocked neighbour does not prevent approach within the current cell. Commands and detached exact-position snapshots cross `progressus-app`; a bounded headless walker proves 64 positive chunk-boundary crossings while preserving character ID. This is still bootstrap movement, not complete navigation: no `MoveTo` or obstacle pathfinding, jobs/AI interruption policy, collision/physical footprint, speed modifiers, chunk residency, or persistence exists.
 
 ### P01-SIM-05 — Jobs
 
@@ -203,7 +203,7 @@ Generate a set of neighboring chunks in two different orders. Results must match
 
 Move an entity across multiple chunk boundaries and verify final position and identity.
 
-**Partially advanced:** simulation tests cover `x=31 -> x=32` and `x=0 -> x=-1` with the same `EntityId`; the headless application-boundary scenario drives ID 3 across 64 positive chunk boundaries for seed 0, ending at `(2048, 580)` after 5,050 steps. Long-distance negative traversal and residency/unload behavior remain future coverage.
+**Partially advanced:** simulation tests cover `x=31 -> x=32` and `x=0 -> x=-1` with the same `EntityId` at fixed-point resolution; the headless application-boundary scenario drives ID 3 across 64 positive chunk boundaries for seed 0, ending at coarse cell `(2048, 580)` after 5,050 chosen-cell steps (20,200 default-speed ticks). Long-distance negative traversal and residency/unload behavior remain future coverage.
 
 ### TEST-P01-04 — Item ownership invariant
 
