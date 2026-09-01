@@ -1,6 +1,6 @@
 # Authoritative sub-cell spatial model
 
-**Status:** Proposed for review  
+**Status:** Approved for planning
 **Date:** 2026-09-01
 
 ## 1. Goal
@@ -169,6 +169,34 @@ when speed requires it. Water, rock, coordinate overflow, and a target that
 becomes blocked remain normal deterministic stops; none may wrap coordinates
 or cause an implicit snap to a cell center.
 
+### Blocked-cell boundary invariant
+
+An authoritative point pawn must never have a `containing_cell()` whose
+effective terrain is impassable after a movement step. Cells use the canonical
+half-open axis intervals from section 4. Therefore, when an attempted cardinal
+transition would first enter a blocked cell, movement consumes only the largest
+integer distance that leaves the point in its current walkable cell, then
+becomes `Idle` and discards the remainder of that tick's movement distance.
+
+For a boundary coordinate `B` between two cells on the moving axis:
+
+- moving positive toward a blocked destination stops at `B - 1`;
+- moving negative toward a blocked destination stops at `B`, because `B`
+  belongs to the source cell under the half-open convention.
+
+The perpendicular coordinate is unchanged. This one-subunit directional
+asymmetry is not a second occupancy model: it follows solely from the
+canonical `containing_cell()` rule. It is preferred to representing a pawn at
+the geometric boundary of a terrain cell it is forbidden to occupy.
+
+The implementation examines each coarse-cell boundary in travel order. If a
+large speed would cross several cells, it consumes the valid portions and
+checks every next cell through `effective_terrain_at`; the first blocked cell
+ends the tick. Reverse movement after a boundary stop begins from the retained
+exact position with no snap. Existing direction-replacement semantics retain
+their atomic validation rule: an invalid replacement does not erase a valid
+ongoing movement state.
+
 This specification deliberately does not impose a new final route/turning
 geometry. The next `MoveTo` increment will define route waypoints as exact
 positions, with interior cardinal path waypoints normally at `WorldCell`
@@ -210,10 +238,12 @@ Items and small resources are not implemented in this increment, but their
 spatial contract is fixed now:
 
 - a point-like object has one `WorldPosition`;
-- an object that needs a small local extent has a center `WorldPosition` plus
-  a circular `InteractionRadius` measured in subunits;
-- this radius is interaction geometry, not a pawn-collision body, terrain
-  blocker, or multi-cell navigation footprint.
+- an object that needs a small local reach extent has a center `WorldPosition`
+  plus a circular `InteractionRadius` measured in subunits;
+- a point-like item has `InteractionRadius::zero()`;
+- `InteractionRadius` is reach/interaction geometry only. It is not a physical
+  collision radius, pawn-collision body, terrain blocker, or multi-cell
+  navigation footprint.
 
 `InteractionRadius` is a named integer value type with private representation.
 The initial interaction predicate is exact closed-circle reach:
@@ -232,7 +262,10 @@ their natural geometric result rather than encoding cell sectors.
 
 Large buildings, walls, water, rock, and future multi-cell creatures retain
 explicit topological/footprint models; they must not be silently represented as
-small circles merely because the interaction predicate exists.
+small circles merely because the interaction predicate exists. If an object
+later needs real physical extent or collision, that will be a separate
+authoritative concept; `InteractionRadius` must not become a hidden substitute
+for it.
 
 ## 9. Determinism, passability, and errors
 
@@ -276,6 +309,12 @@ The implementation plan must include focused RED/GREEN tests for at least:
     borders, including a safe far-apart/overflow-resistant comparison; and
 12. all existing modified-world effective-terrain, app-boundary, headless,
     client, worldgen, and Bevy dependency-boundary tests.
+
+Blocked-boundary coverage must separately prove blocked transitions east, west,
+north, and south; repeat them near negative coordinates; verify the resulting
+`containing_cell()` is always walkable; verify the tick remainder is discarded
+after the first blocked boundary; and verify reverse movement resumes from the
+retained exact position without a snap.
 
 The subsequent pathfinding/client increment additionally needs authoritative
 tests for exact final destinations, route invalidation on changed terrain,
