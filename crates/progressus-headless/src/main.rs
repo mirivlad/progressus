@@ -79,6 +79,7 @@ fn run_ticks(application: &mut Application, seed: u64, ticks: u64) -> Result<(),
             ChunkCoord::new(0, 0),
             ChunkCoord::new(1, 0),
         ],
+        ..SnapshotQuery::default()
     })?;
 
     println!(
@@ -279,7 +280,10 @@ fn select_direction(
     chunks.sort_unstable();
     chunks.dedup();
     let snapshot = application
-        .snapshot(SnapshotQuery { chunks })
+        .snapshot(SnapshotQuery {
+            chunks,
+            ..SnapshotQuery::default()
+        })
         .map_err(|_| "terrain snapshot query failed")?;
 
     candidates

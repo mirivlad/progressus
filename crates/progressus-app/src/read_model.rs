@@ -11,6 +11,26 @@ pub struct ClientSnapshot {
     pub worldgen_version: WorldgenVersion,
     pub chunks: Vec<ChunkSnapshot>,
     pub characters: Vec<CharacterSnapshot>,
+    pub navigation: Option<NavigationSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NavigationSnapshot {
+    pub character_id: EntityId,
+    pub destination: Option<WorldPosition>,
+    pub remaining_waypoints: Vec<WorldPosition>,
+    pub last_tick_motion_trace: Vec<WorldPosition>,
+}
+
+impl From<&Character> for NavigationSnapshot {
+    fn from(character: &Character) -> Self {
+        Self {
+            character_id: character.id(),
+            destination: character.navigation_destination(),
+            remaining_waypoints: character.navigation_waypoints().collect(),
+            last_tick_motion_trace: character.last_tick_motion_trace().to_vec(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

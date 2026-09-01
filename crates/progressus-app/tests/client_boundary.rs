@@ -20,6 +20,7 @@ fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
                 ChunkCoord::new(0, 0),
                 ChunkCoord::new(1, 0),
             ],
+            ..SnapshotQuery::default()
         })
         .unwrap()
 }
@@ -105,6 +106,7 @@ fn snapshots_do_not_borrow_or_mutate_authoritative_state() {
         .unwrap();
     let query = SnapshotQuery {
         chunks: vec![ChunkCoord::new(0, 0)],
+        ..SnapshotQuery::default()
     };
 
     let expected = application.snapshot(query.clone()).unwrap();
@@ -124,6 +126,7 @@ fn chunk_snapshots_map_local_coordinates_without_simulation_access() {
     let snapshot = application
         .snapshot(SnapshotQuery {
             chunks: vec![ChunkCoord::new(-1, 0)],
+            ..SnapshotQuery::default()
         })
         .unwrap();
     let chunk = &snapshot.chunks[0];
@@ -170,7 +173,7 @@ fn movement_commands_are_applied_and_published_through_snapshots() {
     assert_eq!(cora.position.containing_cell(), cora.containing_cell);
     assert_eq!(
         cora.movement,
-        MovementState::Moving {
+        MovementState::ManualDirectional {
             direction: Direction::East
         }
     );
@@ -188,4 +191,46 @@ fn movement_commands_are_applied_and_published_through_snapshots() {
         .find(|character| character.id == cora.id)
         .unwrap();
     assert_eq!(stopped.movement, MovementState::Idle);
+}
+
+#[test]
+fn selected_navigation_snapshot_is_detached_and_default_query_omits_route() {
+    let mut application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(2),
+    })
+    .unwrap();
+    let cora = EntityId::new(3).unwrap();
+    let destination = WorldPosition::from_subunits(800, 900).unwrap();
+    application
+        .execute(Command::MoveTo {
+            character_id: cora,
+            destination,
+        })
+        .unwrap();
+
+    assert!(
+        application
+            .snapshot(SnapshotQuery::default())
+            .unwrap()
+            .navigation
+            .is_none()
+    );
+    let query = SnapshotQuery {
+        navigation_for: Some(cora),
+        ..SnapshotQuery::default()
+    };
+    let expected = application.snapshot(query.clone()).unwrap();
+    let navigation = expected.navigation.as_ref().unwrap();
+    assert_eq!(navigation.character_id, cora);
+    assert_eq!(navigation.destination, Some(destination));
+    assert!(!navigation.remaining_waypoints.is_empty());
+
+    let mut detached = application.snapshot(query.clone()).unwrap();
+    detached
+        .navigation
+        .as_mut()
+        .unwrap()
+        .remaining_waypoints
+        .clear();
+    assert_eq!(application.snapshot(query).unwrap(), expected);
 }

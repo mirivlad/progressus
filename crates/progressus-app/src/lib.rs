@@ -10,6 +10,7 @@ pub use progressus_sim::{
     LocalCell, MovementSpeed, MovementState, SUBUNITS_PER_CELL, SimulationTick, Terrain, WorldCell,
     WorldPosition, WorldSeed, WorldgenVersion,
 };
+pub use read_model::NavigationSnapshot;
 pub use read_model::{CharacterSnapshot, ChunkSnapshot, ClientSnapshot};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,6 +27,10 @@ pub enum Command {
         character_id: EntityId,
         direction: Direction,
     },
+    MoveTo {
+        character_id: EntityId,
+        destination: WorldPosition,
+    },
     StopMovement {
         character_id: EntityId,
     },
@@ -34,6 +39,7 @@ pub enum Command {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SnapshotQuery {
     pub chunks: Vec<ChunkCoord>,
+    pub navigation_for: Option<EntityId>,
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +63,10 @@ impl Application {
             } => self
                 .simulation
                 .set_movement_direction(character_id, direction)?,
+            Command::MoveTo {
+                character_id,
+                destination,
+            } => self.simulation.move_to(character_id, destination)?,
             Command::StopMovement { character_id } => {
                 self.simulation.stop_movement(character_id)?
             }
@@ -88,6 +98,12 @@ impl Application {
             worldgen_version: self.simulation.worldgen_version(),
             chunks,
             characters,
+            navigation: query.navigation_for.and_then(|id| {
+                self.simulation
+                    .characters()
+                    .find(|character| character.id() == id)
+                    .map(NavigationSnapshot::from)
+            }),
         })
     }
 }
@@ -158,6 +174,7 @@ mod tests {
         let snapshot = application
             .snapshot(SnapshotQuery {
                 chunks: vec![coordinate],
+                ..SnapshotQuery::default()
             })
             .unwrap();
 

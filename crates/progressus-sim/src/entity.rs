@@ -118,6 +118,16 @@ impl Character {
         &self.last_tick_motion_trace
     }
 
+    pub fn navigation_destination(&self) -> Option<WorldPosition> {
+        self.route.as_ref().map(|route| route.destination)
+    }
+
+    pub fn navigation_waypoints(&self) -> impl Iterator<Item = WorldPosition> + '_ {
+        self.route
+            .iter()
+            .flat_map(|route| route.waypoints.iter().copied())
+    }
+
     pub(crate) fn set_position(&mut self, position: WorldPosition) {
         self.position = position;
     }

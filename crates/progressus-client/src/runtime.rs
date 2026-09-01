@@ -41,7 +41,10 @@ impl AuthoritativeClient {
         &self,
         chunks: Vec<ChunkCoord>,
     ) -> Result<ClientSnapshot, ClientError> {
-        Ok(self.application.snapshot(SnapshotQuery { chunks })?)
+        Ok(self.application.snapshot(SnapshotQuery {
+            chunks,
+            ..SnapshotQuery::default()
+        })?)
     }
 
     pub(crate) fn take_snapshot_dirty(&mut self) -> bool {
