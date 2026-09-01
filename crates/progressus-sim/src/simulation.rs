@@ -980,6 +980,62 @@ mod tests {
     }
 
     #[test]
+    fn navigation_crosses_the_zero_to_negative_cell_boundary() {
+        let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        let cora = cora();
+        let start = WorldCell::new(0, 0);
+        let destination_cell = WorldCell::new(-1, 0);
+        for cell in [start, destination_cell] {
+            simulation
+                .set_terrain_override(cell, Terrain::Grass)
+                .unwrap();
+        }
+        place_on_grass(&mut simulation, cora, start);
+        character_mut(&mut simulation, cora).set_speed(MovementSpeed::new(1_024).unwrap());
+        let destination = WorldPosition::from_cell_center(destination_cell).unwrap();
+        simulation.move_to(cora, destination).unwrap();
+
+        simulation.advance_ticks(1).unwrap();
+
+        assert_eq!(character(&simulation, cora).position(), destination);
+        assert_eq!(character(&simulation, cora).id(), cora);
+    }
+
+    #[test]
+    fn stop_and_manual_direction_cancel_navigation_without_snapping() {
+        let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        let cora = cora();
+        let start = WorldCell::new(0, 0);
+        place_on_grass(&mut simulation, cora, start);
+        for cell in [WorldCell::new(1, 0), WorldCell::new(2, 0)] {
+            simulation
+                .set_terrain_override(cell, Terrain::Grass)
+                .unwrap();
+        }
+        let destination = WorldPosition::from_cell_center(WorldCell::new(2, 0)).unwrap();
+        simulation.move_to(cora, destination).unwrap();
+        simulation.advance_ticks(1).unwrap();
+        let mid_route_position = character(&simulation, cora).position();
+
+        simulation.stop_movement(cora).unwrap();
+        assert_eq!(character(&simulation, cora).position(), mid_route_position);
+        assert_eq!(character(&simulation, cora).movement(), MovementState::Idle);
+        assert_eq!(character(&simulation, cora).navigation_destination(), None);
+
+        simulation.move_to(cora, destination).unwrap();
+        simulation
+            .set_movement_direction(cora, Direction::West)
+            .unwrap();
+        assert_eq!(
+            character(&simulation, cora).movement(),
+            MovementState::ManualDirectional {
+                direction: Direction::West
+            }
+        );
+        assert_eq!(character(&simulation, cora).navigation_destination(), None);
+    }
+
+    #[test]
     fn blocked_neighbour_allows_approach_then_stops_only_at_boundary() {
         let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
         let cora = cora();
