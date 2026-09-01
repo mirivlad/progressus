@@ -56,10 +56,11 @@ The first executable headless foundation is implemented:
 - a deterministic five-character new-game scenario;
 - bootstrap cardinal character movement: at most one grass-cell step per simulation tick, with deterministic stops before water, rock, or coordinate overflow;
 - `SetMovementDirection` and `StopMovement` through `progressus-app`, with detached snapshots that expose `MovementState`;
+- immutable deterministic base terrain plus sparse, in-memory effective-terrain overrides that affect authoritative movement and terrain snapshots;
 - a headless consumer that runs without Bevy, a window, or a graphics context, including a bounded external least-visited walker that crosses generated chunk boundaries through the public application API.
 - a native Bevy bootstrap client for seed `0`: a 2D 3×3 Cora-centered terrain window, five snapshot-driven characters, arrow-key movement and Space to stop Cora, plus presentation-only camera pan/zoom.
 
-This is direction-driven movement and client bootstrap work, not complete navigation. Full pathfinding around obstacles, jobs/AI interruption policy, speed/collision, chunk residency, modified chunks, save/load, physical items, resources, and construction remain Prototype 01 work. The current boundary keeps the visual client dependent on `progressus-app` without giving it ownership of simulation truth.
+The sparse terrain state is not yet save/load data, a residency or unload policy, or a terrain gameplay command. This is direction-driven movement and client bootstrap work, not complete navigation: the existing `WorldCell + Direction`, one-cell-per-tick movement is bootstrap-only. Before living movement is complete, it must become authoritative deterministic sub-cell movement using a Progressus-owned integer/fixed-point representation, as required by [`ADR-0004`](docs/adr/0004-grid-world-continuous-living-movement.md). Full pathfinding around obstacles, jobs/AI interruption policy, speed/collision, chunk residency, save/load, physical items, resources, and construction remain Prototype 01 work. The current boundary keeps the visual client dependent on `progressus-app` without giving it ownership of simulation truth.
 
 The immediate goal is not to build the entire game. The first prototype exists to prove the dangerous fundamentals:
 

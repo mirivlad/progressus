@@ -57,9 +57,13 @@ The implementation must not require all generated or visited chunks to remain lo
 
 A simple unload policy is sufficient.
 
+**Incomplete:** no resident caching or unload policy exists yet.
+
 ### P01-WORLD-05 — Modified world state
 
 Changes to terrain or placed objects in a chunk persist independently of deterministic base generation.
+
+**Partially advanced (bootstrap):** deterministic base terrain remains immutable while `Simulation` holds sparse, in-memory effective-terrain overrides. Movement and terrain snapshots observe the effective terrain. Save/load, chunk residency, placed objects, and terrain gameplay commands remain incomplete.
 
 ## 4. Required simulation systems
 
@@ -93,7 +97,7 @@ Characters can navigate walkable generated terrain and cross chunk boundaries.
 
 Pathfinding must not require a single finite global grid.
 
-**Partially advanced (bootstrap):** characters retain `Idle` or persistent cardinal direction state, validate a new direction before replacing existing state, and move at most one grass cell per tick. Each persisted step rechecks coordinate range and generated terrain; water, rock, and overflow stop movement normally without changing position. Commands and detached movement snapshots cross `progressus-app`; a bounded headless walker proves 64 positive chunk-boundary crossings while preserving character ID. This is not complete navigation: no obstacle pathfinding, jobs/AI interruption policy, speed/collision, chunk residency, or persistence exists yet.
+**Partially advanced (bootstrap):** characters retain `Idle` or persistent cardinal direction state, validate a new direction before replacing existing state, and move at most one grass cell per tick. Each persisted step rechecks coordinate range and effective terrain; water, rock, and overflow stop movement normally without changing position. Commands and detached movement snapshots cross `progressus-app`; a bounded headless walker proves 64 positive chunk-boundary crossings while preserving character ID. This `WorldCell + Direction` movement is bootstrap-only, not complete navigation: before living movement is complete, the authoritative simulation must use deterministic sub-cell integer/fixed-point state as required by [`ADR-0004`](../adr/0004-grid-world-continuous-living-movement.md). Obstacle pathfinding, jobs/AI interruption policy, speed/collision, chunk residency, and persistence remain incomplete.
 
 ### P01-SIM-05 — Jobs
 

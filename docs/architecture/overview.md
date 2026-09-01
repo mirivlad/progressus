@@ -167,6 +167,14 @@ Generating chunk `(10, -4)` before `(10, -3)` must not change either chunk's can
 
 Features crossing chunk boundaries must therefore derive from stable world-space inputs rather than mutable neighboring generation order.
 
+### Current effective-terrain bootstrap
+
+`GeneratedChunk` remains the immutable raw result of deterministic base generation. `Simulation` owns that base-world identity together with a private canonical `ModifiedWorld`, whose sparse `BTreeMap` state records only terrain overrides that differ from the generated base.
+
+`EffectiveChunk` is built on demand by applying those overrides to a raw generated chunk. Authoritative movement passability and application terrain snapshots query this effective terrain, so they agree on the current world rather than bypassing modifications.
+
+This is an in-memory bootstrap only. It does not yet provide save/load, resident caching or unloading policy, or a terrain gameplay command.
+
 ## 9. Persistence
 
 Saving the whole procedural world as a giant materialized map is forbidden.
@@ -503,7 +511,7 @@ progressus-client --> Bevy
 ```
 
 - `progressus-worldgen` owns deterministic versioned terrain generation and coordinate types.
-- `progressus-sim` owns authoritative time, stable identities, characters, and simulation state.
+- `progressus-sim` owns authoritative time, stable identities, characters, base-world identity, and sparse modified-world state.
 - `progressus-app` is the command/query boundary and returns detached read models.
 - `progressus-headless` proves that the application can run and be inspected without a renderer.
 - `progressus-client` is a native Bevy presentation consumer. Its only direct dependencies are Bevy and `progressus-app`; it must not directly depend on `progressus-sim` or `progressus-worldgen`.
@@ -514,4 +522,4 @@ For seed `0`, the client first requests a lightweight character snapshot, derive
 
 The presentation scheduler is non-authoritative: it requests at most one simulation tick every approximately 250 ms (nominally 4 Hz) and discards a long-frame backlog rather than catching up. Rendering frame time never becomes simulation input.
 
-This bootstrap proves rendering, input, snapshot-driven mapping, and normal chunk-window refresh. It does not implement navigation or pathfinding, jobs/AI, speed or collision, chunk residency, persistence, resources, construction, or save/load. Coordinate and provisional chunk-geometry decisions are specified by [`ADR-0003`](../adr/0003-bootstrap-world-coordinates.md).
+This bootstrap proves rendering, input, snapshot-driven mapping, normal chunk-window refresh, and effective-terrain snapshots. It does not implement navigation or pathfinding, jobs/AI, speed or collision, chunk residency, persistence, resources, construction, or save/load. The existing `WorldCell + Direction`, one-cell-per-tick movement is bootstrap-only; living movement must migrate to authoritative deterministic sub-cell integer/fixed-point state before it is complete, per [`ADR-0004`](../adr/0004-grid-world-continuous-living-movement.md). Coordinate and provisional chunk-geometry decisions are specified by [`ADR-0003`](../adr/0003-bootstrap-world-coordinates.md).
