@@ -161,9 +161,12 @@ fn movement_commands_are_applied_and_published_through_snapshots() {
         .unwrap();
     assert_eq!(
         cora.position,
-        WorldPosition::from_cell_center(WorldCell::new(1, 0)).unwrap()
+        WorldPosition::from_cell_center(WorldCell::new(0, 0))
+            .unwrap()
+            .checked_translate(256, 0)
+            .unwrap()
     );
-    assert_eq!(cora.containing_cell, WorldCell::new(1, 0));
+    assert_eq!(cora.containing_cell, WorldCell::new(0, 0));
     assert_eq!(cora.position.containing_cell(), cora.containing_cell);
     assert_eq!(
         cora.movement,

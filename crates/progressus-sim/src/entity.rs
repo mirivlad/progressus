@@ -101,6 +101,11 @@ impl Character {
         self.position = position;
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_speed(&mut self, speed: MovementSpeed) {
+        self.speed = speed;
+    }
+
     pub(crate) fn set_movement(&mut self, movement: MovementState) {
         self.movement = movement;
     }
