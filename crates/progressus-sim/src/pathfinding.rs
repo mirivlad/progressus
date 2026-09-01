@@ -198,7 +198,7 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
         for cell in [
             WorldCell::new(0, 0),
-            WorldCell::new(1, 0),
+            WorldCell::new(2, 0),
             WorldCell::new(-1, 0),
             WorldCell::new(0, 1),
             WorldCell::new(0, -1),
@@ -218,7 +218,7 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(
-            find_path_with_budget(&simulation, WorldCell::new(0, 0), WorldCell::new(1, 0), 1)
+            find_path_with_budget(&simulation, WorldCell::new(0, 0), WorldCell::new(2, 0), 1)
                 .unwrap(),
             Err(PathfindingError::PathNotFound)
         );
@@ -227,7 +227,7 @@ mod tests {
             .set_terrain_override(WorldCell::new(1, 0), Terrain::Grass)
             .unwrap();
         assert_eq!(
-            find_path_with_budget(&simulation, WorldCell::new(0, 0), WorldCell::new(1, 0), 1)
+            find_path_with_budget(&simulation, WorldCell::new(0, 0), WorldCell::new(2, 0), 1)
                 .unwrap(),
             Err(PathfindingError::SearchBudgetExceeded)
         );

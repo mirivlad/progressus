@@ -1,6 +1,5 @@
 mod clock;
 mod entity;
-#[allow(dead_code)]
 mod pathfinding;
 mod position;
 mod simulation;

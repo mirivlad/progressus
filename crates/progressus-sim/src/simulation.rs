@@ -856,6 +856,130 @@ mod tests {
     }
 
     #[test]
+    fn move_to_preserves_a_turn_in_the_same_tick_motion_trace() {
+        let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        let cora = cora();
+        let start = WorldCell::new(0, 0);
+        place_on_grass(&mut simulation, cora, start);
+        character_mut(&mut simulation, cora).set_speed(MovementSpeed::new(600).unwrap());
+        let destination = WorldPosition::from_subunits(800, 900).unwrap();
+        simulation.move_to(cora, destination).unwrap();
+
+        simulation.advance_ticks(1).unwrap();
+
+        assert_eq!(
+            character(&simulation, cora).last_tick_motion_trace(),
+            &[
+                WorldPosition::from_subunits(512, 512).unwrap(),
+                WorldPosition::from_subunits(800, 512).unwrap(),
+                WorldPosition::from_subunits(800, 824).unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejected_move_to_preserves_an_existing_navigation_route() {
+        let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        let cora = cora();
+        let start = WorldCell::new(0, 0);
+        place_on_grass(&mut simulation, cora, start);
+        let accepted = WorldPosition::from_cell_center(WorldCell::new(1, 0)).unwrap();
+        let rejected = WorldPosition::from_cell_center(WorldCell::new(2, 0)).unwrap();
+        simulation
+            .set_terrain_override(WorldCell::new(1, 0), Terrain::Grass)
+            .unwrap();
+        simulation
+            .set_terrain_override(WorldCell::new(2, 0), Terrain::Rock)
+            .unwrap();
+        simulation.move_to(cora, accepted).unwrap();
+
+        assert_eq!(
+            simulation.move_to(cora, rejected),
+            Err(SimulationError::MoveToDestinationBlocked(WorldCell::new(
+                2, 0
+            )))
+        );
+        assert_eq!(
+            character(&simulation, cora).movement(),
+            MovementState::Navigating {
+                destination: accepted
+            }
+        );
+        assert_eq!(
+            character(&simulation, cora).navigation_destination(),
+            Some(accepted)
+        );
+    }
+
+    #[test]
+    fn navigation_stops_at_a_newly_blocked_cell_boundary() {
+        let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        let cora = cora();
+        place_on_grass(&mut simulation, cora, WorldCell::new(0, 0));
+        for x in 1..=2 {
+            simulation
+                .set_terrain_override(WorldCell::new(x, 0), Terrain::Grass)
+                .unwrap();
+        }
+        simulation
+            .move_to(
+                cora,
+                WorldPosition::from_cell_center(WorldCell::new(2, 0)).unwrap(),
+            )
+            .unwrap();
+        simulation.advance_ticks(1).unwrap();
+        simulation
+            .set_terrain_override(WorldCell::new(1, 0), Terrain::Rock)
+            .unwrap();
+
+        simulation.advance_ticks(1).unwrap();
+
+        assert_eq!(character(&simulation, cora).position().x_subunits(), 1023);
+        assert_eq!(character(&simulation, cora).movement(), MovementState::Idle);
+        assert_eq!(character(&simulation, cora).navigation_destination(), None);
+    }
+
+    #[test]
+    fn navigation_executes_a_cross_chunk_route_with_stable_identity() {
+        let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        let cora = cora();
+        let start = WorldCell::new(31, 0);
+        let destination_cell = WorldCell::new(33, 1);
+        for cell in [
+            start,
+            WorldCell::new(32, 0),
+            WorldCell::new(33, 0),
+            destination_cell,
+        ] {
+            simulation
+                .set_terrain_override(cell, Terrain::Grass)
+                .unwrap();
+        }
+        for cell in [
+            WorldCell::new(30, 0),
+            WorldCell::new(31, -1),
+            WorldCell::new(31, 1),
+            WorldCell::new(32, -1),
+            WorldCell::new(32, 1),
+            WorldCell::new(33, -1),
+        ] {
+            simulation
+                .set_terrain_override(cell, Terrain::Rock)
+                .unwrap();
+        }
+        place_on_grass(&mut simulation, cora, start);
+        character_mut(&mut simulation, cora).set_speed(MovementSpeed::new(4_096).unwrap());
+        let destination = WorldPosition::from_cell_center(destination_cell).unwrap();
+        simulation.move_to(cora, destination).unwrap();
+
+        simulation.advance_ticks(1).unwrap();
+
+        assert_eq!(character(&simulation, cora).id(), cora);
+        assert_eq!(character(&simulation, cora).position(), destination);
+        assert_eq!(character(&simulation, cora).movement(), MovementState::Idle);
+    }
+
+    #[test]
     fn blocked_neighbour_allows_approach_then_stops_only_at_boundary() {
         let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
         let cora = cora();
