@@ -1,13 +1,14 @@
 #[cfg(test)]
 use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
 use progressus_worldgen::{WorldGenerator, WorldgenError};
 
 use crate::clock::SimulationClock;
-use crate::entity::EntityIdAllocator;
+use crate::entity::{EntityIdAllocator, NavigationRoute};
+use crate::pathfinding::{PathfindingError, find_path};
 use crate::world_state::ModifiedWorld;
 use crate::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, Direction, EffectiveChunk,
@@ -101,7 +102,46 @@ impl Simulation {
         self.characters
             .get_mut(&id)
             .ok_or(SimulationError::UnknownCharacter(id))?
-            .set_movement(MovementState::Moving { direction });
+            .set_movement(MovementState::ManualDirectional { direction });
+        Ok(())
+    }
+
+    pub fn move_to(
+        &mut self,
+        id: EntityId,
+        destination: WorldPosition,
+    ) -> Result<(), SimulationError> {
+        let current = self
+            .characters
+            .get(&id)
+            .ok_or(SimulationError::UnknownCharacter(id))?
+            .position();
+        if current == destination {
+            self.stop_movement(id)?;
+            return Ok(());
+        }
+        if !self.is_walkable(destination.containing_cell())? {
+            return Err(SimulationError::MoveToDestinationBlocked(
+                destination.containing_cell(),
+            ));
+        }
+        let cells = find_path(
+            self,
+            current.containing_cell(),
+            destination.containing_cell(),
+        )?
+        .map_err(|error| match error {
+            PathfindingError::PathNotFound => SimulationError::MoveToPathNotFound,
+            PathfindingError::SearchBudgetExceeded => SimulationError::MoveToSearchBudgetExceeded,
+        })?;
+        let route = NavigationRoute {
+            destination,
+            waypoints: build_waypoints(current, destination, &cells)?,
+        };
+        self.characters
+            .get_mut(&id)
+            .expect("character was checked above")
+            .set_navigation_route(route);
         Ok(())
     }
 
@@ -194,13 +234,18 @@ impl Simulation {
                     .expect("character ID came from the character map");
                 match character.movement() {
                     MovementState::Idle => continue,
-                    MovementState::Moving { direction } => (
+                    MovementState::ManualDirectional { direction } => (
                         character.position(),
                         direction,
                         i128::from(character.speed().subunits_per_tick()),
                     ),
+                    MovementState::Navigating { .. } => {
+                        self.advance_navigation_one_tick(id)?;
+                        continue;
+                    }
                 }
             };
+            let trace_start = position;
 
             while remaining > 0 {
                 let source = position.containing_cell();
@@ -237,9 +282,95 @@ impl Simulation {
                     .set_position(position);
                 remaining -= distance;
             }
+            self.characters
+                .get_mut(&id)
+                .expect("character ID came from the character map")
+                .set_last_tick_motion_trace(vec![trace_start, position]);
         }
 
         Ok(())
+    }
+
+    fn advance_navigation_one_tick(&mut self, id: EntityId) -> Result<(), SimulationError> {
+        let (mut position, mut remaining, mut route) = {
+            let character = self
+                .characters
+                .get(&id)
+                .expect("character ID came from map");
+            (
+                character.position(),
+                i128::from(character.speed().subunits_per_tick()),
+                character
+                    .navigation_route()
+                    .cloned()
+                    .expect("navigating characters have a route"),
+            )
+        };
+        let mut trace = vec![position];
+        while remaining > 0 {
+            while route.waypoints.front().copied() == Some(position) {
+                route.waypoints.pop_front();
+                trace.push(position);
+            }
+            let Some(target) = route.waypoints.front().copied() else {
+                let character = self
+                    .characters
+                    .get_mut(&id)
+                    .expect("character ID came from map");
+                character.set_position(position);
+                character.set_movement(MovementState::Idle);
+                character.set_last_tick_motion_trace(trace);
+                return Ok(());
+            };
+            let (direction, distance) = direction_and_distance(position, target)?;
+            let budget = remaining.min(distance);
+            let (next, consumed, blocked) = self.advance_cardinal(position, direction, budget)?;
+            position = next;
+            remaining -= consumed;
+            if blocked {
+                let character = self
+                    .characters
+                    .get_mut(&id)
+                    .expect("character ID came from map");
+                character.set_position(position);
+                character.set_movement(MovementState::Idle);
+                trace.push(position);
+                character.set_last_tick_motion_trace(trace);
+                return Ok(());
+            }
+        }
+        let character = self
+            .characters
+            .get_mut(&id)
+            .expect("character ID came from map");
+        character.set_position(position);
+        character.set_navigation_route(route);
+        trace.push(position);
+        character.set_last_tick_motion_trace(trace);
+        Ok(())
+    }
+
+    fn advance_cardinal(
+        &self,
+        position: WorldPosition,
+        direction: Direction,
+        budget: i128,
+    ) -> Result<(WorldPosition, i128, bool), SimulationError> {
+        let source = position.containing_cell();
+        let entry = entry_distance(position, source, direction)?;
+        let walkable = match direction.adjacent(source) {
+            Some(cell) => self.is_walkable(cell)?,
+            None => false,
+        };
+        if !walkable {
+            return if budget < entry {
+                Ok((translate(position, direction, budget)?, budget, false))
+            } else {
+                Ok((translate(position, direction, entry - 1)?, budget, true))
+            };
+        }
+        let consumed = budget.min(entry);
+        Ok((translate(position, direction, consumed)?, consumed, false))
     }
 
     fn is_walkable(&self, position: WorldCell) -> Result<bool, SimulationError> {
@@ -307,6 +438,71 @@ fn entry_distance(
     }
 }
 
+fn build_waypoints(
+    current: WorldPosition,
+    destination: WorldPosition,
+    cells: &[WorldCell],
+) -> Result<VecDeque<WorldPosition>, SimulationError> {
+    let mut points = Vec::new();
+    let same_cell = current.containing_cell() == destination.containing_cell();
+    if same_cell {
+        points.push(WorldPosition::from_subunits(
+            destination.x_subunits(),
+            current.y_subunits(),
+        )?);
+    } else {
+        let start_center = WorldPosition::from_cell_center(current.containing_cell())?;
+        points.push(WorldPosition::from_subunits(
+            start_center.x_subunits(),
+            current.y_subunits(),
+        )?);
+        points.push(start_center);
+        points.extend(
+            cells
+                .iter()
+                .skip(1)
+                .map(|cell| WorldPosition::from_cell_center(*cell))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        let destination_center = WorldPosition::from_cell_center(destination.containing_cell())?;
+        points.push(WorldPosition::from_subunits(
+            destination.x_subunits(),
+            destination_center.y_subunits(),
+        )?);
+    }
+    points.push(destination);
+    Ok(points.into_iter().filter(|point| *point != current).fold(
+        VecDeque::new(),
+        |mut waypoints, point| {
+            if waypoints.back().copied() != Some(point) {
+                waypoints.push_back(point);
+            }
+            waypoints
+        },
+    ))
+}
+
+fn direction_and_distance(
+    position: WorldPosition,
+    target: WorldPosition,
+) -> Result<(Direction, i128), SimulationError> {
+    let delta_x = target.x_subunits() - position.x_subunits();
+    let delta_y = target.y_subunits() - position.y_subunits();
+    if delta_x > 0 && delta_y == 0 {
+        Ok((Direction::East, delta_x))
+    } else if delta_x < 0 && delta_y == 0 {
+        Ok((Direction::West, -delta_x))
+    } else if delta_y > 0 && delta_x == 0 {
+        Ok((Direction::North, delta_y))
+    } else if delta_y < 0 && delta_x == 0 {
+        Ok((Direction::South, -delta_y))
+    } else {
+        Err(SimulationError::Position(
+            WorldPositionError::OutsideWorldCellRange,
+        ))
+    }
+}
+
 fn translate(
     position: WorldPosition,
     direction: Direction,
@@ -332,6 +528,9 @@ pub enum SimulationError {
     UnknownCharacter(EntityId),
     MovementCoordinateOverflow(WorldCell),
     MovementDestinationBlocked(WorldCell),
+    MoveToDestinationBlocked(WorldCell),
+    MoveToPathNotFound,
+    MoveToSearchBudgetExceeded,
     Position(WorldPositionError),
     Worldgen(WorldgenError),
 }
@@ -363,6 +562,16 @@ impl Display for SimulationError {
                 position.x(),
                 position.y()
             ),
+            Self::MoveToDestinationBlocked(position) => write!(
+                formatter,
+                "move-to destination ({}, {}) is not walkable",
+                position.x(),
+                position.y()
+            ),
+            Self::MoveToPathNotFound => formatter.write_str("move-to path not found"),
+            Self::MoveToSearchBudgetExceeded => {
+                formatter.write_str("move-to search budget exceeded")
+            }
             Self::Position(_) => {
                 formatter.write_str("world position is outside the representable world-cell range")
             }
@@ -440,7 +649,7 @@ mod tests {
         simulation.set_movement_direction(cora, blocked).unwrap();
         assert_eq!(
             character(&simulation, cora).movement(),
-            MovementState::Moving { direction: blocked }
+            MovementState::ManualDirectional { direction: blocked }
         );
     }
 
@@ -468,7 +677,7 @@ mod tests {
         );
         assert_eq!(
             character(&simulation, cora).movement(),
-            MovementState::Moving {
+            MovementState::ManualDirectional {
                 direction: Direction::North
             }
         );
@@ -490,7 +699,7 @@ mod tests {
         let cora = cora();
         let controlled_character = simulation.characters.get_mut(&cora).unwrap();
         controlled_character.set_position(position_at_cell(WorldCell::new(i64::MAX, 0)));
-        controlled_character.set_movement(MovementState::Moving {
+        controlled_character.set_movement(MovementState::ManualDirectional {
             direction: Direction::East,
         });
 
@@ -615,7 +824,7 @@ mod tests {
         assert_eq!(character(&simulation, cora).position().y_subunits(), 512);
         assert_eq!(
             character(&simulation, cora).movement(),
-            MovementState::Moving {
+            MovementState::ManualDirectional {
                 direction: Direction::East
             }
         );
@@ -624,6 +833,25 @@ mod tests {
         assert_eq!(
             character(&simulation, cora).position(),
             position_at_cell(WorldCell::new(1, 0))
+        );
+    }
+
+    #[test]
+    fn move_to_reaches_an_exact_same_cell_target_via_x_then_y() {
+        let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        let cora = cora();
+        let start = WorldCell::new(0, 0);
+        place_on_grass(&mut simulation, cora, start);
+        let destination = WorldPosition::from_subunits(800, 900).unwrap();
+        simulation.move_to(cora, destination).unwrap();
+
+        simulation.advance_ticks(3).unwrap();
+
+        assert_eq!(character(&simulation, cora).position(), destination);
+        assert_eq!(character(&simulation, cora).movement(), MovementState::Idle);
+        assert_eq!(
+            character(&simulation, cora).last_tick_motion_trace(),
+            &[WorldPosition::from_subunits(800, 736).unwrap(), destination]
         );
     }
 
@@ -645,7 +873,7 @@ mod tests {
         assert_eq!(character(&simulation, cora).position().x_subunits(), 768);
         assert!(matches!(
             character(&simulation, cora).movement(),
-            MovementState::Moving {
+            MovementState::ManualDirectional {
                 direction: Direction::East
             }
         ));
@@ -852,7 +1080,7 @@ mod tests {
             .characters
             .get_mut(&cora)
             .unwrap()
-            .set_movement(MovementState::Moving { direction });
+            .set_movement(MovementState::ManualDirectional { direction });
 
         simulation.advance_ticks(3).unwrap();
 

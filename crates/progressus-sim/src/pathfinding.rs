@@ -196,14 +196,27 @@ mod tests {
     #[test]
     fn exhausted_frontier_and_budget_are_distinct_errors() {
         let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
-        for cell in [WorldCell::new(0, 0), WorldCell::new(1, 0)] {
+        for cell in [
+            WorldCell::new(0, 0),
+            WorldCell::new(1, 0),
+            WorldCell::new(-1, 0),
+            WorldCell::new(0, 1),
+            WorldCell::new(0, -1),
+        ] {
             simulation
                 .set_terrain_override(cell, Terrain::Grass)
                 .unwrap();
         }
-        simulation
-            .set_terrain_override(WorldCell::new(1, 0), Terrain::Rock)
-            .unwrap();
+        for cell in [
+            WorldCell::new(1, 0),
+            WorldCell::new(-1, 0),
+            WorldCell::new(0, 1),
+            WorldCell::new(0, -1),
+        ] {
+            simulation
+                .set_terrain_override(cell, Terrain::Rock)
+                .unwrap();
+        }
         assert_eq!(
             find_path_with_budget(&simulation, WorldCell::new(0, 0), WorldCell::new(1, 0), 1)
                 .unwrap(),
@@ -217,6 +230,61 @@ mod tests {
             find_path_with_budget(&simulation, WorldCell::new(0, 0), WorldCell::new(1, 0), 1)
                 .unwrap(),
             Err(PathfindingError::SearchBudgetExceeded)
+        );
+    }
+
+    #[test]
+    fn effective_overrides_block_and_open_the_same_route() {
+        let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        for cell in [
+            WorldCell::new(0, 0),
+            WorldCell::new(1, 0),
+            WorldCell::new(2, 0),
+        ] {
+            simulation
+                .set_terrain_override(cell, Terrain::Grass)
+                .unwrap();
+        }
+        for cell in [
+            WorldCell::new(-1, 0),
+            WorldCell::new(0, 1),
+            WorldCell::new(0, -1),
+        ] {
+            simulation
+                .set_terrain_override(cell, Terrain::Rock)
+                .unwrap();
+        }
+        simulation
+            .set_terrain_override(WorldCell::new(1, 0), Terrain::Rock)
+            .unwrap();
+        assert_eq!(
+            find_path(&simulation, WorldCell::new(0, 0), WorldCell::new(2, 0)).unwrap(),
+            Err(PathfindingError::PathNotFound)
+        );
+        simulation
+            .set_terrain_override(WorldCell::new(1, 0), Terrain::Grass)
+            .unwrap();
+        assert_eq!(
+            find_path(&simulation, WorldCell::new(0, 0), WorldCell::new(2, 0)).unwrap(),
+            Ok(vec![
+                WorldCell::new(0, 0),
+                WorldCell::new(1, 0),
+                WorldCell::new(2, 0)
+            ])
+        );
+    }
+
+    #[test]
+    fn pathfinding_crosses_chunk_boundary_without_global_grid() {
+        let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        for cell in [WorldCell::new(31, 0), WorldCell::new(32, 0)] {
+            simulation
+                .set_terrain_override(cell, Terrain::Grass)
+                .unwrap();
+        }
+        assert_eq!(
+            find_path(&simulation, WorldCell::new(31, 0), WorldCell::new(32, 0)).unwrap(),
+            Ok(vec![WorldCell::new(31, 0), WorldCell::new(32, 0)])
         );
     }
 }

@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use crate::{SimulationError, WorldCell, WorldPosition};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,7 +24,14 @@ impl Direction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MovementState {
     Idle,
-    Moving { direction: Direction },
+    ManualDirectional { direction: Direction },
+    Navigating { destination: WorldPosition },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct NavigationRoute {
+    pub(crate) destination: WorldPosition,
+    pub(crate) waypoints: VecDeque<WorldPosition>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,6 +73,8 @@ pub struct Character {
     position: WorldPosition,
     speed: MovementSpeed,
     movement: MovementState,
+    route: Option<NavigationRoute>,
+    last_tick_motion_trace: Vec<WorldPosition>,
 }
 
 impl Character {
@@ -74,6 +85,8 @@ impl Character {
             position,
             speed: DEFAULT_CHARACTER_SPEED,
             movement: MovementState::Idle,
+            route: None,
+            last_tick_motion_trace: vec![position],
         }
     }
 
@@ -97,6 +110,14 @@ impl Character {
         self.movement
     }
 
+    pub(crate) fn navigation_route(&self) -> Option<&NavigationRoute> {
+        self.route.as_ref()
+    }
+
+    pub fn last_tick_motion_trace(&self) -> &[WorldPosition] {
+        &self.last_tick_motion_trace
+    }
+
     pub(crate) fn set_position(&mut self, position: WorldPosition) {
         self.position = position;
     }
@@ -108,6 +129,20 @@ impl Character {
 
     pub(crate) fn set_movement(&mut self, movement: MovementState) {
         self.movement = movement;
+        if !matches!(movement, MovementState::Navigating { .. }) {
+            self.route = None;
+        }
+    }
+
+    pub(crate) fn set_navigation_route(&mut self, route: NavigationRoute) {
+        self.movement = MovementState::Navigating {
+            destination: route.destination,
+        };
+        self.route = Some(route);
+    }
+
+    pub(crate) fn set_last_tick_motion_trace(&mut self, trace: Vec<WorldPosition>) {
+        self.last_tick_motion_trace = trace;
     }
 }
 
