@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::{SimulationError, WorldCell, WorldPosition};
+use crate::{InteractionRadius, SimulationError, WorldCell, WorldPosition};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Direction {
@@ -52,6 +52,7 @@ impl MovementSpeed {
 }
 
 pub const DEFAULT_CHARACTER_SPEED: MovementSpeed = MovementSpeed(256);
+pub const DEFAULT_CHARACTER_INTERACTION_RADIUS: InteractionRadius = InteractionRadius::new(768);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct EntityId(u64);
@@ -72,6 +73,7 @@ pub struct Character {
     name: String,
     position: WorldPosition,
     speed: MovementSpeed,
+    interaction_radius: InteractionRadius,
     movement: MovementState,
     route: Option<NavigationRoute>,
     last_tick_motion_trace: Vec<WorldPosition>,
@@ -84,6 +86,7 @@ impl Character {
             name: name.to_owned(),
             position,
             speed: DEFAULT_CHARACTER_SPEED,
+            interaction_radius: DEFAULT_CHARACTER_INTERACTION_RADIUS,
             movement: MovementState::Idle,
             route: None,
             last_tick_motion_trace: vec![position],
@@ -104,6 +107,10 @@ impl Character {
 
     pub const fn speed(&self) -> MovementSpeed {
         self.speed
+    }
+
+    pub const fn interaction_radius(&self) -> InteractionRadius {
+        self.interaction_radius
     }
 
     pub const fn movement(&self) -> MovementState {

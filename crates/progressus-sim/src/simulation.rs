@@ -9,12 +9,14 @@ use progressus_worldgen::{WorldGenerator, WorldgenError};
 use crate::clock::SimulationClock;
 use crate::entity::{EntityIdAllocator, NavigationRoute};
 use crate::exploration::ExploredWorld;
+use crate::item::ItemWorld;
 use crate::pathfinding::{PathfindingError, find_explored_path};
 use crate::world_state::ModifiedWorld;
 use crate::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, Direction, EffectiveChunk,
-    EntityId, GeneratedChunk, LocalCell, MovementState, SimulationTick, Terrain, WorldCell,
-    WorldPosition, WorldPositionError, WorldSeed, WorldgenVersion,
+    EntityId, GeneratedChunk, InteractionRadius, ItemKind, ItemLocation, ItemQuantity, ItemStack,
+    LocalCell, MovementState, SimulationTick, Terrain, WorldCell, WorldPosition,
+    WorldPositionError, WorldSeed, WorldgenVersion, within_interaction_range,
 };
 
 const INITIAL_CHARACTERS: [(&str, i64); 5] = [
@@ -32,6 +34,7 @@ pub struct Simulation {
     id_allocator: EntityIdAllocator,
     characters: BTreeMap<EntityId, Character>,
     modified_world: ModifiedWorld,
+    item_world: ItemWorld,
     explored_world: ExploredWorld,
     last_discovery_cells: BTreeMap<EntityId, WorldCell>,
     #[cfg(test)]
@@ -59,6 +62,26 @@ impl Simulation {
             }
         }
 
+        let mut item_world = ItemWorld::default();
+        for (kind, quantity, cell, offset_x, offset_y) in [
+            (ItemKind::Wood, 8, WorldCell::new(-2, 0), 160, 180),
+            (ItemKind::Stone, 6, WorldCell::new(-1, 0), 820, 220),
+            (ItemKind::Wood, 10, WorldCell::new(1, 0), 240, 820),
+            (ItemKind::Stone, 8, WorldCell::new(2, 0), 840, 760),
+        ] {
+            let id = id_allocator.allocate()?;
+            let position =
+                WorldPosition::from_cell_origin(cell)?.checked_translate(offset_x, offset_y)?;
+            item_world
+                .insert_ground(ItemStack::new_ground(
+                    id,
+                    kind,
+                    ItemQuantity::new(quantity).expect("bootstrap stack quantities are positive"),
+                    position,
+                ))
+                .expect("bootstrap item IDs are unique and stacks start on the ground");
+        }
+
         let mut explored_world = ExploredWorld::default();
         for character in characters.values() {
             explored_world.reveal_around(character.position().containing_cell());
@@ -74,6 +97,7 @@ impl Simulation {
             id_allocator,
             characters,
             modified_world: ModifiedWorld::default(),
+            item_world,
             explored_world,
             last_discovery_cells,
             #[cfg(test)]
@@ -182,6 +206,101 @@ impl Simulation {
 
     pub fn characters(&self) -> impl ExactSizeIterator<Item = &Character> {
         self.characters.values()
+    }
+
+    pub fn items(&self) -> impl ExactSizeIterator<Item = &ItemStack> {
+        self.item_world.iter()
+    }
+
+    pub fn ground_items_in_chunk(
+        &self,
+        coordinate: ChunkCoord,
+    ) -> impl Iterator<Item = &ItemStack> {
+        self.item_world.ground_items_in_chunk(coordinate)
+    }
+
+    pub const fn item_revision(&self) -> u64 {
+        self.item_world.revision()
+    }
+
+    pub fn pick_up_item(
+        &mut self,
+        character_id: EntityId,
+        item_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        let character = self
+            .characters
+            .get(&character_id)
+            .ok_or(SimulationError::UnknownCharacter(character_id))?;
+        let character_position = character.position();
+        let interaction_radius = character.interaction_radius();
+        let item = self
+            .item_world
+            .get(item_id)
+            .ok_or(SimulationError::UnknownItem(item_id))?;
+        let item_position = match item.location() {
+            ItemLocation::Ground { position } => position,
+            ItemLocation::Carried { .. } => return Err(SimulationError::ItemNotOnGround(item_id)),
+        };
+        if !within_interaction_range(
+            character_position,
+            interaction_radius,
+            item_position,
+            InteractionRadius::zero(),
+        ) {
+            return Err(SimulationError::ItemOutOfReach {
+                character_id,
+                item_id,
+            });
+        }
+
+        self.item_world
+            .move_to_carried(item_id, character_id)
+            .expect("pickup preconditions were validated against the canonical item world");
+        Ok(())
+    }
+
+    pub fn drop_item(
+        &mut self,
+        character_id: EntityId,
+        item_id: EntityId,
+        destination: WorldPosition,
+    ) -> Result<(), SimulationError> {
+        let character = self
+            .characters
+            .get(&character_id)
+            .ok_or(SimulationError::UnknownCharacter(character_id))?;
+        let item = self
+            .item_world
+            .get(item_id)
+            .ok_or(SimulationError::UnknownItem(item_id))?;
+        if item.carrier() != Some(character_id) {
+            return Err(SimulationError::ItemNotCarriedByCharacter {
+                character_id,
+                item_id,
+            });
+        }
+        if !within_interaction_range(
+            character.position(),
+            character.interaction_radius(),
+            destination,
+            InteractionRadius::zero(),
+        ) {
+            return Err(SimulationError::ItemOutOfReach {
+                character_id,
+                item_id,
+            });
+        }
+        if !self.is_walkable(destination.containing_cell())? {
+            return Err(SimulationError::ItemDropBlocked(
+                destination.containing_cell(),
+            ));
+        }
+
+        self.item_world
+            .move_to_ground(item_id, character_id, destination)
+            .expect("drop preconditions were validated against the canonical item world");
+        Ok(())
     }
 
     pub fn generated_chunk(
@@ -571,6 +690,17 @@ pub enum SimulationError {
     DuplicateEntityId(EntityId),
     SpawnNotWalkable(WorldCell),
     UnknownCharacter(EntityId),
+    UnknownItem(EntityId),
+    ItemNotOnGround(EntityId),
+    ItemNotCarriedByCharacter {
+        character_id: EntityId,
+        item_id: EntityId,
+    },
+    ItemOutOfReach {
+        character_id: EntityId,
+        item_id: EntityId,
+    },
+    ItemDropBlocked(WorldCell),
     MovementCoordinateOverflow(WorldCell),
     MovementDestinationBlocked(WorldCell),
     MoveToDestinationBlocked(WorldCell),
@@ -596,6 +726,34 @@ impl Display for SimulationError {
                 position.y()
             ),
             Self::UnknownCharacter(id) => write!(formatter, "unknown character ID {}", id.value()),
+            Self::UnknownItem(id) => write!(formatter, "unknown item ID {}", id.value()),
+            Self::ItemNotOnGround(id) => {
+                write!(formatter, "item ID {} is not on the ground", id.value())
+            }
+            Self::ItemNotCarriedByCharacter {
+                character_id,
+                item_id,
+            } => write!(
+                formatter,
+                "item ID {} is not carried by character ID {}",
+                item_id.value(),
+                character_id.value()
+            ),
+            Self::ItemOutOfReach {
+                character_id,
+                item_id,
+            } => write!(
+                formatter,
+                "item ID {} is outside interaction reach of character ID {}",
+                item_id.value(),
+                character_id.value()
+            ),
+            Self::ItemDropBlocked(position) => write!(
+                formatter,
+                "item drop destination ({}, {}) is not walkable",
+                position.x(),
+                position.y()
+            ),
             Self::MovementCoordinateOverflow(position) => write!(
                 formatter,
                 "movement from ({}, {}) exceeds the world-cell coordinate range",
@@ -790,6 +948,125 @@ mod tests {
                 &[destination]
             );
         }
+    }
+
+    #[test]
+    fn starting_supplies_have_stable_ids_quantities_and_exact_subcell_positions() {
+        let simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        let items = simulation.items().collect::<Vec<_>>();
+
+        assert_eq!(items.len(), 4);
+        assert_eq!(items[0].id(), EntityId::new(6).unwrap());
+        assert_eq!(items[0].kind(), ItemKind::Wood);
+        assert_eq!(items[0].quantity().get(), 8);
+        assert_eq!(
+            items[0].ground_position(),
+            Some(
+                WorldPosition::from_cell_origin(WorldCell::new(-2, 0))
+                    .unwrap()
+                    .checked_translate(160, 180)
+                    .unwrap()
+            )
+        );
+        assert_eq!(items[3].id(), EntityId::new(9).unwrap());
+        assert_eq!(items[3].kind(), ItemKind::Stone);
+        assert_eq!(items[3].quantity().get(), 8);
+        assert!(
+            items
+                .iter()
+                .all(|item| matches!(item.location(), ItemLocation::Ground { .. }))
+        );
+    }
+
+    #[test]
+    fn pickup_and_drop_preserve_item_identity_quantity_and_exact_location() {
+        let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        let ada = EntityId::new(1).unwrap();
+        let item_id = EntityId::new(6).unwrap();
+        let before = simulation.item_revision();
+        let original = simulation.item_world.get(item_id).unwrap().clone();
+
+        simulation.pick_up_item(ada, item_id).unwrap();
+        let carried = simulation.item_world.get(item_id).unwrap();
+        assert_eq!(carried.id(), original.id());
+        assert_eq!(carried.kind(), original.kind());
+        assert_eq!(carried.quantity(), original.quantity());
+        assert_eq!(
+            carried.location(),
+            ItemLocation::Carried { character_id: ada }
+        );
+        assert_eq!(simulation.item_revision(), before + 1);
+        assert_eq!(
+            simulation
+                .ground_items_in_chunk(WorldCell::new(-2, 0).split().0)
+                .filter(|item| item.id() == item_id)
+                .count(),
+            0
+        );
+
+        let destination = character(&simulation, ada)
+            .position()
+            .checked_translate(200, 100)
+            .unwrap();
+        simulation.drop_item(ada, item_id, destination).unwrap();
+        let dropped = simulation.item_world.get(item_id).unwrap();
+        assert_eq!(dropped.id(), original.id());
+        assert_eq!(dropped.kind(), original.kind());
+        assert_eq!(dropped.quantity(), original.quantity());
+        assert_eq!(
+            dropped.location(),
+            ItemLocation::Ground {
+                position: destination
+            }
+        );
+        assert_eq!(simulation.item_revision(), before + 2);
+        assert!(simulation.item_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn failed_item_transfers_are_atomic_for_reach_carrier_and_blocked_drop() {
+        let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
+        let ada = EntityId::new(1).unwrap();
+        let cora = EntityId::new(3).unwrap();
+        let item_id = EntityId::new(6).unwrap();
+        let initial_item = simulation.item_world.get(item_id).unwrap().clone();
+        let initial_revision = simulation.item_revision();
+
+        assert_eq!(
+            simulation.pick_up_item(cora, item_id),
+            Err(SimulationError::ItemOutOfReach {
+                character_id: cora,
+                item_id,
+            })
+        );
+        assert_eq!(simulation.item_world.get(item_id), Some(&initial_item));
+        assert_eq!(simulation.item_revision(), initial_revision);
+
+        simulation.pick_up_item(ada, item_id).unwrap();
+        let carried_revision = simulation.item_revision();
+        let carried = simulation.item_world.get(item_id).unwrap().clone();
+        assert_eq!(
+            simulation.drop_item(cora, item_id, character(&simulation, cora).position()),
+            Err(SimulationError::ItemNotCarriedByCharacter {
+                character_id: cora,
+                item_id,
+            })
+        );
+        assert_eq!(simulation.item_world.get(item_id), Some(&carried));
+        assert_eq!(simulation.item_revision(), carried_revision);
+
+        let blocked_cell = character(&simulation, ada).position().containing_cell();
+        simulation
+            .set_terrain_override(blocked_cell, Terrain::Rock)
+            .unwrap();
+        let destination = character(&simulation, ada).position();
+        assert_eq!(
+            simulation.drop_item(ada, item_id, destination),
+            Err(SimulationError::ItemDropBlocked(blocked_cell))
+        );
+        assert_eq!(simulation.item_world.get(item_id), Some(&carried));
+        assert_eq!(simulation.item_revision(), carried_revision);
+        assert!(simulation.item_world.indexes_are_consistent());
     }
 
     #[test]
