@@ -361,7 +361,7 @@ fn sync_ground_items(
                         procedural_assets.sprite(
                             images,
                             item_asset(item.kind, item.id),
-                            Vec2::splat(CELL_SIZE * 0.55),
+                            Vec2::splat(CELL_SIZE * 0.78),
                         ),
                         Transform::from_translation(item_translation(&item, origin)),
                         GroundItemVisual,
@@ -375,7 +375,7 @@ fn sync_ground_items(
                         procedural_assets.sprite(
                             images,
                             item_asset(item.kind, item.id),
-                            Vec2::splat(CELL_SIZE * 0.55),
+                            Vec2::splat(CELL_SIZE * 0.78),
                         ),
                         Transform::from_translation(item_translation(&item, origin)),
                     ));
