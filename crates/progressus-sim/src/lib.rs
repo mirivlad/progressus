@@ -6,6 +6,7 @@ mod job;
 mod pathfinding;
 mod position;
 mod simulation;
+mod stockpile;
 mod world_state;
 
 pub use clock::SimulationTick;
@@ -25,4 +26,5 @@ pub use progressus_worldgen::{
     NaturalResourceKind, Terrain, WorldCell, WorldSeed, WorldgenVersion,
 };
 pub use simulation::{Simulation, SimulationError};
+pub use stockpile::Stockpile;
 pub use world_state::EffectiveChunk;

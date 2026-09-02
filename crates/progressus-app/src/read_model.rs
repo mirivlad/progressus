@@ -1,6 +1,6 @@
 use progressus_sim::{
     Character, ItemKind, ItemStack, Job, JobKind, JobState, MovementState, NaturalResource,
-    NaturalResourceKind, WorldPosition,
+    NaturalResourceKind, Stockpile, WorldPosition,
 };
 
 use crate::{ChunkCoord, EntityId, LocalCell, SimulationTick, Terrain, WorldCell, WorldgenVersion};
@@ -13,10 +13,13 @@ pub struct ClientSnapshot {
     pub item_revision: u64,
     pub resource_revision: u64,
     pub job_revision: u64,
+    pub stockpile_revision: u64,
     pub chunks: Vec<ChunkSnapshot>,
     pub ground_items: Vec<GroundItemSnapshot>,
+    pub carried_items: Vec<CarriedItemSnapshot>,
     pub natural_resources: Vec<NaturalResourceSnapshot>,
     pub jobs: Vec<JobSnapshot>,
+    pub stockpiles: Vec<StockpileSnapshot>,
     pub characters: Vec<CharacterSnapshot>,
     pub navigation: Option<NavigationSnapshot>,
 }
@@ -38,6 +41,27 @@ impl GroundItemSnapshot {
             position: item
                 .ground_position()
                 .expect("ground item snapshots are built only from ground items"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CarriedItemSnapshot {
+    pub id: EntityId,
+    pub kind: ItemKind,
+    pub quantity: u32,
+    pub character_id: EntityId,
+}
+
+impl CarriedItemSnapshot {
+    pub(crate) fn from_carried_item(item: &ItemStack) -> Self {
+        Self {
+            id: item.id(),
+            kind: item.kind(),
+            quantity: item.quantity().get(),
+            character_id: item
+                .carrier()
+                .expect("carried item snapshots are built only from carried items"),
         }
     }
 }
@@ -72,6 +96,21 @@ impl From<&Job> for JobSnapshot {
             id: job.id(),
             kind: job.kind(),
             state: job.state(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StockpileSnapshot {
+    pub id: EntityId,
+    pub cells: Vec<WorldCell>,
+}
+
+impl From<&Stockpile> for StockpileSnapshot {
+    fn from(stockpile: &Stockpile) -> Self {
+        Self {
+            id: stockpile.id(),
+            cells: stockpile.cells().collect(),
         }
     }
 }

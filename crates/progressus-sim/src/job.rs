@@ -6,13 +6,23 @@ pub const HARVEST_WORK_TICKS: u32 = 4;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum JobKind {
-    Harvest { source: WorldCell },
+    Harvest {
+        source: WorldCell,
+    },
+    Haul {
+        item_id: EntityId,
+        stockpile_id: EntityId,
+        destination: WorldCell,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum JobState {
     Available,
     Reserved {
+        worker_id: EntityId,
+    },
+    Transporting {
         worker_id: EntityId,
     },
     Working {
@@ -25,7 +35,9 @@ impl JobState {
     pub const fn worker(self) -> Option<EntityId> {
         match self {
             Self::Available => None,
-            Self::Reserved { worker_id } | Self::Working { worker_id, .. } => Some(worker_id),
+            Self::Reserved { worker_id }
+            | Self::Transporting { worker_id }
+            | Self::Working { worker_id, .. } => Some(worker_id),
         }
     }
 }
@@ -63,6 +75,8 @@ impl Job {
 pub(crate) struct JobWorld {
     jobs: BTreeMap<EntityId, Job>,
     harvest_by_source: BTreeMap<WorldCell, EntityId>,
+    haul_by_item: BTreeMap<EntityId, EntityId>,
+    haul_by_destination: BTreeMap<WorldCell, EntityId>,
     worker_jobs: BTreeMap<EntityId, EntityId>,
     revision: u64,
 }
@@ -88,6 +102,14 @@ impl JobWorld {
         self.harvest_by_source.get(&source).copied()
     }
 
+    pub(crate) fn haul_job_for_item(&self, item_id: EntityId) -> Option<EntityId> {
+        self.haul_by_item.get(&item_id).copied()
+    }
+
+    pub(crate) fn haul_job_for_destination(&self, destination: WorldCell) -> Option<EntityId> {
+        self.haul_by_destination.get(&destination).copied()
+    }
+
     pub(crate) fn insert(&mut self, job: Job) -> Result<(), JobWorldError> {
         let id = job.id();
         if self.jobs.contains_key(&id) {
@@ -99,6 +121,20 @@ impl JobWorld {
                     return Err(JobWorldError::HarvestSourceAlreadyDesignated(source));
                 }
                 self.harvest_by_source.insert(source, id);
+            }
+            JobKind::Haul {
+                item_id,
+                destination,
+                ..
+            } => {
+                if self.haul_by_item.contains_key(&item_id) {
+                    return Err(JobWorldError::HaulItemAlreadyReserved(item_id));
+                }
+                if self.haul_by_destination.contains_key(&destination) {
+                    return Err(JobWorldError::HaulDestinationAlreadyReserved(destination));
+                }
+                self.haul_by_item.insert(item_id, id);
+                self.haul_by_destination.insert(destination, id);
             }
         }
         self.jobs.insert(id, job);
@@ -122,6 +158,18 @@ impl JobWorld {
         }
         job.state = JobState::Reserved { worker_id };
         self.worker_jobs.insert(worker_id, job_id);
+        self.bump_revision()
+    }
+
+    pub(crate) fn start_transporting(&mut self, job_id: EntityId) -> Result<(), JobWorldError> {
+        let job = self
+            .jobs
+            .get_mut(&job_id)
+            .ok_or(JobWorldError::UnknownJob(job_id))?;
+        let JobState::Reserved { worker_id } = job.state else {
+            return Err(JobWorldError::JobNotReserved(job_id));
+        };
+        job.state = JobState::Transporting { worker_id };
         self.bump_revision()
     }
 
@@ -195,6 +243,17 @@ impl JobWorld {
                     return Err(JobWorldError::IndexCorruption);
                 }
             }
+            JobKind::Haul {
+                item_id,
+                destination,
+                ..
+            } => {
+                if self.haul_by_item.remove(&item_id) != Some(job_id)
+                    || self.haul_by_destination.remove(&destination) != Some(job_id)
+                {
+                    return Err(JobWorldError::IndexCorruption);
+                }
+            }
         }
         self.bump_revision()?;
         Ok(job)
@@ -217,6 +276,17 @@ impl JobWorld {
                         return false;
                     }
                 }
+                JobKind::Haul {
+                    item_id,
+                    destination,
+                    ..
+                } => {
+                    if self.haul_by_item.get(&item_id) != Some(id)
+                        || self.haul_by_destination.get(&destination) != Some(id)
+                    {
+                        return false;
+                    }
+                }
             }
             if let Some(worker_id) = job.state().worker()
                 && self.worker_jobs.get(&worker_id) != Some(id)
@@ -234,6 +304,13 @@ impl JobWorld {
                 .values()
                 .filter(|job| matches!(job.kind(), JobKind::Harvest { .. }))
                 .count()
+            && self.haul_by_item.len()
+                == self
+                    .jobs
+                    .values()
+                    .filter(|job| matches!(job.kind(), JobKind::Haul { .. }))
+                    .count()
+            && self.haul_by_item.len() == self.haul_by_destination.len()
     }
 }
 
@@ -242,6 +319,8 @@ pub(crate) enum JobWorldError {
     DuplicateJob(EntityId),
     UnknownJob(EntityId),
     HarvestSourceAlreadyDesignated(WorldCell),
+    HaulItemAlreadyReserved(EntityId),
+    HaulDestinationAlreadyReserved(WorldCell),
     WorkerAlreadyReserved(EntityId),
     JobNotAvailable(EntityId),
     JobNotReserved(EntityId),
@@ -282,6 +361,38 @@ mod tests {
 
         jobs.remove(id(10)).unwrap();
         assert_eq!(jobs.harvest_job_for_source(source), None);
+        assert!(jobs.indexes_are_consistent());
+    }
+
+    #[test]
+    fn haul_indexes_reserve_one_item_destination_and_worker() {
+        let mut jobs = JobWorld::default();
+        let destination = WorldCell::new(2, 3);
+        jobs.insert(Job::new(
+            id(20),
+            JobKind::Haul {
+                item_id: id(6),
+                stockpile_id: id(19),
+                destination,
+            },
+        ))
+        .unwrap();
+        assert_eq!(jobs.haul_job_for_item(id(6)), Some(id(20)));
+        assert_eq!(jobs.haul_job_for_destination(destination), Some(id(20)));
+
+        jobs.reserve_worker(id(20), id(4)).unwrap();
+        jobs.start_transporting(id(20)).unwrap();
+        assert_eq!(
+            jobs.get(id(20)).unwrap().state(),
+            JobState::Transporting { worker_id: id(4) }
+        );
+        assert!(jobs.indexes_are_consistent());
+
+        jobs.release_worker(id(20)).unwrap();
+        assert_eq!(jobs.get(id(20)).unwrap().state(), JobState::Available);
+        jobs.remove(id(20)).unwrap();
+        assert_eq!(jobs.haul_job_for_item(id(6)), None);
+        assert_eq!(jobs.haul_job_for_destination(destination), None);
         assert!(jobs.indexes_are_consistent());
     }
 }

@@ -13,8 +13,8 @@ use crate::navigation::{SelectedCharacter, VisualMotion, quantize_local_click, s
 use crate::presentation::PresentationError;
 use crate::procedural_assets::ProceduralAssetRegistry;
 use crate::render::{
-    NavigationDebug, PresentationCache, camera_controls, draw_job_designations, setup_camera,
-    sync_presentation,
+    NavigationDebug, PresentationCache, camera_controls, draw_job_designations, draw_stockpiles,
+    setup_camera, sync_presentation,
 };
 
 impl Resource for TickScheduler {}
@@ -138,6 +138,36 @@ pub(crate) fn pointer_navigation(
     };
 
     if buttons.just_pressed(MouseButton::Left)
+        && keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
+    {
+        let cell = target.containing_cell();
+        let command = if let Some(stockpile_id) = stockpile_at(authoritative.snapshot(), cell) {
+            Command::SetStockpileCell {
+                stockpile_id,
+                cell,
+                enabled: false,
+            }
+        } else if let Some(stockpile) = authoritative.snapshot().stockpiles.first() {
+            Command::SetStockpileCell {
+                stockpile_id: stockpile.id,
+                cell,
+                enabled: true,
+            }
+        } else {
+            Command::CreateStockpile { cell }
+        };
+        match authoritative.application.execute(command) {
+            Ok(()) => {
+                if let Err(error) = authoritative.refresh_lightweight_snapshot(selected.0) {
+                    error!("authoritative snapshot failed after stockpile edit: {error}");
+                }
+            }
+            Err(error) => warn!("stockpile edit rejected: {error}"),
+        }
+        return;
+    }
+
+    if buttons.just_pressed(MouseButton::Left)
         && keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
     {
         let source = target.containing_cell();
@@ -196,6 +226,14 @@ fn harvest_job_at(snapshot: &ClientSnapshot, source: WorldCell) -> Option<Entity
         JobKind::Harvest { source: job_source } if job_source == source => Some(job.id),
         _ => None,
     })
+}
+
+fn stockpile_at(snapshot: &ClientSnapshot, cell: WorldCell) -> Option<EntityId> {
+    snapshot
+        .stockpiles
+        .iter()
+        .find(|stockpile| stockpile.cells.binary_search(&cell).is_ok())
+        .map(|stockpile| stockpile.id)
 }
 
 #[derive(Debug)]
@@ -275,6 +313,7 @@ pub fn run() -> Result<(), ClientError> {
                 crate::render::interpolate_selected_visual,
                 crate::render::draw_navigation_debug,
                 draw_job_designations,
+                draw_stockpiles,
                 camera_controls,
             )
                 .chain(),

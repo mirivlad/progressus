@@ -24,6 +24,7 @@ const TERRAIN_Z: f32 = 0.0;
 const NATURAL_RESOURCE_Z: f32 = 3.0;
 const GROUND_ITEM_Z: f32 = 5.0;
 const CHARACTER_Z: f32 = 10.0;
+const CARRIED_ITEM_LOCAL_Z: f32 = 1.0;
 const CAMERA_PAN_SPEED: f32 = 500.0;
 const MIN_CAMERA_SCALE: f32 = 0.25;
 const MAX_CAMERA_SCALE: f32 = 8.0;
@@ -43,6 +44,9 @@ pub(crate) struct NaturalResourceVisual;
 #[derive(Component)]
 pub(crate) struct GroundItemVisual;
 
+#[derive(Component)]
+pub(crate) struct CarriedItemVisual;
+
 #[derive(Resource, Default)]
 pub(crate) struct PresentationCache {
     pub(crate) render_origin: Option<WorldCell>,
@@ -54,6 +58,7 @@ pub(crate) struct PresentationCache {
     pub(crate) resource_revision: Option<u64>,
     pub(crate) characters: BTreeMap<EntityId, Entity>,
     pub(crate) ground_items: BTreeMap<EntityId, Entity>,
+    pub(crate) carried_items: BTreeMap<EntityId, Entity>,
     pub(crate) natural_resources: BTreeMap<WorldCell, Entity>,
 }
 
@@ -103,6 +108,7 @@ pub(crate) fn sync_presentation(
                 images,
                 registry,
             );
+            sync_carried_items(&mut commands, &authoritative, &mut cache, images, registry);
         }
 
         if let Some(id) = selected.0 {
@@ -397,6 +403,56 @@ fn item_translation(item: &GroundItemSnapshot, origin: WorldCell) -> Vec3 {
     world_position_translation(item.position, origin, GROUND_ITEM_Z)
 }
 
+fn sync_carried_items(
+    commands: &mut Commands,
+    authoritative: &AuthoritativeClient,
+    cache: &mut PresentationCache,
+    images: &mut Assets<Image>,
+    procedural_assets: &mut ProceduralAssetRegistry,
+) {
+    let authoritative_items = authoritative
+        .snapshot()
+        .carried_items
+        .iter()
+        .map(|item| (item.id, *item))
+        .collect::<BTreeMap<_, _>>();
+
+    for (id, item) in &authoritative_items {
+        let Some(parent) = cache.characters.get(&item.character_id).copied() else {
+            continue;
+        };
+        let sprite = procedural_assets.sprite(
+            images,
+            item_asset(item.kind, item.id),
+            Vec2::splat(CELL_SIZE * 0.56),
+        );
+        let transform =
+            Transform::from_xyz(CELL_SIZE * 0.24, CELL_SIZE * 0.36, CARRIED_ITEM_LOCAL_Z);
+        if let Some(entity) = cache.carried_items.get(id).copied() {
+            commands
+                .entity(entity)
+                .insert((sprite, transform, ChildOf(parent)));
+        } else {
+            let entity = commands
+                .spawn((sprite, transform, ChildOf(parent), CarriedItemVisual))
+                .id();
+            cache.carried_items.insert(*id, entity);
+        }
+    }
+
+    let stale = cache
+        .carried_items
+        .keys()
+        .copied()
+        .filter(|id| !authoritative_items.contains_key(id))
+        .collect::<Vec<_>>();
+    for id in stale {
+        if let Some(entity) = cache.carried_items.remove(&id) {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
 fn sync_characters(
     commands: &mut Commands,
     authoritative: &AuthoritativeClient,
@@ -519,6 +575,33 @@ pub(crate) fn interpolate_selected_visual(
     }
 }
 
+pub(crate) fn draw_stockpiles(
+    authoritative: Res<AuthoritativeClient>,
+    cache: Res<PresentationCache>,
+    mut gizmos: Gizmos,
+) {
+    let Some(origin) = cache.render_origin else {
+        return;
+    };
+    let color = Color::srgb(0.35, 0.92, 0.72);
+    let half = CELL_SIZE * 0.47;
+    for stockpile in &authoritative.snapshot().stockpiles {
+        for &cell in &stockpile.cells {
+            let center = world_translation(cell, origin, GROUND_ITEM_Z - 0.5).truncate();
+            let min = center - Vec2::splat(half);
+            let max = center + Vec2::splat(half);
+            for (from, to) in [
+                (Vec2::new(min.x, min.y), Vec2::new(max.x, min.y)),
+                (Vec2::new(max.x, min.y), Vec2::new(max.x, max.y)),
+                (Vec2::new(max.x, max.y), Vec2::new(min.x, max.y)),
+                (Vec2::new(min.x, max.y), Vec2::new(min.x, min.y)),
+            ] {
+                gizmos.line_2d(from, to, color);
+            }
+        }
+    }
+}
+
 pub(crate) fn draw_job_designations(
     authoritative: Res<AuthoritativeClient>,
     cache: Res<PresentationCache>,
@@ -528,12 +611,15 @@ pub(crate) fn draw_job_designations(
         return;
     };
     for job in &authoritative.snapshot().jobs {
-        let JobKind::Harvest { source } = job.kind;
+        let JobKind::Harvest { source } = job.kind else {
+            continue;
+        };
         let center = world_translation(source, origin, NATURAL_RESOURCE_Z + 1.0).truncate();
         let half = CELL_SIZE * 0.46;
         let color = match job.state {
             JobState::Available => Color::srgb(1.0, 0.72, 0.18),
             JobState::Reserved { .. } => Color::srgb(0.35, 0.85, 1.0),
+            JobState::Transporting { .. } => Color::srgb(0.35, 0.85, 1.0),
             JobState::Working { .. } => Color::srgb(1.0, 0.42, 0.12),
         };
         let min = center - Vec2::splat(half);

@@ -1,6 +1,6 @@
 use progressus_app::{
     Application, CHUNK_SIDE, CharacterSnapshot, ChunkCoord, Command, Direction, EntityId, ItemKind,
-    JobKind, KnownTerrain, LocalCell, MovementState, NaturalResourceKind, NewGameOptions,
+    JobKind, JobState, KnownTerrain, LocalCell, MovementState, NaturalResourceKind, NewGameOptions,
     SimulationTick, SnapshotQuery, Terrain, WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
 };
 
@@ -240,6 +240,72 @@ fn harvest_designation_and_cancellation_cross_the_public_application_boundary() 
     let cancelled = application.snapshot(SnapshotQuery::default()).unwrap();
     assert!(cancelled.jobs.is_empty());
     assert!(cancelled.job_revision > designated.job_revision);
+}
+
+#[test]
+fn stockpile_and_haul_cycle_cross_the_public_application_boundary() {
+    let mut application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(0),
+    })
+    .unwrap();
+    let destination = WorldCell::new(0, 0);
+    application
+        .execute(Command::CreateStockpile { cell: destination })
+        .unwrap();
+    let created = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert_eq!(created.stockpiles.len(), 1);
+    assert_eq!(created.stockpiles[0].cells, vec![destination]);
+    let stockpile_id = created.stockpiles[0].id;
+    let item_id = EntityId::new(6).unwrap();
+    let mut saw_transporting = false;
+    let mut saw_carried = false;
+
+    for _ in 0..256 {
+        application
+            .execute(Command::AdvanceTicks { count: 1 })
+            .unwrap();
+        let snapshot = application.snapshot(SnapshotQuery::default()).unwrap();
+        saw_transporting |= snapshot.jobs.iter().any(|job| {
+            matches!(
+                (job.kind, job.state),
+                (
+                    JobKind::Haul { item_id: id, .. },
+                    JobState::Transporting { .. }
+                ) if id == item_id
+            )
+        });
+        saw_carried |= snapshot.carried_items.iter().any(|item| item.id == item_id);
+        let terrain = application
+            .snapshot(SnapshotQuery {
+                chunks: vec![ChunkCoord::new(0, 0)],
+                ..SnapshotQuery::default()
+            })
+            .unwrap();
+        if terrain
+            .ground_items
+            .iter()
+            .any(|item| item.id == item_id && item.position.containing_cell() == destination)
+        {
+            break;
+        }
+    }
+
+    assert!(saw_transporting);
+    assert!(saw_carried);
+    let after = application
+        .snapshot(SnapshotQuery {
+            chunks: vec![ChunkCoord::new(0, 0)],
+            ..SnapshotQuery::default()
+        })
+        .unwrap();
+    assert!(after.carried_items.is_empty());
+    assert!(
+        after
+            .ground_items
+            .iter()
+            .any(|item| { item.id == item_id && item.position.containing_cell() == destination })
+    );
+    assert_eq!(after.stockpiles[0].id, stockpile_id);
 }
 
 #[test]

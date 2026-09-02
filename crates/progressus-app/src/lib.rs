@@ -9,12 +9,12 @@ pub use progressus_sim::{
     CHUNK_SIDE, ChunkCoord, DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED,
     Direction, EntityId, InteractionRadius, ItemKind, ItemLocation, ItemQuantity, JobKind,
     JobState, LocalCell, MovementSpeed, MovementState, NaturalResource, NaturalResourceKind,
-    SUBUNITS_PER_CELL, SimulationTick, Terrain, WorldCell, WorldPosition, WorldSeed,
+    SUBUNITS_PER_CELL, SimulationTick, Stockpile, Terrain, WorldCell, WorldPosition, WorldSeed,
     WorldgenVersion,
 };
 pub use read_model::{
-    CharacterSnapshot, ChunkSnapshot, ClientSnapshot, GroundItemSnapshot, JobSnapshot,
-    KnownTerrain, NaturalResourceSnapshot, NavigationSnapshot,
+    CarriedItemSnapshot, CharacterSnapshot, ChunkSnapshot, ClientSnapshot, GroundItemSnapshot,
+    JobSnapshot, KnownTerrain, NaturalResourceSnapshot, NavigationSnapshot, StockpileSnapshot,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,6 +43,14 @@ pub enum Command {
     },
     CancelJob {
         job_id: EntityId,
+    },
+    CreateStockpile {
+        cell: WorldCell,
+    },
+    SetStockpileCell {
+        stockpile_id: EntityId,
+        cell: WorldCell,
+        enabled: bool,
     },
 }
 
@@ -84,6 +92,16 @@ impl Application {
                 self.simulation.designate_harvest(source)?;
             }
             Command::CancelJob { job_id } => self.simulation.cancel_job(job_id)?,
+            Command::CreateStockpile { cell } => {
+                self.simulation.create_stockpile(cell)?;
+            }
+            Command::SetStockpileCell {
+                stockpile_id,
+                cell,
+                enabled,
+            } => self
+                .simulation
+                .set_stockpile_cell(stockpile_id, cell, enabled)?,
         }
         Ok(())
     }
@@ -136,6 +154,12 @@ impl Application {
                 }))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let carried_items = self
+            .simulation
+            .items()
+            .filter(|item| item.carrier().is_some())
+            .map(CarriedItemSnapshot::from_carried_item)
+            .collect();
         let ground_items = requested_chunks
             .iter()
             .copied()
@@ -161,6 +185,11 @@ impl Application {
             .map(CharacterSnapshot::from)
             .collect();
         let jobs = self.simulation.jobs().map(JobSnapshot::from).collect();
+        let stockpiles = self
+            .simulation
+            .stockpiles()
+            .map(StockpileSnapshot::from)
+            .collect();
 
         Ok(ClientSnapshot {
             tick: self.simulation.tick(),
@@ -169,10 +198,13 @@ impl Application {
             item_revision: self.simulation.item_revision(),
             resource_revision: self.simulation.resource_revision(),
             job_revision: self.simulation.job_revision(),
+            stockpile_revision: self.simulation.stockpile_revision(),
             chunks,
             ground_items,
+            carried_items,
             natural_resources,
             jobs,
+            stockpiles,
             characters,
             navigation: query.navigation_for.and_then(|id| {
                 self.simulation
