@@ -3,16 +3,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use progressus_app::{
-    CHUNK_SIDE, CharacterSnapshot, ChunkCoord, EntityId, LocalCell, SUBUNITS_PER_CELL, Terrain,
-    WorldCell, WorldPosition,
+    CHUNK_SIDE, CharacterSnapshot, ChunkCoord, EntityId, GroundItemSnapshot, ItemKind, LocalCell,
+    SUBUNITS_PER_CELL, Terrain, WorldCell, WorldPosition,
 };
 
 use crate::navigation::{SelectedCharacter, VisualMotion, interpolate_trace};
-use crate::presentation::{CharacterSyncAction, VisibleChunkWindow, character_sync_actions};
+use crate::presentation::{
+    CharacterSyncAction, GroundItemSyncAction, VisibleChunkWindow, character_sync_actions,
+    ground_item_sync_actions,
+};
 use crate::runtime::AuthoritativeClient;
 
 const CELL_SIZE: f32 = 12.0;
 const TERRAIN_Z: f32 = 0.0;
+const GROUND_ITEM_Z: f32 = 5.0;
 const CHARACTER_Z: f32 = 10.0;
 const CAMERA_PAN_SPEED: f32 = 500.0;
 const MIN_CAMERA_SCALE: f32 = 0.25;
@@ -27,6 +31,9 @@ pub(crate) struct CharacterVisual {
     pub(crate) id: EntityId,
 }
 
+#[derive(Component)]
+pub(crate) struct GroundItemVisual;
+
 #[derive(Resource, Default)]
 pub(crate) struct PresentationCache {
     pub(crate) render_origin: Option<WorldCell>,
@@ -34,7 +41,9 @@ pub(crate) struct PresentationCache {
     pub(crate) visible_window: Option<VisibleChunkWindow>,
     pub(crate) terrain_root: Option<Entity>,
     pub(crate) exploration_revision: Option<u64>,
+    pub(crate) item_revision: Option<u64>,
     pub(crate) characters: BTreeMap<EntityId, Entity>,
+    pub(crate) ground_items: BTreeMap<EntityId, Entity>,
 }
 
 #[derive(Resource, Default)]
@@ -107,6 +116,7 @@ pub(crate) fn sync_presentation(
 
     if cache.visible_window.as_ref() != Some(&current_window)
         || cache.exploration_revision != Some(authoritative.snapshot().exploration_revision)
+        || cache.item_revision != Some(authoritative.snapshot().item_revision)
     {
         let terrain = match authoritative.terrain_snapshot(current_window.coordinates().to_vec()) {
             Ok(terrain) => terrain,
@@ -122,9 +132,16 @@ pub(crate) fn sync_presentation(
         }
         let new_root = spawn_terrain(&mut commands, &terrain.chunks, render_origin);
         cache.terrain_root = Some(new_root);
+        sync_ground_items(
+            &mut commands,
+            &mut cache,
+            &terrain.ground_items,
+            render_origin,
+        );
         cache.central_chunk = Some(current_center);
         cache.visible_window = Some(current_window);
-        cache.exploration_revision = Some(authoritative.snapshot().exploration_revision);
+        cache.exploration_revision = Some(terrain.exploration_revision);
+        cache.item_revision = Some(terrain.item_revision);
         position_characters(&mut commands, &authoritative, &cache, render_origin);
     }
 }
@@ -204,6 +221,55 @@ fn spawn_terrain(
         }
     });
     root_id
+}
+
+fn sync_ground_items(
+    commands: &mut Commands,
+    cache: &mut PresentationCache,
+    items: &[GroundItemSnapshot],
+    origin: WorldCell,
+) {
+    let rendered = cache.ground_items.keys().copied().collect::<BTreeSet<_>>();
+    for action in ground_item_sync_actions(&rendered, items) {
+        match action {
+            GroundItemSyncAction::Spawn(item) => {
+                let id = item.id;
+                let entity = commands
+                    .spawn((
+                        Sprite::from_color(item_color(item.kind), Vec2::splat(CELL_SIZE * 0.35)),
+                        Transform::from_translation(item_translation(&item, origin)),
+                        GroundItemVisual,
+                    ))
+                    .id();
+                cache.ground_items.insert(id, entity);
+            }
+            GroundItemSyncAction::Update(item) => {
+                if let Some(entity) = cache.ground_items.get(&item.id) {
+                    commands
+                        .entity(*entity)
+                        .insert(Transform::from_translation(item_translation(&item, origin)));
+                }
+            }
+            GroundItemSyncAction::Despawn(id) => {
+                if let Some(entity) = cache.ground_items.remove(&id) {
+                    commands.entity(entity).despawn();
+                }
+            }
+        }
+    }
+}
+
+fn item_translation(item: &GroundItemSnapshot, origin: WorldCell) -> Vec3 {
+    let origin = WorldPosition::from_cell_center(origin)
+        .expect("a valid world cell has a representable fixed-point center");
+    world_position_translation(item.position, origin, GROUND_ITEM_Z)
+}
+
+fn item_color(kind: ItemKind) -> Color {
+    match kind {
+        ItemKind::Wood => Color::srgb(0.48, 0.27, 0.10),
+        ItemKind::Stone => Color::srgb(0.72, 0.72, 0.68),
+    }
 }
 
 fn sync_characters(
@@ -446,9 +512,15 @@ pub(crate) fn camera_controls(
 mod tests {
     use bevy::ecs::world::{CommandQueue, World};
     use bevy::prelude::{Vec3, Visibility};
-    use progressus_app::{ChunkSnapshot, KnownTerrain, Terrain, WorldCell, WorldPosition};
+    use progressus_app::{
+        ChunkSnapshot, EntityId, GroundItemSnapshot, ItemKind, KnownTerrain, Terrain, WorldCell,
+        WorldPosition,
+    };
 
-    use super::{CHARACTER_Z, CHUNK_SIDE, LocalCell, spawn_terrain, world_position_translation};
+    use super::{
+        CHARACTER_Z, CHUNK_SIDE, GROUND_ITEM_Z, LocalCell, item_translation, spawn_terrain,
+        world_position_translation,
+    };
 
     #[test]
     fn terrain_root_has_visibility_for_sprite_children() {
@@ -475,6 +547,23 @@ mod tests {
         queue.apply(&mut world);
 
         assert!(world.entity(root).contains::<Visibility>());
+    }
+
+    #[test]
+    fn ground_item_translation_preserves_exact_subcell_position() {
+        let origin_cell = WorldCell::new(0, 0);
+        let origin = WorldPosition::from_cell_center(origin_cell).unwrap();
+        let item = GroundItemSnapshot {
+            id: EntityId::new(6).unwrap(),
+            kind: ItemKind::Wood,
+            quantity: 8,
+            position: origin.checked_translate(256, -128).unwrap(),
+        };
+
+        assert_eq!(
+            item_translation(&item, origin_cell),
+            Vec3::new(3.0, -1.5, GROUND_ITEM_Z)
+        );
     }
 
     #[test]

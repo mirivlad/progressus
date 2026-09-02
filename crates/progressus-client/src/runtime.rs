@@ -269,7 +269,9 @@ mod tests {
     use super::{AuthoritativeClient, advance_authority};
     use crate::interaction::TickScheduler;
     use crate::navigation::{SelectedCharacter, VisualMotion};
-    use crate::render::{CharacterVisual, PresentationCache, TerrainRoot, sync_presentation};
+    use crate::render::{
+        CharacterVisual, GroundItemVisual, PresentationCache, TerrainRoot, sync_presentation,
+    };
 
     const TERRAIN_CELL_COUNT: usize = 9 * (CHUNK_SIDE as usize) * (CHUNK_SIDE as usize);
     const CROSSING_WALK_STEP_LIMIT: u64 = 1_024;
@@ -584,8 +586,14 @@ mod tests {
         assert_eq!(cache.terrain_root, Some(root));
         assert_eq!(terrain_children(&app, root), terrain);
         assert_eq!(cache.characters.len(), 5);
+        assert_eq!(cache.ground_items.len(), 4);
         for entity in cache.characters.values() {
             assert!(app.world().get_entity(*entity).is_ok());
+        }
+        for (id, entity) in &cache.ground_items {
+            assert!(app.world().get_entity(*entity).is_ok());
+            assert!(app.world().entity(*entity).contains::<GroundItemVisual>());
+            assert_eq!(cache.ground_items.get(id), Some(entity));
         }
     }
 

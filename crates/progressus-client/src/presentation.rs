@@ -2,10 +2,14 @@
 mod tests {
     use std::collections::BTreeSet;
 
-    use progressus_app::{CharacterSnapshot, ChunkCoord, MovementState, WorldCell, WorldPosition};
+    use progressus_app::{
+        CharacterSnapshot, ChunkCoord, GroundItemSnapshot, ItemKind, MovementState, WorldCell,
+        WorldPosition,
+    };
 
     use super::{
-        CharacterSyncAction, VisibleChunkWindow, character_sync_actions, terrain_refresh_needed,
+        CharacterSyncAction, GroundItemSyncAction, VisibleChunkWindow, character_sync_actions,
+        ground_item_sync_actions, terrain_refresh_needed,
     };
 
     #[test]
@@ -72,10 +76,32 @@ mod tests {
             ],
         );
     }
+
+    #[test]
+    fn ground_item_reconciliation_uses_stable_ids_and_removes_missing_items() {
+        let rendered = BTreeSet::from([
+            progressus_app::EntityId::new(6).unwrap(),
+            progressus_app::EntityId::new(20).unwrap(),
+        ]);
+        let item = GroundItemSnapshot {
+            id: progressus_app::EntityId::new(6).unwrap(),
+            kind: ItemKind::Wood,
+            quantity: 8,
+            position: WorldPosition::from_subunits(-1888, 180).unwrap(),
+        };
+
+        assert_eq!(
+            ground_item_sync_actions(&rendered, std::slice::from_ref(&item)),
+            vec![
+                GroundItemSyncAction::Update(item),
+                GroundItemSyncAction::Despawn(progressus_app::EntityId::new(20).unwrap()),
+            ]
+        );
+    }
 }
 use std::collections::{BTreeMap, BTreeSet};
 
-use progressus_app::{CharacterSnapshot, ChunkCoord, EntityId};
+use progressus_app::{CharacterSnapshot, ChunkCoord, EntityId, GroundItemSnapshot};
 
 pub const VISIBLE_CHUNK_RADIUS: i64 = 1;
 
@@ -145,6 +171,13 @@ pub enum CharacterSyncAction {
     Despawn(EntityId),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum GroundItemSyncAction {
+    Spawn(GroundItemSnapshot),
+    Update(GroundItemSnapshot),
+    Despawn(EntityId),
+}
+
 pub fn controlled_character(characters: &[CharacterSnapshot]) -> Option<&CharacterSnapshot> {
     let cora = EntityId::new(3)?;
     characters.iter().find(|character| character.id == cora)
@@ -174,6 +207,31 @@ pub fn character_sync_actions(
     for id in rendered {
         if !authoritative.contains_key(id) {
             actions.push(CharacterSyncAction::Despawn(*id));
+        }
+    }
+    actions
+}
+
+pub fn ground_item_sync_actions(
+    rendered: &BTreeSet<EntityId>,
+    items: &[GroundItemSnapshot],
+) -> Vec<GroundItemSyncAction> {
+    let authoritative = items
+        .iter()
+        .cloned()
+        .map(|item| (item.id, item))
+        .collect::<BTreeMap<_, _>>();
+    let mut actions = Vec::new();
+    for (id, item) in &authoritative {
+        actions.push(if rendered.contains(id) {
+            GroundItemSyncAction::Update(item.clone())
+        } else {
+            GroundItemSyncAction::Spawn(item.clone())
+        });
+    }
+    for id in rendered {
+        if !authoritative.contains_key(id) {
+            actions.push(GroundItemSyncAction::Despawn(*id));
         }
     }
     actions
