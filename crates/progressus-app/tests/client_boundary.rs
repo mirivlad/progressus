@@ -1,5 +1,5 @@
 use progressus_app::{
-    Application, CHUNK_SIDE, CharacterSnapshot, ChunkCoord, Command, Direction, EntityId,
+    Application, CHUNK_SIDE, CharacterSnapshot, ChunkCoord, Command, Direction, EntityId, ItemKind,
     KnownTerrain, LocalCell, MovementState, NewGameOptions, SimulationTick, SnapshotQuery, Terrain,
     WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
 };
@@ -43,6 +43,20 @@ fn snapshot_is_bounded_ordered_and_renderable() {
         chunk.side == CHUNK_SIDE
             && chunk.cells.len() == usize::from(CHUNK_SIDE) * usize::from(CHUNK_SIDE)
     }));
+
+    assert_eq!(
+        snapshot
+            .ground_items
+            .iter()
+            .map(|item| (item.id.value(), item.kind, item.quantity))
+            .collect::<Vec<_>>(),
+        vec![
+            (6, ItemKind::Wood, 8),
+            (7, ItemKind::Stone, 6),
+            (8, ItemKind::Wood, 10),
+            (9, ItemKind::Stone, 8),
+        ]
+    );
 
     assert_eq!(
         snapshot.characters,
@@ -108,6 +122,7 @@ fn snapshots_do_not_borrow_or_mutate_authoritative_state() {
     let expected = application.snapshot(query.clone()).unwrap();
     let mut detached = application.snapshot(query.clone()).unwrap();
     detached.chunks.clear();
+    detached.ground_items.clear();
     detached.characters[0].name = "renderer-owned name".to_owned();
 
     assert_eq!(application.snapshot(query).unwrap(), expected);

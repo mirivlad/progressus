@@ -6,12 +6,14 @@ mod read_model;
 use progressus_sim::{Simulation, SimulationError};
 
 pub use progressus_sim::{
-    CHUNK_SIDE, ChunkCoord, DEFAULT_CHARACTER_SPEED, Direction, EntityId, InteractionRadius,
-    LocalCell, MovementSpeed, MovementState, SUBUNITS_PER_CELL, SimulationTick, Terrain, WorldCell,
+    CHUNK_SIDE, ChunkCoord, DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED,
+    Direction, EntityId, InteractionRadius, ItemKind, ItemLocation, ItemQuantity, LocalCell,
+    MovementSpeed, MovementState, SUBUNITS_PER_CELL, SimulationTick, Terrain, WorldCell,
     WorldPosition, WorldSeed, WorldgenVersion,
 };
 pub use read_model::{
-    CharacterSnapshot, ChunkSnapshot, ClientSnapshot, KnownTerrain, NavigationSnapshot,
+    CharacterSnapshot, ChunkSnapshot, ClientSnapshot, GroundItemSnapshot, KnownTerrain,
+    NavigationSnapshot,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -78,6 +80,7 @@ impl Application {
     pub fn snapshot(&self, mut query: SnapshotQuery) -> Result<ClientSnapshot, ApplicationError> {
         query.chunks.sort_unstable();
         query.chunks.dedup();
+        let requested_chunks = query.chunks.clone();
 
         let chunks = query
             .chunks
@@ -122,6 +125,15 @@ impl Application {
                 }))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let ground_items = requested_chunks
+            .into_iter()
+            .flat_map(|coordinate| self.simulation.ground_items_in_chunk(coordinate))
+            .filter(|item| {
+                item.ground_position()
+                    .is_some_and(|position| self.simulation.is_explored(position.containing_cell()))
+            })
+            .map(GroundItemSnapshot::from_ground_item)
+            .collect();
         let characters = self
             .simulation
             .characters()
@@ -132,7 +144,9 @@ impl Application {
             tick: self.simulation.tick(),
             worldgen_version: self.simulation.worldgen_version(),
             exploration_revision: self.simulation.exploration_revision(),
+            item_revision: self.simulation.item_revision(),
             chunks,
+            ground_items,
             characters,
             navigation: query.navigation_for.and_then(|id| {
                 self.simulation
@@ -217,6 +231,101 @@ mod tests {
         assert_eq!(
             snapshot.chunks[0].known_terrain_at(local),
             Some(Terrain::Rock)
+        );
+    }
+
+    #[test]
+    fn chunk_query_publishes_only_explored_ground_items_in_deterministic_order() {
+        let application = Application::new_game(NewGameOptions {
+            seed: WorldSeed::new(42),
+        })
+        .unwrap();
+
+        let lightweight = application.snapshot(SnapshotQuery::default()).unwrap();
+        assert!(lightweight.ground_items.is_empty());
+
+        let snapshot = application
+            .snapshot(SnapshotQuery {
+                chunks: vec![
+                    ChunkCoord::new(0, 0),
+                    ChunkCoord::new(-1, 0),
+                    ChunkCoord::new(0, 0),
+                ],
+                ..SnapshotQuery::default()
+            })
+            .unwrap();
+
+        assert_eq!(
+            snapshot
+                .ground_items
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            (6..=9)
+                .map(|value| EntityId::new(value).unwrap())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(snapshot.ground_items[0].kind, ItemKind::Wood);
+        assert_eq!(snapshot.ground_items[0].quantity, 8);
+        assert_eq!(
+            snapshot.ground_items[0].position,
+            WorldPosition::from_cell_origin(WorldCell::new(-2, 0))
+                .unwrap()
+                .checked_translate(160, 180)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn item_revision_and_ground_snapshot_follow_authoritative_transfer() {
+        let mut application = Application::new_game(NewGameOptions {
+            seed: WorldSeed::new(42),
+        })
+        .unwrap();
+        let query = SnapshotQuery {
+            chunks: vec![ChunkCoord::new(-1, 0)],
+            ..SnapshotQuery::default()
+        };
+        let before = application.snapshot(query.clone()).unwrap();
+        assert!(
+            before
+                .ground_items
+                .iter()
+                .any(|item| item.id == EntityId::new(6).unwrap())
+        );
+
+        application
+            .simulation
+            .pick_up_item(EntityId::new(1).unwrap(), EntityId::new(6).unwrap())
+            .unwrap();
+        let carried = application.snapshot(query.clone()).unwrap();
+        assert_eq!(carried.item_revision, before.item_revision + 1);
+        assert!(
+            !carried
+                .ground_items
+                .iter()
+                .any(|item| item.id == EntityId::new(6).unwrap())
+        );
+
+        let destination = WorldPosition::from_cell_center(WorldCell::new(-2, 0)).unwrap();
+        application
+            .simulation
+            .drop_item(
+                EntityId::new(1).unwrap(),
+                EntityId::new(6).unwrap(),
+                destination,
+            )
+            .unwrap();
+        let dropped = application.snapshot(query).unwrap();
+        assert_eq!(dropped.item_revision, before.item_revision + 2);
+        assert_eq!(
+            dropped
+                .ground_items
+                .iter()
+                .find(|item| item.id == EntityId::new(6).unwrap())
+                .unwrap()
+                .position,
+            destination
         );
     }
 
