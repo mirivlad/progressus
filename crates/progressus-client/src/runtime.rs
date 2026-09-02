@@ -11,6 +11,7 @@ use progressus_app::{
 use crate::interaction::{TickScheduler, movement_command};
 use crate::navigation::{SelectedCharacter, VisualMotion, quantize_local_click, select_nearest};
 use crate::presentation::PresentationError;
+use crate::procedural_assets::ProceduralAssetRegistry;
 use crate::render::{
     NavigationDebug, PresentationCache, camera_controls, setup_camera, sync_presentation,
 };
@@ -225,6 +226,7 @@ pub fn run() -> Result<(), ClientError> {
         .insert_resource(AuthoritativeClient::new()?)
         .insert_resource(TickScheduler::default())
         .insert_resource(PresentationCache::default())
+        .insert_resource(ProceduralAssetRegistry::default())
         .insert_resource(NavigationDebug::default())
         .insert_resource(SelectedCharacter::default())
         .insert_resource(VisualMotion::default())
@@ -257,8 +259,8 @@ mod tests {
     use std::collections::{BTreeMap, VecDeque, btree_map::Entry};
 
     use bevy::prelude::{
-        App, ButtonInput, Camera2d, Children, Entity, IntoScheduleConfigs, KeyCode, Time,
-        Transform, Update, Vec3,
+        App, Assets, ButtonInput, Camera2d, Children, Entity, Image, IntoScheduleConfigs, KeyCode,
+        Time, Transform, Update, Vec3,
     };
     use progressus_app::{
         Application, CHUNK_SIDE, CharacterSnapshot, ChunkCoord, ClientSnapshot, Command, Direction,
@@ -269,6 +271,7 @@ mod tests {
     use super::{AuthoritativeClient, advance_authority};
     use crate::interaction::TickScheduler;
     use crate::navigation::{SelectedCharacter, VisualMotion};
+    use crate::procedural_assets::ProceduralAssetRegistry;
     use crate::render::{
         CharacterVisual, GroundItemVisual, NaturalResourceVisual, PresentationCache, TerrainRoot,
         sync_presentation,
@@ -289,6 +292,8 @@ mod tests {
             .insert_resource(PresentationCache::default())
             .insert_resource(SelectedCharacter::default())
             .insert_resource(VisualMotion::default())
+            .init_resource::<Assets<Image>>()
+            .insert_resource(ProceduralAssetRegistry::default())
             .add_systems(Update, sync_presentation);
         app
     }
@@ -376,6 +381,8 @@ mod tests {
             .insert_resource(cache)
             .insert_resource(SelectedCharacter(Some(super::cora_id())))
             .insert_resource(VisualMotion::default())
+            .init_resource::<Assets<Image>>()
+            .insert_resource(ProceduralAssetRegistry::default())
             .add_systems(Update, sync_presentation);
 
         app.update();
@@ -827,6 +834,8 @@ mod tests {
             .insert_resource(VisualMotion::default())
             .insert_resource(ButtonInput::<KeyCode>::default())
             .insert_resource(Time::<()>::default())
+            .init_resource::<Assets<Image>>()
+            .insert_resource(ProceduralAssetRegistry::default())
             .add_systems(Update, (advance_authority, sync_presentation).chain());
         app.update();
 

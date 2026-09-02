@@ -3,15 +3,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use progressus_app::{
-    CHUNK_SIDE, CharacterSnapshot, ChunkCoord, EntityId, GroundItemSnapshot, ItemKind, LocalCell,
-    NaturalResourceKind, NaturalResourceSnapshot, SUBUNITS_PER_CELL, Terrain, WorldCell,
-    WorldPosition,
+    CHUNK_SIDE, CharacterSnapshot, ChunkCoord, EntityId, GroundItemSnapshot, LocalCell,
+    NaturalResourceKind, NaturalResourceSnapshot, SUBUNITS_PER_CELL, WorldCell, WorldPosition,
 };
 
 use crate::navigation::{SelectedCharacter, VisualMotion, interpolate_trace};
 use crate::presentation::{
     CharacterSyncAction, GroundItemSyncAction, NaturalResourceSyncAction, VisibleChunkWindow,
     character_sync_actions, ground_item_sync_actions, natural_resource_sync_actions,
+};
+use crate::procedural_assets::{
+    ProceduralAssetParams, ProceduralAssetRegistry, character_asset, item_asset, resource_asset,
+    terrain_asset,
 };
 use crate::runtime::AuthoritativeClient;
 
@@ -66,6 +69,7 @@ pub(crate) fn sync_presentation(
     mut cache: ResMut<PresentationCache>,
     mut selected: ResMut<SelectedCharacter>,
     mut motion: ResMut<VisualMotion>,
+    mut procedural_assets: ProceduralAssetParams,
     cameras: Query<(&Transform, &Projection), With<Camera2d>>,
 ) {
     let snapshot_dirty = authoritative.take_snapshot_dirty();
@@ -88,7 +92,17 @@ pub(crate) fn sync_presentation(
     };
 
     if snapshot_dirty {
-        sync_characters(&mut commands, &authoritative, &mut cache, Some(origin));
+        {
+            let (images, registry) = procedural_assets.parts();
+            sync_characters(
+                &mut commands,
+                &authoritative,
+                &mut cache,
+                Some(origin),
+                images,
+                registry,
+            );
+        }
 
         if let Some(id) = selected.0 {
             if !authoritative
@@ -138,20 +152,39 @@ pub(crate) fn sync_presentation(
         if let Some(previous_root) = cache.terrain_root {
             commands.entity(previous_root).despawn();
         }
-        let new_root = spawn_terrain(&mut commands, &terrain.chunks, render_origin);
+        let new_root = {
+            let (images, registry) = procedural_assets.parts();
+            spawn_terrain(
+                &mut commands,
+                &terrain.chunks,
+                render_origin,
+                images,
+                registry,
+            )
+        };
         cache.terrain_root = Some(new_root);
-        sync_natural_resources(
-            &mut commands,
-            &mut cache,
-            &terrain.natural_resources,
-            render_origin,
-        );
-        sync_ground_items(
-            &mut commands,
-            &mut cache,
-            &terrain.ground_items,
-            render_origin,
-        );
+        {
+            let (images, registry) = procedural_assets.parts();
+            sync_natural_resources(
+                &mut commands,
+                &mut cache,
+                &terrain.natural_resources,
+                render_origin,
+                images,
+                registry,
+            );
+        }
+        {
+            let (images, registry) = procedural_assets.parts();
+            sync_ground_items(
+                &mut commands,
+                &mut cache,
+                &terrain.ground_items,
+                render_origin,
+                images,
+                registry,
+            );
+        }
         cache.central_chunk = Some(current_center);
         cache.visible_window = Some(current_window);
         cache.exploration_revision = Some(terrain.exploration_revision);
@@ -210,6 +243,8 @@ fn spawn_terrain(
     commands: &mut Commands,
     chunks: &[progressus_app::ChunkSnapshot],
     origin: WorldCell,
+    images: &mut Assets<Image>,
+    procedural_assets: &mut ProceduralAssetRegistry,
 ) -> Entity {
     let mut root = commands.spawn((TerrainRoot, Transform::default(), Visibility::default()));
     let root_id = root.id();
@@ -226,7 +261,11 @@ fn spawn_terrain(
                         continue;
                     };
                     parent.spawn((
-                        Sprite::from_color(terrain_color(terrain), Vec2::splat(CELL_SIZE)),
+                        procedural_assets.sprite(
+                            images,
+                            terrain_asset(terrain, world_cell),
+                            Vec2::splat(CELL_SIZE),
+                        ),
                         Transform::from_translation(world_translation(
                             world_cell, origin, TERRAIN_Z,
                         )),
@@ -243,6 +282,8 @@ fn sync_natural_resources(
     cache: &mut PresentationCache,
     resources: &[NaturalResourceSnapshot],
     origin: WorldCell,
+    images: &mut Assets<Image>,
+    procedural_assets: &mut ProceduralAssetRegistry,
 ) {
     let rendered = cache
         .natural_resources
@@ -255,9 +296,10 @@ fn sync_natural_resources(
                 let cell = resource.cell;
                 let entity = commands
                     .spawn((
-                        Sprite::from_color(
-                            natural_resource_color(resource.kind),
-                            Vec2::splat(CELL_SIZE * 0.62),
+                        procedural_assets.sprite(
+                            images,
+                            resource_asset(resource.kind, resource.cell),
+                            natural_resource_size(resource.kind),
                         ),
                         Transform::from_translation(world_translation(
                             cell,
@@ -272,9 +314,10 @@ fn sync_natural_resources(
             NaturalResourceSyncAction::Update(resource) => {
                 if let Some(entity) = cache.natural_resources.get(&resource.cell) {
                     commands.entity(*entity).insert((
-                        Sprite::from_color(
-                            natural_resource_color(resource.kind),
-                            Vec2::splat(CELL_SIZE * 0.62),
+                        procedural_assets.sprite(
+                            images,
+                            resource_asset(resource.kind, resource.cell),
+                            natural_resource_size(resource.kind),
                         ),
                         Transform::from_translation(world_translation(
                             resource.cell,
@@ -293,10 +336,10 @@ fn sync_natural_resources(
     }
 }
 
-fn natural_resource_color(kind: NaturalResourceKind) -> Color {
+fn natural_resource_size(kind: NaturalResourceKind) -> Vec2 {
     match kind {
-        NaturalResourceKind::Tree => Color::srgb(0.06, 0.30, 0.08),
-        NaturalResourceKind::StoneOutcrop => Color::srgb(0.30, 0.30, 0.32),
+        NaturalResourceKind::Tree => Vec2::splat(CELL_SIZE * 1.25),
+        NaturalResourceKind::StoneOutcrop => Vec2::splat(CELL_SIZE * 0.95),
     }
 }
 
@@ -305,6 +348,8 @@ fn sync_ground_items(
     cache: &mut PresentationCache,
     items: &[GroundItemSnapshot],
     origin: WorldCell,
+    images: &mut Assets<Image>,
+    procedural_assets: &mut ProceduralAssetRegistry,
 ) {
     let rendered = cache.ground_items.keys().copied().collect::<BTreeSet<_>>();
     for action in ground_item_sync_actions(&rendered, items) {
@@ -313,7 +358,11 @@ fn sync_ground_items(
                 let id = item.id;
                 let entity = commands
                     .spawn((
-                        Sprite::from_color(item_color(item.kind), Vec2::splat(CELL_SIZE * 0.35)),
+                        procedural_assets.sprite(
+                            images,
+                            item_asset(item.kind, item.id),
+                            Vec2::splat(CELL_SIZE * 0.55),
+                        ),
                         Transform::from_translation(item_translation(&item, origin)),
                         GroundItemVisual,
                     ))
@@ -322,9 +371,14 @@ fn sync_ground_items(
             }
             GroundItemSyncAction::Update(item) => {
                 if let Some(entity) = cache.ground_items.get(&item.id) {
-                    commands
-                        .entity(*entity)
-                        .insert(Transform::from_translation(item_translation(&item, origin)));
+                    commands.entity(*entity).insert((
+                        procedural_assets.sprite(
+                            images,
+                            item_asset(item.kind, item.id),
+                            Vec2::splat(CELL_SIZE * 0.55),
+                        ),
+                        Transform::from_translation(item_translation(&item, origin)),
+                    ));
                 }
             }
             GroundItemSyncAction::Despawn(id) => {
@@ -342,18 +396,13 @@ fn item_translation(item: &GroundItemSnapshot, origin: WorldCell) -> Vec3 {
     world_position_translation(item.position, origin, GROUND_ITEM_Z)
 }
 
-fn item_color(kind: ItemKind) -> Color {
-    match kind {
-        ItemKind::Wood => Color::srgb(0.48, 0.27, 0.10),
-        ItemKind::Stone => Color::srgb(0.72, 0.72, 0.68),
-    }
-}
-
 fn sync_characters(
     commands: &mut Commands,
     authoritative: &AuthoritativeClient,
     cache: &mut PresentationCache,
     rendered_origin: Option<WorldCell>,
+    images: &mut Assets<Image>,
+    procedural_assets: &mut ProceduralAssetRegistry,
 ) {
     let origin = rendered_origin;
     let rendered = cache.characters.keys().copied().collect::<BTreeSet<_>>();
@@ -364,9 +413,10 @@ fn sync_characters(
                 let character_id = visual.id;
                 let entity = commands
                     .spawn((
-                        Sprite::from_color(
-                            Color::srgb(1.0, 0.85, 0.2),
-                            Vec2::splat(CELL_SIZE * 0.75),
+                        procedural_assets.sprite(
+                            images,
+                            character_asset(character.id),
+                            Vec2::splat(CELL_SIZE * 0.9),
                         ),
                         origin.map_or_else(Transform::default, |origin| {
                             Transform::from_translation(character_translation(&character, origin))
@@ -540,14 +590,6 @@ fn world_translation(world_cell: WorldCell, origin: WorldCell, z: f32) -> Vec3 {
     Vec3::new(relative_x * CELL_SIZE, relative_y * CELL_SIZE, z)
 }
 
-fn terrain_color(terrain: Terrain) -> Color {
-    match terrain {
-        Terrain::Grass => Color::srgb(0.25, 0.55, 0.22),
-        Terrain::Water => Color::srgb(0.12, 0.35, 0.72),
-        Terrain::Rock => Color::srgb(0.42, 0.42, 0.44),
-    }
-}
-
 pub(crate) fn camera_controls(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
@@ -588,7 +630,7 @@ pub(crate) fn camera_controls(
 #[cfg(test)]
 mod tests {
     use bevy::ecs::world::{CommandQueue, World};
-    use bevy::prelude::{Vec3, Visibility};
+    use bevy::prelude::{Assets, Image, Vec3, Visibility};
     use progressus_app::{
         ChunkSnapshot, EntityId, GroundItemSnapshot, ItemKind, KnownTerrain, Terrain, WorldCell,
         WorldPosition,
@@ -598,6 +640,7 @@ mod tests {
         CHARACTER_Z, CHUNK_SIDE, GROUND_ITEM_Z, LocalCell, item_translation, spawn_terrain,
         world_position_translation,
     };
+    use crate::procedural_assets::ProceduralAssetRegistry;
 
     #[test]
     fn terrain_root_has_visibility_for_sprite_children() {
@@ -611,6 +654,8 @@ mod tests {
                 usize::from(CHUNK_SIDE) * usize::from(CHUNK_SIDE)
             ],
         }];
+        let mut images = Assets::<Image>::default();
+        let mut procedural_assets = ProceduralAssetRegistry::default();
         let root = {
             let mut commands = bevy::prelude::Commands::new(&mut queue, &world);
             spawn_terrain(
@@ -619,6 +664,8 @@ mod tests {
                 progressus_app::ChunkCoord::new(0, 0)
                     .world_cell(LocalCell::new(0, 0))
                     .unwrap(),
+                &mut images,
+                &mut procedural_assets,
             )
         };
         queue.apply(&mut world);

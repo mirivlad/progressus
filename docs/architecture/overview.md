@@ -300,6 +300,12 @@ Large-scale aggregation is a later concern and must conserve quantities when int
 
 This is an ownership/location foundation, not a completed inventory system: there is no stored/container location, stack split/merge, consumption/destruction, harvestable resource source, hauling job, stockpile, construction, crafting, persistence, or residency yet.
 
+### Procedural presentation assets
+
+Prototype visual art is source-controlled as Rust code under `assets/procedural/`. The Bevy client supplies a small integer RGBA canvas/rasterizer and lazily turns those recipes into nearest-filtered `Image` assets. Terrain, characters, ground-item stacks, trees, and stone outcrops use bounded deterministic variants selected from `WorldCell` or stable `EntityId`; the registry caches each recipe/variant pair rather than allocating one texture per world object.
+
+This pipeline is strictly presentation-only. Procedural art code does not enter `progressus-sim`, `progressus-app`, or `progressus-worldgen`, and pixels never become authoritative state. See [`ADR-0005`](../adr/0005-procedural-visual-assets-as-code.md).
+
 ## 15. Production
 
 Recipes are data definitions interpreted by generic systems.
