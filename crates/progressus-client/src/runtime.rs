@@ -270,7 +270,8 @@ mod tests {
     use crate::interaction::TickScheduler;
     use crate::navigation::{SelectedCharacter, VisualMotion};
     use crate::render::{
-        CharacterVisual, GroundItemVisual, PresentationCache, TerrainRoot, sync_presentation,
+        CharacterVisual, GroundItemVisual, NaturalResourceVisual, PresentationCache, TerrainRoot,
+        sync_presentation,
     };
 
     const TERRAIN_CELL_COUNT: usize = 9 * (CHUNK_SIDE as usize) * (CHUNK_SIDE as usize);
@@ -587,6 +588,7 @@ mod tests {
         assert_eq!(terrain_children(&app, root), terrain);
         assert_eq!(cache.characters.len(), 5);
         assert_eq!(cache.ground_items.len(), 4);
+        assert!(!cache.natural_resources.is_empty());
         for entity in cache.characters.values() {
             assert!(app.world().get_entity(*entity).is_ok());
         }
@@ -594,6 +596,15 @@ mod tests {
             assert!(app.world().get_entity(*entity).is_ok());
             assert!(app.world().entity(*entity).contains::<GroundItemVisual>());
             assert_eq!(cache.ground_items.get(id), Some(entity));
+        }
+        for (cell, entity) in &cache.natural_resources {
+            assert!(app.world().get_entity(*entity).is_ok());
+            assert!(
+                app.world()
+                    .entity(*entity)
+                    .contains::<NaturalResourceVisual>()
+            );
+            assert_eq!(cache.natural_resources.get(cell), Some(entity));
         }
     }
 

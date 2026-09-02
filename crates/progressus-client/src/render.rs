@@ -4,18 +4,20 @@ use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use progressus_app::{
     CHUNK_SIDE, CharacterSnapshot, ChunkCoord, EntityId, GroundItemSnapshot, ItemKind, LocalCell,
-    SUBUNITS_PER_CELL, Terrain, WorldCell, WorldPosition,
+    NaturalResourceKind, NaturalResourceSnapshot, SUBUNITS_PER_CELL, Terrain, WorldCell,
+    WorldPosition,
 };
 
 use crate::navigation::{SelectedCharacter, VisualMotion, interpolate_trace};
 use crate::presentation::{
-    CharacterSyncAction, GroundItemSyncAction, VisibleChunkWindow, character_sync_actions,
-    ground_item_sync_actions,
+    CharacterSyncAction, GroundItemSyncAction, NaturalResourceSyncAction, VisibleChunkWindow,
+    character_sync_actions, ground_item_sync_actions, natural_resource_sync_actions,
 };
 use crate::runtime::AuthoritativeClient;
 
 const CELL_SIZE: f32 = 12.0;
 const TERRAIN_Z: f32 = 0.0;
+const NATURAL_RESOURCE_Z: f32 = 3.0;
 const GROUND_ITEM_Z: f32 = 5.0;
 const CHARACTER_Z: f32 = 10.0;
 const CAMERA_PAN_SPEED: f32 = 500.0;
@@ -32,6 +34,9 @@ pub(crate) struct CharacterVisual {
 }
 
 #[derive(Component)]
+pub(crate) struct NaturalResourceVisual;
+
+#[derive(Component)]
 pub(crate) struct GroundItemVisual;
 
 #[derive(Resource, Default)]
@@ -42,8 +47,10 @@ pub(crate) struct PresentationCache {
     pub(crate) terrain_root: Option<Entity>,
     pub(crate) exploration_revision: Option<u64>,
     pub(crate) item_revision: Option<u64>,
+    pub(crate) resource_revision: Option<u64>,
     pub(crate) characters: BTreeMap<EntityId, Entity>,
     pub(crate) ground_items: BTreeMap<EntityId, Entity>,
+    pub(crate) natural_resources: BTreeMap<WorldCell, Entity>,
 }
 
 #[derive(Resource, Default)]
@@ -117,6 +124,7 @@ pub(crate) fn sync_presentation(
     if cache.visible_window.as_ref() != Some(&current_window)
         || cache.exploration_revision != Some(authoritative.snapshot().exploration_revision)
         || cache.item_revision != Some(authoritative.snapshot().item_revision)
+        || cache.resource_revision != Some(authoritative.snapshot().resource_revision)
     {
         let terrain = match authoritative.terrain_snapshot(current_window.coordinates().to_vec()) {
             Ok(terrain) => terrain,
@@ -132,6 +140,12 @@ pub(crate) fn sync_presentation(
         }
         let new_root = spawn_terrain(&mut commands, &terrain.chunks, render_origin);
         cache.terrain_root = Some(new_root);
+        sync_natural_resources(
+            &mut commands,
+            &mut cache,
+            &terrain.natural_resources,
+            render_origin,
+        );
         sync_ground_items(
             &mut commands,
             &mut cache,
@@ -142,6 +156,7 @@ pub(crate) fn sync_presentation(
         cache.visible_window = Some(current_window);
         cache.exploration_revision = Some(terrain.exploration_revision);
         cache.item_revision = Some(terrain.item_revision);
+        cache.resource_revision = Some(terrain.resource_revision);
         position_characters(&mut commands, &authoritative, &cache, render_origin);
     }
 }
@@ -221,6 +236,68 @@ fn spawn_terrain(
         }
     });
     root_id
+}
+
+fn sync_natural_resources(
+    commands: &mut Commands,
+    cache: &mut PresentationCache,
+    resources: &[NaturalResourceSnapshot],
+    origin: WorldCell,
+) {
+    let rendered = cache
+        .natural_resources
+        .keys()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    for action in natural_resource_sync_actions(&rendered, resources) {
+        match action {
+            NaturalResourceSyncAction::Spawn(resource) => {
+                let cell = resource.cell;
+                let entity = commands
+                    .spawn((
+                        Sprite::from_color(
+                            natural_resource_color(resource.kind),
+                            Vec2::splat(CELL_SIZE * 0.62),
+                        ),
+                        Transform::from_translation(world_translation(
+                            cell,
+                            origin,
+                            NATURAL_RESOURCE_Z,
+                        )),
+                        NaturalResourceVisual,
+                    ))
+                    .id();
+                cache.natural_resources.insert(cell, entity);
+            }
+            NaturalResourceSyncAction::Update(resource) => {
+                if let Some(entity) = cache.natural_resources.get(&resource.cell) {
+                    commands.entity(*entity).insert((
+                        Sprite::from_color(
+                            natural_resource_color(resource.kind),
+                            Vec2::splat(CELL_SIZE * 0.62),
+                        ),
+                        Transform::from_translation(world_translation(
+                            resource.cell,
+                            origin,
+                            NATURAL_RESOURCE_Z,
+                        )),
+                    ));
+                }
+            }
+            NaturalResourceSyncAction::Despawn(cell) => {
+                if let Some(entity) = cache.natural_resources.remove(&cell) {
+                    commands.entity(entity).despawn();
+                }
+            }
+        }
+    }
+}
+
+fn natural_resource_color(kind: NaturalResourceKind) -> Color {
+    match kind {
+        NaturalResourceKind::Tree => Color::srgb(0.06, 0.30, 0.08),
+        NaturalResourceKind::StoneOutcrop => Color::srgb(0.30, 0.30, 0.32),
+    }
 }
 
 fn sync_ground_items(

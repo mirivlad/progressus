@@ -1,6 +1,6 @@
 #[cfg(test)]
 use std::cell::Cell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
@@ -15,7 +15,7 @@ use crate::world_state::ModifiedWorld;
 use crate::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, Direction, EffectiveChunk,
     EntityId, GeneratedChunk, InteractionRadius, ItemKind, ItemLocation, ItemQuantity, ItemStack,
-    LocalCell, MovementState, SimulationTick, Terrain, WorldCell, WorldPosition,
+    LocalCell, MovementState, NaturalResource, SimulationTick, Terrain, WorldCell, WorldPosition,
     WorldPositionError, WorldSeed, WorldgenVersion, within_interaction_range,
 };
 
@@ -35,6 +35,8 @@ pub struct Simulation {
     characters: BTreeMap<EntityId, Character>,
     modified_world: ModifiedWorld,
     item_world: ItemWorld,
+    depleted_resources: BTreeSet<WorldCell>,
+    resource_revision: u64,
     explored_world: ExploredWorld,
     last_discovery_cells: BTreeMap<EntityId, WorldCell>,
     #[cfg(test)]
@@ -98,6 +100,8 @@ impl Simulation {
             characters,
             modified_world: ModifiedWorld::default(),
             item_world,
+            depleted_resources: BTreeSet::new(),
+            resource_revision: 0,
             explored_world,
             last_discovery_cells,
             #[cfg(test)]
@@ -221,6 +225,46 @@ impl Simulation {
 
     pub const fn item_revision(&self) -> u64 {
         self.item_world.revision()
+    }
+
+    pub const fn resource_revision(&self) -> u64 {
+        self.resource_revision
+    }
+
+    pub fn natural_resource_at(
+        &self,
+        position: WorldCell,
+    ) -> Result<Option<NaturalResource>, SimulationError> {
+        if self.depleted_resources.contains(&position) {
+            return Ok(None);
+        }
+        let (coordinate, local) = position.split();
+        Ok(self.generated_chunk(coordinate)?.natural_resource_at(local))
+    }
+
+    pub fn natural_resources_in_chunk(
+        &self,
+        coordinate: ChunkCoord,
+    ) -> Result<Vec<(WorldCell, NaturalResource)>, SimulationError> {
+        let generated = self.generated_chunk(coordinate)?;
+        let mut resources = Vec::new();
+        for y in 0..CHUNK_SIDE {
+            for x in 0..CHUNK_SIDE {
+                let local = LocalCell::new(x, y);
+                let Some(resource) = generated.natural_resource_at(local) else {
+                    continue;
+                };
+                let cell = coordinate
+                    .world_cell(local)
+                    .ok_or(SimulationError::Worldgen(
+                        WorldgenError::CoordinateOutOfRange(coordinate),
+                    ))?;
+                if !self.depleted_resources.contains(&cell) {
+                    resources.push((cell, resource));
+                }
+            }
+        }
+        Ok(resources)
     }
 
     pub fn pick_up_item(

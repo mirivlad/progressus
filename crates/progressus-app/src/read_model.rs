@@ -1,4 +1,7 @@
-use progressus_sim::{Character, ItemKind, ItemStack, MovementState, WorldPosition};
+use progressus_sim::{
+    Character, ItemKind, ItemStack, MovementState, NaturalResource, NaturalResourceKind,
+    WorldPosition,
+};
 
 use crate::{ChunkCoord, EntityId, LocalCell, SimulationTick, Terrain, WorldCell, WorldgenVersion};
 
@@ -8,8 +11,10 @@ pub struct ClientSnapshot {
     pub worldgen_version: WorldgenVersion,
     pub exploration_revision: u64,
     pub item_revision: u64,
+    pub resource_revision: u64,
     pub chunks: Vec<ChunkSnapshot>,
     pub ground_items: Vec<GroundItemSnapshot>,
+    pub natural_resources: Vec<NaturalResourceSnapshot>,
     pub characters: Vec<CharacterSnapshot>,
     pub navigation: Option<NavigationSnapshot>,
 }
@@ -31,6 +36,23 @@ impl GroundItemSnapshot {
             position: item
                 .ground_position()
                 .expect("ground item snapshots are built only from ground items"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NaturalResourceSnapshot {
+    pub cell: WorldCell,
+    pub kind: NaturalResourceKind,
+    pub yield_quantity: u32,
+}
+
+impl NaturalResourceSnapshot {
+    pub(crate) fn new(cell: WorldCell, resource: NaturalResource) -> Self {
+        Self {
+            cell,
+            kind: resource.kind(),
+            yield_quantity: resource.yield_quantity(),
         }
     }
 }

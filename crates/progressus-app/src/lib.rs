@@ -8,12 +8,12 @@ use progressus_sim::{Simulation, SimulationError};
 pub use progressus_sim::{
     CHUNK_SIDE, ChunkCoord, DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED,
     Direction, EntityId, InteractionRadius, ItemKind, ItemLocation, ItemQuantity, LocalCell,
-    MovementSpeed, MovementState, SUBUNITS_PER_CELL, SimulationTick, Terrain, WorldCell,
-    WorldPosition, WorldSeed, WorldgenVersion,
+    MovementSpeed, MovementState, NaturalResource, NaturalResourceKind, SUBUNITS_PER_CELL,
+    SimulationTick, Terrain, WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
 };
 pub use read_model::{
     CharacterSnapshot, ChunkSnapshot, ClientSnapshot, GroundItemSnapshot, KnownTerrain,
-    NavigationSnapshot,
+    NaturalResourceSnapshot, NavigationSnapshot,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -126,13 +126,23 @@ impl Application {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let ground_items = requested_chunks
-            .into_iter()
+            .iter()
+            .copied()
             .flat_map(|coordinate| self.simulation.ground_items_in_chunk(coordinate))
             .filter(|item| {
                 item.ground_position()
                     .is_some_and(|position| self.simulation.is_explored(position.containing_cell()))
             })
             .map(GroundItemSnapshot::from_ground_item)
+            .collect();
+        let natural_resources = requested_chunks
+            .into_iter()
+            .map(|coordinate| self.simulation.natural_resources_in_chunk(coordinate))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .filter(|(cell, _)| self.simulation.is_explored(*cell))
+            .map(|(cell, resource)| NaturalResourceSnapshot::new(cell, resource))
             .collect();
         let characters = self
             .simulation
@@ -145,8 +155,10 @@ impl Application {
             worldgen_version: self.simulation.worldgen_version(),
             exploration_revision: self.simulation.exploration_revision(),
             item_revision: self.simulation.item_revision(),
+            resource_revision: self.simulation.resource_revision(),
             chunks,
             ground_items,
+            natural_resources,
             characters,
             navigation: query.navigation_for.and_then(|id| {
                 self.simulation

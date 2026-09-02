@@ -19,8 +19,8 @@ pub use position::{
     within_interaction_range,
 };
 pub use progressus_worldgen::{
-    CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, GeneratedChunk, LocalCell, Terrain,
-    WorldCell, WorldSeed, WorldgenVersion,
+    CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, GeneratedChunk, LocalCell, NaturalResource,
+    NaturalResourceKind, Terrain, WorldCell, WorldSeed, WorldgenVersion,
 };
 pub use simulation::{Simulation, SimulationError};
 pub use world_state::EffectiveChunk;

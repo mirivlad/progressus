@@ -3,13 +3,14 @@ mod tests {
     use std::collections::BTreeSet;
 
     use progressus_app::{
-        CharacterSnapshot, ChunkCoord, GroundItemSnapshot, ItemKind, MovementState, WorldCell,
-        WorldPosition,
+        CharacterSnapshot, ChunkCoord, GroundItemSnapshot, ItemKind, MovementState,
+        NaturalResourceKind, NaturalResourceSnapshot, WorldCell, WorldPosition,
     };
 
     use super::{
-        CharacterSyncAction, GroundItemSyncAction, VisibleChunkWindow, character_sync_actions,
-        ground_item_sync_actions, terrain_refresh_needed,
+        CharacterSyncAction, GroundItemSyncAction, NaturalResourceSyncAction, VisibleChunkWindow,
+        character_sync_actions, ground_item_sync_actions, natural_resource_sync_actions,
+        terrain_refresh_needed,
     };
 
     #[test]
@@ -98,10 +99,30 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn natural_resource_reconciliation_uses_world_cells_as_stable_keys() {
+        let rendered = BTreeSet::from([WorldCell::new(2, 3), WorldCell::new(9, 9)]);
+        let resource = NaturalResourceSnapshot {
+            cell: WorldCell::new(2, 3),
+            kind: NaturalResourceKind::Tree,
+            yield_quantity: 6,
+        };
+
+        assert_eq!(
+            natural_resource_sync_actions(&rendered, std::slice::from_ref(&resource)),
+            vec![
+                NaturalResourceSyncAction::Update(resource),
+                NaturalResourceSyncAction::Despawn(WorldCell::new(9, 9)),
+            ]
+        );
+    }
 }
 use std::collections::{BTreeMap, BTreeSet};
 
-use progressus_app::{CharacterSnapshot, ChunkCoord, EntityId, GroundItemSnapshot};
+use progressus_app::{
+    CharacterSnapshot, ChunkCoord, EntityId, GroundItemSnapshot, NaturalResourceSnapshot, WorldCell,
+};
 
 pub const VISIBLE_CHUNK_RADIUS: i64 = 1;
 
@@ -178,6 +199,13 @@ pub enum GroundItemSyncAction {
     Despawn(EntityId),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum NaturalResourceSyncAction {
+    Spawn(NaturalResourceSnapshot),
+    Update(NaturalResourceSnapshot),
+    Despawn(WorldCell),
+}
+
 pub fn controlled_character(characters: &[CharacterSnapshot]) -> Option<&CharacterSnapshot> {
     let cora = EntityId::new(3)?;
     characters.iter().find(|character| character.id == cora)
@@ -232,6 +260,31 @@ pub fn ground_item_sync_actions(
     for id in rendered {
         if !authoritative.contains_key(id) {
             actions.push(GroundItemSyncAction::Despawn(*id));
+        }
+    }
+    actions
+}
+
+pub fn natural_resource_sync_actions(
+    rendered: &BTreeSet<WorldCell>,
+    resources: &[NaturalResourceSnapshot],
+) -> Vec<NaturalResourceSyncAction> {
+    let authoritative = resources
+        .iter()
+        .copied()
+        .map(|resource| (resource.cell, resource))
+        .collect::<BTreeMap<_, _>>();
+    let mut actions = Vec::new();
+    for (cell, resource) in &authoritative {
+        actions.push(if rendered.contains(cell) {
+            NaturalResourceSyncAction::Update(*resource)
+        } else {
+            NaturalResourceSyncAction::Spawn(*resource)
+        });
+    }
+    for cell in rendered {
+        if !authoritative.contains_key(cell) {
+            actions.push(NaturalResourceSyncAction::Despawn(*cell));
         }
     }
     actions

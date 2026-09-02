@@ -1,7 +1,7 @@
 use progressus_app::{
     Application, CHUNK_SIDE, CharacterSnapshot, ChunkCoord, Command, Direction, EntityId, ItemKind,
-    KnownTerrain, LocalCell, MovementState, NewGameOptions, SimulationTick, SnapshotQuery, Terrain,
-    WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
+    KnownTerrain, LocalCell, MovementState, NaturalResourceKind, NewGameOptions, SimulationTick,
+    SnapshotQuery, Terrain, WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
 };
 
 fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
@@ -164,6 +164,52 @@ fn terrain_query_does_not_publish_undiscovered_terrain() {
         .unwrap();
 
     assert!(snapshot.chunks.is_empty());
+}
+
+#[test]
+fn natural_resource_snapshots_are_explored_deterministic_and_not_a_query_side_channel() {
+    let application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(0),
+    })
+    .unwrap();
+    let snapshot = application
+        .snapshot(SnapshotQuery {
+            chunks: vec![ChunkCoord::new(-1, 0), ChunkCoord::new(0, 0)],
+            ..SnapshotQuery::default()
+        })
+        .unwrap();
+
+    assert!(!snapshot.natural_resources.is_empty());
+    assert!(
+        snapshot
+            .natural_resources
+            .iter()
+            .any(|resource| resource.kind == NaturalResourceKind::Tree)
+    );
+    assert!(
+        snapshot
+            .natural_resources
+            .iter()
+            .any(|resource| resource.kind == NaturalResourceKind::StoneOutcrop)
+    );
+    for resource in &snapshot.natural_resources {
+        let (coordinate, local) = resource.cell.split();
+        let chunk = snapshot
+            .chunks
+            .iter()
+            .find(|chunk| chunk.coordinate == coordinate)
+            .unwrap();
+        assert_eq!(chunk.known_terrain_at(local), Some(Terrain::Grass));
+        assert!((4..=8).contains(&resource.yield_quantity));
+    }
+
+    let unknown = application
+        .snapshot(SnapshotQuery {
+            chunks: vec![ChunkCoord::new(100, -100)],
+            ..SnapshotQuery::default()
+        })
+        .unwrap();
+    assert!(unknown.natural_resources.is_empty());
 }
 
 #[test]
