@@ -3,8 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use progressus_app::{
-    CHUNK_SIDE, CharacterSnapshot, ChunkCoord, EntityId, GroundItemSnapshot, LocalCell,
-    NaturalResourceKind, NaturalResourceSnapshot, SUBUNITS_PER_CELL, WorldCell, WorldPosition,
+    CHUNK_SIDE, CharacterSnapshot, ChunkCoord, EntityId, GroundItemSnapshot, JobKind, JobState,
+    LocalCell, NaturalResourceKind, NaturalResourceSnapshot, SUBUNITS_PER_CELL, WorldCell,
+    WorldPosition,
 };
 
 use crate::navigation::{SelectedCharacter, VisualMotion, interpolate_trace};
@@ -515,6 +516,41 @@ pub(crate) fn interpolate_selected_visual(
         && authoritative.snapshot().navigation.is_none()
     {
         motion.clear();
+    }
+}
+
+pub(crate) fn draw_job_designations(
+    authoritative: Res<AuthoritativeClient>,
+    cache: Res<PresentationCache>,
+    mut gizmos: Gizmos,
+) {
+    let Some(origin) = cache.render_origin else {
+        return;
+    };
+    for job in &authoritative.snapshot().jobs {
+        let JobKind::Harvest { source } = job.kind;
+        let center = world_translation(source, origin, NATURAL_RESOURCE_Z + 1.0).truncate();
+        let half = CELL_SIZE * 0.46;
+        let color = match job.state {
+            JobState::Available => Color::srgb(1.0, 0.72, 0.18),
+            JobState::Reserved { .. } => Color::srgb(0.35, 0.85, 1.0),
+            JobState::Working { .. } => Color::srgb(1.0, 0.42, 0.12),
+        };
+        let min = center - Vec2::splat(half);
+        let max = center + Vec2::splat(half);
+        let arm = CELL_SIZE * 0.22;
+        for (from, to) in [
+            (min, min + Vec2::new(arm, 0.0)),
+            (min, min + Vec2::new(0.0, arm)),
+            (Vec2::new(max.x, min.y), Vec2::new(max.x - arm, min.y)),
+            (Vec2::new(max.x, min.y), Vec2::new(max.x, min.y + arm)),
+            (Vec2::new(min.x, max.y), Vec2::new(min.x + arm, max.y)),
+            (Vec2::new(min.x, max.y), Vec2::new(min.x, max.y - arm)),
+            (max, max - Vec2::new(arm, 0.0)),
+            (max, max - Vec2::new(0.0, arm)),
+        ] {
+            gizmos.line_2d(from, to, color);
+        }
     }
 }
 

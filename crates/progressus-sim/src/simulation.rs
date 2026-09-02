@@ -10,13 +10,15 @@ use crate::clock::SimulationClock;
 use crate::entity::{EntityIdAllocator, NavigationRoute};
 use crate::exploration::ExploredWorld;
 use crate::item::ItemWorld;
+use crate::job::{JobWorld, JobWorldError};
 use crate::pathfinding::{PathfindingError, find_explored_path};
 use crate::world_state::ModifiedWorld;
 use crate::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, Direction, EffectiveChunk,
-    EntityId, GeneratedChunk, InteractionRadius, ItemKind, ItemLocation, ItemQuantity, ItemStack,
-    LocalCell, MovementState, NaturalResource, SimulationTick, Terrain, WorldCell, WorldPosition,
-    WorldPositionError, WorldSeed, WorldgenVersion, within_interaction_range,
+    EntityId, GeneratedChunk, HARVEST_WORK_TICKS, InteractionRadius, ItemKind, ItemLocation,
+    ItemQuantity, ItemStack, Job, JobKind, JobState, LocalCell, MovementState, NaturalResource,
+    NaturalResourceKind, SimulationTick, Terrain, WorldCell, WorldPosition, WorldPositionError,
+    WorldSeed, WorldgenVersion, within_interaction_range,
 };
 
 const INITIAL_CHARACTERS: [(&str, i64); 5] = [
@@ -35,6 +37,7 @@ pub struct Simulation {
     characters: BTreeMap<EntityId, Character>,
     modified_world: ModifiedWorld,
     item_world: ItemWorld,
+    job_world: JobWorld,
     depleted_resources: BTreeSet<WorldCell>,
     resource_revision: u64,
     explored_world: ExploredWorld,
@@ -100,6 +103,7 @@ impl Simulation {
             characters,
             modified_world: ModifiedWorld::default(),
             item_world,
+            job_world: JobWorld::default(),
             depleted_resources: BTreeSet::new(),
             resource_revision: 0,
             explored_world,
@@ -139,6 +143,7 @@ impl Simulation {
         for _ in 0..count {
             self.clock.advance(1)?;
             self.advance_characters_one_tick()?;
+            self.advance_jobs_one_tick()?;
         }
 
         Ok(())
@@ -149,9 +154,13 @@ impl Simulation {
         id: EntityId,
         direction: Direction,
     ) -> Result<(), SimulationError> {
+        if !self.characters.contains_key(&id) {
+            return Err(SimulationError::UnknownCharacter(id));
+        }
+        self.interrupt_worker_job(id)?;
         self.characters
             .get_mut(&id)
-            .ok_or(SimulationError::UnknownCharacter(id))?
+            .expect("character was checked above")
             .set_movement(MovementState::ManualDirectional { direction });
         Ok(())
     }
@@ -161,49 +170,20 @@ impl Simulation {
         id: EntityId,
         destination: WorldPosition,
     ) -> Result<(), SimulationError> {
-        let current = self
-            .characters
-            .get(&id)
-            .ok_or(SimulationError::UnknownCharacter(id))?
-            .position();
-        if current == destination {
-            self.stop_movement(id)?;
-            return Ok(());
-        }
-        if !self.is_explored(destination.containing_cell()) {
-            return Err(SimulationError::MoveToDestinationUndiscovered(
-                destination.containing_cell(),
-            ));
-        }
-        if !self.is_walkable(destination.containing_cell())? {
-            return Err(SimulationError::MoveToDestinationBlocked(
-                destination.containing_cell(),
-            ));
-        }
-        let cells = find_explored_path(
-            self,
-            current.containing_cell(),
-            destination.containing_cell(),
-        )?
-        .map_err(|error| match error {
-            PathfindingError::PathNotFound => SimulationError::MoveToPathNotFound,
-            PathfindingError::SearchBudgetExceeded => SimulationError::MoveToSearchBudgetExceeded,
-        })?;
-        let route = NavigationRoute {
-            destination,
-            waypoints: build_waypoints(current, destination, &cells)?,
-        };
-        self.characters
-            .get_mut(&id)
-            .expect("character was checked above")
-            .set_navigation_route(route);
+        let route = self.plan_navigation_route(id, destination)?;
+        self.interrupt_worker_job(id)?;
+        self.apply_navigation_route(id, destination, route);
         Ok(())
     }
 
     pub fn stop_movement(&mut self, id: EntityId) -> Result<(), SimulationError> {
+        if !self.characters.contains_key(&id) {
+            return Err(SimulationError::UnknownCharacter(id));
+        }
+        self.interrupt_worker_job(id)?;
         self.characters
             .get_mut(&id)
-            .ok_or(SimulationError::UnknownCharacter(id))?
+            .expect("character was checked above")
             .set_movement(MovementState::Idle);
         Ok(())
     }
@@ -347,6 +327,53 @@ impl Simulation {
         Ok(())
     }
 
+    pub fn jobs(&self) -> impl ExactSizeIterator<Item = &Job> {
+        self.job_world.iter()
+    }
+
+    pub const fn job_revision(&self) -> u64 {
+        self.job_world.revision()
+    }
+
+    pub fn job_for_worker(&self, worker_id: EntityId) -> Option<EntityId> {
+        self.job_world.job_for_worker(worker_id)
+    }
+
+    pub fn designate_harvest(&mut self, source: WorldCell) -> Result<EntityId, SimulationError> {
+        if !self.is_explored(source) {
+            return Err(SimulationError::HarvestSourceUndiscovered(source));
+        }
+        if self.natural_resource_at(source)?.is_none() {
+            return Err(SimulationError::NaturalResourceMissing(source));
+        }
+        if self.job_world.harvest_job_for_source(source).is_some() {
+            return Err(SimulationError::HarvestAlreadyDesignated(source));
+        }
+        let id = self.id_allocator.allocate()?;
+        self.job_world
+            .insert(Job::new(id, JobKind::Harvest { source }))
+            .map_err(SimulationError::from_job_world)?;
+        Ok(id)
+    }
+
+    pub fn cancel_job(&mut self, job_id: EntityId) -> Result<(), SimulationError> {
+        let worker = self
+            .job_world
+            .get(job_id)
+            .ok_or(SimulationError::UnknownJob(job_id))?
+            .state()
+            .worker();
+        self.job_world
+            .remove(job_id)
+            .map_err(SimulationError::from_job_world)?;
+        if let Some(worker_id) = worker
+            && let Some(character) = self.characters.get_mut(&worker_id)
+        {
+            character.set_movement(MovementState::Idle);
+        }
+        Ok(())
+    }
+
     pub fn generated_chunk(
         &self,
         coordinate: ChunkCoord,
@@ -393,6 +420,254 @@ impl Simulation {
         }
 
         Ok(EffectiveChunk::new(coordinate, cells))
+    }
+
+    fn plan_navigation_route(
+        &self,
+        id: EntityId,
+        destination: WorldPosition,
+    ) -> Result<Option<NavigationRoute>, SimulationError> {
+        let current = self
+            .characters
+            .get(&id)
+            .ok_or(SimulationError::UnknownCharacter(id))?
+            .position();
+        if current == destination {
+            return Ok(None);
+        }
+        if !self.is_explored(destination.containing_cell()) {
+            return Err(SimulationError::MoveToDestinationUndiscovered(
+                destination.containing_cell(),
+            ));
+        }
+        if !self.is_walkable(destination.containing_cell())? {
+            return Err(SimulationError::MoveToDestinationBlocked(
+                destination.containing_cell(),
+            ));
+        }
+        let cells = find_explored_path(
+            self,
+            current.containing_cell(),
+            destination.containing_cell(),
+        )?
+        .map_err(|error| match error {
+            PathfindingError::PathNotFound => SimulationError::MoveToPathNotFound,
+            PathfindingError::SearchBudgetExceeded => SimulationError::MoveToSearchBudgetExceeded,
+        })?;
+        Ok(Some(NavigationRoute {
+            destination,
+            waypoints: build_waypoints(current, destination, &cells)?,
+        }))
+    }
+
+    fn apply_navigation_route(
+        &mut self,
+        id: EntityId,
+        destination: WorldPosition,
+        route: Option<NavigationRoute>,
+    ) {
+        let character = self
+            .characters
+            .get_mut(&id)
+            .expect("navigation routes are applied only to known characters");
+        match route {
+            Some(route) => character.set_navigation_route(route),
+            None => {
+                debug_assert_eq!(character.position(), destination);
+                character.set_movement(MovementState::Idle);
+            }
+        }
+    }
+
+    fn interrupt_worker_job(&mut self, worker_id: EntityId) -> Result<(), SimulationError> {
+        if let Some(job_id) = self.job_world.job_for_worker(worker_id) {
+            self.job_world
+                .release_worker(job_id)
+                .map_err(SimulationError::from_job_world)?;
+        }
+        Ok(())
+    }
+
+    fn advance_jobs_one_tick(&mut self) -> Result<(), SimulationError> {
+        let job_ids = self.job_world.iter().map(Job::id).collect::<Vec<_>>();
+        for job_id in job_ids {
+            let Some(job) = self.job_world.get(job_id).cloned() else {
+                continue;
+            };
+            match job.state() {
+                JobState::Available => self.try_assign_job(job_id, job.kind())?,
+                JobState::Reserved { worker_id } => {
+                    self.advance_reserved_job(job_id, job.kind(), worker_id)?
+                }
+                JobState::Working {
+                    worker_id,
+                    remaining_ticks,
+                } => self.advance_working_job(job_id, job.kind(), worker_id, remaining_ticks)?,
+            }
+        }
+        Ok(())
+    }
+
+    fn try_assign_job(&mut self, job_id: EntityId, kind: JobKind) -> Result<(), SimulationError> {
+        match kind {
+            JobKind::Harvest { source } => self.try_assign_harvest(job_id, source),
+        }
+    }
+
+    fn try_assign_harvest(
+        &mut self,
+        job_id: EntityId,
+        source: WorldCell,
+    ) -> Result<(), SimulationError> {
+        if self.natural_resource_at(source)?.is_none() {
+            self.job_world
+                .remove(job_id)
+                .map_err(SimulationError::from_job_world)?;
+            return Ok(());
+        }
+        let destination = WorldPosition::from_cell_center(source)?;
+        let mut candidates = self
+            .characters
+            .values()
+            .filter(|character| {
+                character.movement() == MovementState::Idle
+                    && self.job_world.job_for_worker(character.id()).is_none()
+            })
+            .map(|character| {
+                (
+                    cell_manhattan_distance(character.position().containing_cell(), source),
+                    character.id(),
+                )
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_unstable();
+
+        for (_, worker_id) in candidates {
+            let route = match self.plan_navigation_route(worker_id, destination) {
+                Ok(route) => route,
+                Err(
+                    SimulationError::MoveToDestinationBlocked(_)
+                    | SimulationError::MoveToDestinationUndiscovered(_)
+                    | SimulationError::MoveToPathNotFound
+                    | SimulationError::MoveToSearchBudgetExceeded,
+                ) => continue,
+                Err(error) => return Err(error),
+            };
+            self.job_world
+                .reserve_worker(job_id, worker_id)
+                .map_err(SimulationError::from_job_world)?;
+            self.apply_navigation_route(worker_id, destination, route);
+            return Ok(());
+        }
+        Ok(())
+    }
+
+    fn advance_reserved_job(
+        &mut self,
+        job_id: EntityId,
+        kind: JobKind,
+        worker_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        match kind {
+            JobKind::Harvest { source } => {
+                if self.natural_resource_at(source)?.is_none() {
+                    self.cancel_job(job_id)?;
+                    return Ok(());
+                }
+                let Some(character) = self.characters.get(&worker_id) else {
+                    self.job_world
+                        .remove(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                };
+                let target = WorldPosition::from_cell_center(source)?;
+                if within_interaction_range(
+                    character.position(),
+                    character.interaction_radius(),
+                    target,
+                    InteractionRadius::zero(),
+                ) {
+                    self.characters
+                        .get_mut(&worker_id)
+                        .expect("worker was checked above")
+                        .set_movement(MovementState::Idle);
+                    self.job_world
+                        .start_working(job_id, HARVEST_WORK_TICKS)
+                        .map_err(SimulationError::from_job_world)?;
+                } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn advance_working_job(
+        &mut self,
+        job_id: EntityId,
+        kind: JobKind,
+        worker_id: EntityId,
+        remaining_ticks: u32,
+    ) -> Result<(), SimulationError> {
+        match kind {
+            JobKind::Harvest { source } => {
+                let Some(resource) = self.natural_resource_at(source)? else {
+                    self.cancel_job(job_id)?;
+                    return Ok(());
+                };
+                if !self.characters.contains_key(&worker_id) {
+                    self.job_world
+                        .remove(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                }
+                if remaining_ticks > 1 {
+                    self.job_world
+                        .set_remaining_work(job_id, remaining_ticks - 1)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                }
+                self.complete_harvest(job_id, worker_id, source, resource)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn complete_harvest(
+        &mut self,
+        job_id: EntityId,
+        worker_id: EntityId,
+        source: WorldCell,
+        resource: NaturalResource,
+    ) -> Result<(), SimulationError> {
+        let next_resource_revision = self
+            .resource_revision
+            .checked_add(1)
+            .ok_or(SimulationError::ResourceRevisionOverflow)?;
+        let item_id = self.id_allocator.allocate()?;
+        let kind = match resource.kind() {
+            NaturalResourceKind::Tree => ItemKind::Wood,
+            NaturalResourceKind::StoneOutcrop => ItemKind::Stone,
+        };
+        let quantity = ItemQuantity::new(resource.yield_quantity())
+            .expect("worldgen natural-resource yields are positive");
+        let position = WorldPosition::from_cell_center(source)?;
+        self.item_world
+            .insert_ground(ItemStack::new_ground(item_id, kind, quantity, position))
+            .expect("allocated item IDs are unique and harvested outputs start on the ground");
+        if !self.depleted_resources.insert(source) {
+            return Err(SimulationError::JobInvariantViolation);
+        }
+        self.resource_revision = next_resource_revision;
+        self.job_world
+            .remove(job_id)
+            .map_err(SimulationError::from_job_world)?;
+        if let Some(character) = self.characters.get_mut(&worker_id) {
+            character.set_movement(MovementState::Idle);
+        }
+        Ok(())
     }
 
     fn base_terrain_at(&self, position: WorldCell) -> Result<Terrain, SimulationError> {
@@ -646,6 +921,12 @@ fn entry_distance(
     }
 }
 
+fn cell_manhattan_distance(first: WorldCell, second: WorldCell) -> u128 {
+    let dx = (i128::from(first.x()) - i128::from(second.x())).unsigned_abs();
+    let dy = (i128::from(first.y()) - i128::from(second.y())).unsigned_abs();
+    dx + dy
+}
+
 fn build_waypoints(
     current: WorldPosition,
     destination: WorldPosition,
@@ -735,6 +1016,13 @@ pub enum SimulationError {
     SpawnNotWalkable(WorldCell),
     UnknownCharacter(EntityId),
     UnknownItem(EntityId),
+    UnknownJob(EntityId),
+    HarvestSourceUndiscovered(WorldCell),
+    NaturalResourceMissing(WorldCell),
+    HarvestAlreadyDesignated(WorldCell),
+    JobRevisionOverflow,
+    ResourceRevisionOverflow,
+    JobInvariantViolation,
     ItemNotOnGround(EntityId),
     ItemNotCarriedByCharacter {
         character_id: EntityId,
@@ -755,6 +1043,24 @@ pub enum SimulationError {
     Worldgen(WorldgenError),
 }
 
+impl SimulationError {
+    fn from_job_world(error: JobWorldError) -> Self {
+        match error {
+            JobWorldError::UnknownJob(id) => Self::UnknownJob(id),
+            JobWorldError::HarvestSourceAlreadyDesignated(source) => {
+                Self::HarvestAlreadyDesignated(source)
+            }
+            JobWorldError::RevisionOverflow => Self::JobRevisionOverflow,
+            JobWorldError::DuplicateJob(_)
+            | JobWorldError::WorkerAlreadyReserved(_)
+            | JobWorldError::JobNotAvailable(_)
+            | JobWorldError::JobNotReserved(_)
+            | JobWorldError::JobNotWorking(_)
+            | JobWorldError::IndexCorruption => Self::JobInvariantViolation,
+        }
+    }
+}
+
 impl Display for SimulationError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -771,6 +1077,30 @@ impl Display for SimulationError {
             ),
             Self::UnknownCharacter(id) => write!(formatter, "unknown character ID {}", id.value()),
             Self::UnknownItem(id) => write!(formatter, "unknown item ID {}", id.value()),
+            Self::UnknownJob(id) => write!(formatter, "unknown job ID {}", id.value()),
+            Self::HarvestSourceUndiscovered(source) => write!(
+                formatter,
+                "harvest source ({}, {}) is undiscovered",
+                source.x(),
+                source.y()
+            ),
+            Self::NaturalResourceMissing(source) => write!(
+                formatter,
+                "no natural resource exists at ({}, {})",
+                source.x(),
+                source.y()
+            ),
+            Self::HarvestAlreadyDesignated(source) => write!(
+                formatter,
+                "natural resource at ({}, {}) is already designated for harvest",
+                source.x(),
+                source.y()
+            ),
+            Self::JobRevisionOverflow => formatter.write_str("job revision overflow"),
+            Self::ResourceRevisionOverflow => formatter.write_str("resource revision overflow"),
+            Self::JobInvariantViolation => {
+                formatter.write_str("job reservation invariant violated")
+            }
             Self::ItemNotOnGround(id) => {
                 write!(formatter, "item ID {} is not on the ground", id.value())
             }
@@ -1719,6 +2049,177 @@ mod tests {
             assert_eq!(position.containing_cell(), start);
             assert_eq!(character(&simulation, cora).movement(), MovementState::Idle);
         }
+    }
+
+    #[test]
+    fn harvest_job_completes_into_one_physical_stack_and_cleans_reservation() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let (source, resource) = harvest_fixture(&simulation);
+        let item_revision = simulation.item_revision();
+        let resource_revision = simulation.resource_revision();
+
+        let job_id = simulation.designate_harvest(source).unwrap();
+        let output_id = simulation.next_entity_id().unwrap();
+        assert_eq!(simulation.jobs().count(), 1);
+        assert_eq!(
+            simulation.natural_resource_at(source).unwrap(),
+            Some(resource)
+        );
+
+        for _ in 0..256 {
+            if simulation.jobs().next().is_none() {
+                break;
+            }
+            simulation.advance_ticks(1).unwrap();
+        }
+
+        assert_eq!(simulation.jobs().count(), 0, "harvest job did not finish");
+        assert_eq!(simulation.natural_resource_at(source).unwrap(), None);
+        assert_eq!(simulation.resource_revision(), resource_revision + 1);
+        assert_eq!(simulation.item_revision(), item_revision + 1);
+        assert!(simulation.job_world.indexes_are_consistent());
+        assert!(
+            simulation
+                .characters()
+                .all(|c| simulation.job_for_worker(c.id()).is_none())
+        );
+
+        let output = simulation
+            .items()
+            .find(|item| item.id() == output_id)
+            .unwrap();
+        let expected_kind = match resource.kind() {
+            NaturalResourceKind::Tree => ItemKind::Wood,
+            NaturalResourceKind::StoneOutcrop => ItemKind::Stone,
+        };
+        assert_eq!(output.kind(), expected_kind);
+        assert_eq!(output.quantity().get(), resource.yield_quantity());
+        assert_eq!(
+            output.ground_position(),
+            Some(WorldPosition::from_cell_center(source).unwrap())
+        );
+        assert_ne!(job_id, output_id);
+    }
+
+    #[test]
+    fn harvest_assignment_is_deterministic_and_exclusive() {
+        let mut first = Simulation::new(WorldSeed::new(0)).unwrap();
+        let mut second = first.clone();
+        let (source, _) = harvest_fixture(&first);
+        let first_job = first.designate_harvest(source).unwrap();
+        let second_job = second.designate_harvest(source).unwrap();
+        assert_eq!(first_job, second_job);
+
+        first.advance_ticks(1).unwrap();
+        second.advance_ticks(1).unwrap();
+
+        let first_state = first.job_world.get(first_job).unwrap().state();
+        let second_state = second.job_world.get(second_job).unwrap().state();
+        assert_eq!(first_state, second_state);
+        let worker = first_state
+            .worker()
+            .expect("reachable harvest should reserve a worker");
+        assert_eq!(first.job_for_worker(worker), Some(first_job));
+        assert!(first.job_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn harvest_designation_rejects_invalid_sources_without_allocating_jobs() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let (source, _) = harvest_fixture(&simulation);
+        let before_next = simulation.next_entity_id();
+        let job = simulation.designate_harvest(source).unwrap();
+        assert_eq!(
+            simulation.designate_harvest(source),
+            Err(SimulationError::HarvestAlreadyDesignated(source))
+        );
+        assert_eq!(simulation.jobs().count(), 1);
+
+        simulation.cancel_job(job).unwrap();
+        let empty = (0..=7)
+            .flat_map(|y| (-7..=7).map(move |x| WorldCell::new(x, y)))
+            .find(|cell| {
+                simulation.is_explored(*cell)
+                    && simulation.natural_resource_at(*cell).unwrap().is_none()
+            })
+            .unwrap();
+        assert_eq!(
+            simulation.designate_harvest(empty),
+            Err(SimulationError::NaturalResourceMissing(empty))
+        );
+        let unknown = WorldCell::new(100, 100);
+        assert_eq!(
+            simulation.designate_harvest(unknown),
+            Err(SimulationError::HarvestSourceUndiscovered(unknown))
+        );
+        assert_eq!(
+            before_next.unwrap().value() + 1,
+            simulation.next_entity_id().unwrap().value()
+        );
+    }
+
+    #[test]
+    fn cancelling_or_manually_interrupting_harvest_releases_worker_reservation() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let (source, _) = harvest_fixture(&simulation);
+        let job_id = simulation.designate_harvest(source).unwrap();
+        simulation.advance_ticks(1).unwrap();
+        let worker = simulation
+            .job_world
+            .get(job_id)
+            .unwrap()
+            .state()
+            .worker()
+            .unwrap();
+
+        simulation.stop_movement(worker).unwrap();
+        assert_eq!(
+            simulation.job_world.get(job_id).unwrap().state(),
+            JobState::Available
+        );
+        assert_eq!(simulation.job_for_worker(worker), None);
+        assert!(simulation.job_world.indexes_are_consistent());
+
+        simulation.advance_ticks(1).unwrap();
+        let worker = simulation
+            .job_world
+            .get(job_id)
+            .unwrap()
+            .state()
+            .worker()
+            .unwrap();
+        simulation.cancel_job(job_id).unwrap();
+        assert_eq!(simulation.jobs().count(), 0);
+        assert_eq!(simulation.job_for_worker(worker), None);
+        assert_eq!(
+            character(&simulation, worker).movement(),
+            MovementState::Idle
+        );
+        assert!(simulation.job_world.indexes_are_consistent());
+        assert!(simulation.natural_resource_at(source).unwrap().is_some());
+    }
+
+    fn harvest_fixture(simulation: &Simulation) -> (WorldCell, NaturalResource) {
+        for y in -5..=5 {
+            for x in -7..=7 {
+                let cell = WorldCell::new(x, y);
+                if !simulation.is_explored(cell) {
+                    continue;
+                }
+                let Some(resource) = simulation.natural_resource_at(cell).unwrap() else {
+                    continue;
+                };
+                let destination = WorldPosition::from_cell_center(cell).unwrap();
+                if simulation.characters().any(|character| {
+                    simulation
+                        .plan_navigation_route(character.id(), destination)
+                        .is_ok()
+                }) {
+                    return (cell, resource);
+                }
+            }
+        }
+        panic!("seed 0 must expose at least one reachable natural-resource source");
     }
 
     fn character(simulation: &Simulation, id: EntityId) -> &Character {

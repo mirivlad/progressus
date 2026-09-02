@@ -7,13 +7,14 @@ use progressus_sim::{Simulation, SimulationError};
 
 pub use progressus_sim::{
     CHUNK_SIDE, ChunkCoord, DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED,
-    Direction, EntityId, InteractionRadius, ItemKind, ItemLocation, ItemQuantity, LocalCell,
-    MovementSpeed, MovementState, NaturalResource, NaturalResourceKind, SUBUNITS_PER_CELL,
-    SimulationTick, Terrain, WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
+    Direction, EntityId, InteractionRadius, ItemKind, ItemLocation, ItemQuantity, JobKind,
+    JobState, LocalCell, MovementSpeed, MovementState, NaturalResource, NaturalResourceKind,
+    SUBUNITS_PER_CELL, SimulationTick, Terrain, WorldCell, WorldPosition, WorldSeed,
+    WorldgenVersion,
 };
 pub use read_model::{
-    CharacterSnapshot, ChunkSnapshot, ClientSnapshot, GroundItemSnapshot, KnownTerrain,
-    NaturalResourceSnapshot, NavigationSnapshot,
+    CharacterSnapshot, ChunkSnapshot, ClientSnapshot, GroundItemSnapshot, JobSnapshot,
+    KnownTerrain, NaturalResourceSnapshot, NavigationSnapshot,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,6 +37,12 @@ pub enum Command {
     },
     StopMovement {
         character_id: EntityId,
+    },
+    DesignateHarvest {
+        source: WorldCell,
+    },
+    CancelJob {
+        job_id: EntityId,
     },
 }
 
@@ -73,6 +80,10 @@ impl Application {
             Command::StopMovement { character_id } => {
                 self.simulation.stop_movement(character_id)?
             }
+            Command::DesignateHarvest { source } => {
+                self.simulation.designate_harvest(source)?;
+            }
+            Command::CancelJob { job_id } => self.simulation.cancel_job(job_id)?,
         }
         Ok(())
     }
@@ -149,6 +160,7 @@ impl Application {
             .characters()
             .map(CharacterSnapshot::from)
             .collect();
+        let jobs = self.simulation.jobs().map(JobSnapshot::from).collect();
 
         Ok(ClientSnapshot {
             tick: self.simulation.tick(),
@@ -156,9 +168,11 @@ impl Application {
             exploration_revision: self.simulation.exploration_revision(),
             item_revision: self.simulation.item_revision(),
             resource_revision: self.simulation.resource_revision(),
+            job_revision: self.simulation.job_revision(),
             chunks,
             ground_items,
             natural_resources,
+            jobs,
             characters,
             navigation: query.navigation_for.and_then(|id| {
                 self.simulation

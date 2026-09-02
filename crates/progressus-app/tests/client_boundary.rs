@@ -1,7 +1,7 @@
 use progressus_app::{
     Application, CHUNK_SIDE, CharacterSnapshot, ChunkCoord, Command, Direction, EntityId, ItemKind,
-    KnownTerrain, LocalCell, MovementState, NaturalResourceKind, NewGameOptions, SimulationTick,
-    SnapshotQuery, Terrain, WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
+    JobKind, KnownTerrain, LocalCell, MovementState, NaturalResourceKind, NewGameOptions,
+    SimulationTick, SnapshotQuery, Terrain, WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
 };
 
 fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
@@ -210,6 +210,36 @@ fn natural_resource_snapshots_are_explored_deterministic_and_not_a_query_side_ch
         })
         .unwrap();
     assert!(unknown.natural_resources.is_empty());
+}
+
+#[test]
+fn harvest_designation_and_cancellation_cross_the_public_application_boundary() {
+    let mut application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(0),
+    })
+    .unwrap();
+    let terrain = application
+        .snapshot(SnapshotQuery {
+            chunks: vec![ChunkCoord::new(-1, 0), ChunkCoord::new(0, 0)],
+            ..SnapshotQuery::default()
+        })
+        .unwrap();
+    let source = terrain.natural_resources[0].cell;
+    let before_revision = terrain.job_revision;
+
+    application
+        .execute(Command::DesignateHarvest { source })
+        .unwrap();
+    let designated = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert_eq!(designated.job_revision, before_revision + 1);
+    assert_eq!(designated.jobs.len(), 1);
+    assert_eq!(designated.jobs[0].kind, JobKind::Harvest { source });
+    let job_id = designated.jobs[0].id;
+
+    application.execute(Command::CancelJob { job_id }).unwrap();
+    let cancelled = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert!(cancelled.jobs.is_empty());
+    assert!(cancelled.job_revision > designated.job_revision);
 }
 
 #[test]

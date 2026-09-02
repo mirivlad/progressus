@@ -2,6 +2,7 @@ mod clock;
 mod entity;
 mod exploration;
 mod item;
+mod job;
 mod pathfinding;
 mod position;
 mod simulation;
@@ -14,6 +15,7 @@ pub use entity::{
 };
 pub use exploration::CHARACTER_VISION_RADIUS_CELLS;
 pub use item::{ItemKind, ItemLocation, ItemQuantity, ItemStack};
+pub use job::{HARVEST_WORK_TICKS, Job, JobKind, JobState};
 pub use position::{
     InteractionRadius, SUBUNITS_PER_CELL, WorldPosition, WorldPositionError,
     within_interaction_range,

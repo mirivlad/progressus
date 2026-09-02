@@ -277,6 +277,14 @@ complete/release reservation
 
 Prototype 01 must define cancellation and reservation cleanup behavior. Lost reservations are a common source of colony-sim deadlocks and should be tested explicitly.
 
+### Current harvest-job bootstrap
+
+`progressus-sim` now owns a deterministic `JobWorld` with stable Progressus job IDs, a source-to-harvest-job index, and an exclusive worker-to-job reservation index. Harvest jobs move through `Available`, `Reserved`, and `Working` states. Available jobs consider idle unreserved characters in deterministic distance/ID order, reserve one worker only after a route is available, travel through the existing bounded explored-world navigation, then perform a small fixed work amount. Completion depletes the natural source and creates exactly one physical Wood/Stone stack at the source position.
+
+Cancellation removes both source and worker indexes. Manual `MoveTo`, Stop, or directional movement releases an assigned worker before applying the player command, returning the unfinished job to `Available`; a failed manual `MoveTo` leaves the existing assignment intact. Tests cover full completion, deterministic/exclusive assignment, invalid designations, cancellation, manual interruption, and reservation-index consistency.
+
+`progressus-app` exposes `DesignateHarvest`/`CancelJob`, detached job snapshots, and a job revision. The Bevy bootstrap maps Shift+left-click on a natural source to toggle the harvest designation and draws a small state-colored bracket around designated sources. This is the first job category only; hauling, stockpiles, construction, crafting, priorities, skills, and generalized job policies remain later work.
+
 ## 14. Items and inventories
 
 Prototype 01 should prefer a simple physical item/stack model.
@@ -298,7 +306,7 @@ Large-scale aggregation is a later concern and must conserve quantities when int
 
 `progressus-app` exposes only explored ground items in requested chunks as detached `GroundItemSnapshot` values plus an item revision. Natural-resource snapshots are likewise chunk-scoped and contain only explored source cells; a separate resource revision is reserved for authoritative depletion changes. Carried stacks are authoritative but are not yet part of the player read model. The Bevy client reconciles disposable ground-item entities by stable Progressus ID and converts their exact positions relative to the nearby render origin, just like characters.
 
-This is an ownership/location foundation, not a completed inventory system: there is no stored/container location, stack split/merge, consumption/destruction, harvestable resource source, hauling job, stockpile, construction, crafting, persistence, or residency yet.
+This is still an early ownership/location foundation: harvested resources can now create ground stacks, but there is no stored/container location, stack split/merge, consumption/destruction, hauling job, stockpile, construction, crafting, persistence, or residency yet.
 
 ### Procedural presentation assets
 
@@ -540,4 +548,4 @@ The client first requests a lightweight character snapshot, establishes a dispos
 
 The presentation scheduler is non-authoritative: it requests at most one simulation tick every approximately 250 ms (nominally 4 Hz) and discards a long-frame backlog rather than catching up. Rendering frame time never becomes simulation input.
 
-This bootstrap proves rendering, input, snapshot-driven mapping, camera-driven explored-terrain refresh, effective-terrain snapshots, deterministic sub-cell living positions, and a bounded deterministic `MoveTo` route through the application boundary required by [`ADR-0004`](../adr/0004-grid-world-continuous-living-movement.md). A* remains cardinal and cell-topological; exact waypoints and per-tick motion traces are presentation-readable only on request. A trace is the path completed in that authoritative tick, including a one-point trace while idle, so presentation cannot replay stale arrival motion after a later snapshot. It does not implement diagonal or hierarchical navigation, auto-repath, jobs/AI, speed modifiers or collision, chunk residency, persistence, resource harvesting, hauling/stockpiles, construction, crafting, or save/load. The current Wood/Stone stacks prove physical ownership and detached presentation only. Coordinates and provisional chunk geometry remain specified by [`ADR-0003`](../adr/0003-bootstrap-world-coordinates.md).
+This bootstrap proves rendering, input, snapshot-driven mapping, camera-driven explored-terrain refresh, effective-terrain snapshots, deterministic sub-cell living positions, and a bounded deterministic `MoveTo` route through the application boundary required by [`ADR-0004`](../adr/0004-grid-world-continuous-living-movement.md). A* remains cardinal and cell-topological; exact waypoints and per-tick motion traces are presentation-readable only on request. A trace is the path completed in that authoritative tick, including a one-point trace while idle, so presentation cannot replay stale arrival motion after a later snapshot. It does not implement diagonal or hierarchical navigation, auto-repath, generalized jobs/AI priorities, speed modifiers or collision, chunk residency, persistence, hauling/stockpiles, construction, crafting, or save/load. Harvest is the first complete job bootstrap and current Wood/Stone stacks prove physical ownership across both starting supplies and harvested outputs. Coordinates and provisional chunk geometry remain specified by [`ADR-0003`](../adr/0003-bootstrap-world-coordinates.md).

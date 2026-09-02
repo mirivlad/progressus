@@ -4,8 +4,8 @@ use std::fmt::{self, Display, Formatter};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use progressus_app::{
-    Application, ApplicationError, ChunkCoord, ClientSnapshot, Command, EntityId, NewGameOptions,
-    SnapshotQuery, WorldSeed,
+    Application, ApplicationError, ChunkCoord, ClientSnapshot, Command, EntityId, JobKind,
+    NewGameOptions, SnapshotQuery, WorldCell, WorldSeed,
 };
 
 use crate::interaction::{TickScheduler, movement_command};
@@ -13,7 +13,8 @@ use crate::navigation::{SelectedCharacter, VisualMotion, quantize_local_click, s
 use crate::presentation::PresentationError;
 use crate::procedural_assets::ProceduralAssetRegistry;
 use crate::render::{
-    NavigationDebug, PresentationCache, camera_controls, setup_camera, sync_presentation,
+    NavigationDebug, PresentationCache, camera_controls, draw_job_designations, setup_camera,
+    sync_presentation,
 };
 
 impl Resource for TickScheduler {}
@@ -104,7 +105,7 @@ pub(crate) fn advance_authority(
 }
 
 pub(crate) fn pointer_navigation(
-    buttons: Res<ButtonInput<MouseButton>>,
+    input: (Res<ButtonInput<MouseButton>>, Res<ButtonInput<KeyCode>>),
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     mut selected: ResMut<SelectedCharacter>,
@@ -112,6 +113,7 @@ pub(crate) fn pointer_navigation(
     mut authoritative: ResMut<AuthoritativeClient>,
     cache: Res<PresentationCache>,
 ) {
+    let (buttons, keys) = input;
     if !buttons.just_pressed(MouseButton::Left) && !buttons.just_pressed(MouseButton::Right) {
         return;
     }
@@ -134,6 +136,25 @@ pub(crate) fn pointer_navigation(
         warn!("pointer position cannot be represented as an authoritative world position");
         return;
     };
+
+    if buttons.just_pressed(MouseButton::Left)
+        && keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
+    {
+        let source = target.containing_cell();
+        let command = harvest_job_at(authoritative.snapshot(), source)
+            .map_or(Command::DesignateHarvest { source }, |job_id| {
+                Command::CancelJob { job_id }
+            });
+        match authoritative.application.execute(command) {
+            Ok(()) => {
+                if let Err(error) = authoritative.refresh_lightweight_snapshot(selected.0) {
+                    error!("authoritative snapshot failed after harvest designation: {error}");
+                }
+            }
+            Err(error) => warn!("harvest designation rejected: {error}"),
+        }
+        return;
+    }
 
     if buttons.just_pressed(MouseButton::Left) {
         selected.0 = select_nearest(
@@ -168,6 +189,13 @@ pub(crate) fn pointer_navigation(
         }
         Err(error) => warn!("move command rejected: {error}"),
     }
+}
+
+fn harvest_job_at(snapshot: &ClientSnapshot, source: WorldCell) -> Option<EntityId> {
+    snapshot.jobs.iter().find_map(|job| match job.kind {
+        JobKind::Harvest { source: job_source } if job_source == source => Some(job.id),
+        _ => None,
+    })
 }
 
 #[derive(Debug)]
@@ -246,6 +274,7 @@ pub fn run() -> Result<(), ClientError> {
                 sync_presentation,
                 crate::render::interpolate_selected_visual,
                 crate::render::draw_navigation_debug,
+                draw_job_designations,
                 camera_controls,
             )
                 .chain(),
