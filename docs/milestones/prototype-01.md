@@ -116,6 +116,8 @@ A physical item/stack cannot simultaneously be on the ground, carried, and store
 
 This invariant requires automated tests.
 
+**Partially advanced (bootstrap):** physical `Wood` and `Stone` stacks now have global stable Progressus IDs and exactly one authoritative `ItemLocation::{Ground, Carried}` state. Ground stacks use exact fixed-point `WorldPosition`, a chunk-aware ground index, and atomic reach-checked pickup/drop transitions; automated tests cover identity/quantity preservation, index consistency, failed-transfer atomicity, and blocked drops. Stored/container state, stack splitting/merging, consumption/destruction, hauling/cancellation integration, and persistence remain incomplete.
+
 ## 5. Required resource and production systems
 
 Prototype content should remain intentionally tiny.
@@ -151,6 +153,8 @@ primitive tool
 ```
 
 The exact recipe is not important. The physical flow is.
+
+**Partially advanced (bootstrap):** a new seed starts with four deterministic physical Wood/Stone supply stacks at distinct sub-cell positions. Explored ground stacks are published through detached application snapshots and rendered by the Bevy client. These are starting supplies only, not yet harvestable world-resource deposits; collection, hauling, stockpiles, recipes, crafting, and construction are still incomplete.
 
 ## 6. Required construction
 
@@ -232,7 +236,7 @@ The exact tick count should be chosen once simulation speed is measurable.
 
 Only enough interface is required to operate and inspect the prototype.
 
-**Partially advanced (bootstrap):** the native Bevy client opens seed `0`, renders five snapshot-driven characters and the explored terrain intersecting its camera viewport plus a small margin, accepts Cora's arrow/Stop movement input plus left-click selection and right-click exact `MoveTo`, and provides presentation-only pan/zoom. The camera itself does not discover terrain; unknown cells remain background and snapshots do not expose their terrain type. F3 draws authority/destination/remaining-route diagnostics; selected sprite interpolation follows the latest detached per-tick motion-trace polyline without restarting for repeat snapshots of the same simulation tick. Terrain refreshes on initial display, a camera-window change, or an authoritative exploration-revision change, not every render frame; its non-authoritative scheduler runs at a nominal 4 Hz without catch-up. This proves rendering/input, camera-driven explored-terrain refresh, and a visual route probe only. The remaining interface, richer navigation, jobs/AI, speed/collision, persistence, residency, resources, construction, and save/load criteria are incomplete.
+**Partially advanced (bootstrap):** the native Bevy client opens seed `0`, renders five snapshot-driven characters and the explored terrain intersecting its camera viewport plus a small margin, accepts Cora's arrow/Stop movement input plus left-click selection and right-click exact `MoveTo`, and provides presentation-only pan/zoom. The camera itself does not discover terrain; unknown cells remain background and snapshots do not expose their terrain type. F3 draws authority/destination/remaining-route diagnostics; selected sprite interpolation follows the latest detached per-tick motion-trace polyline without restarting for repeat snapshots of the same simulation tick. Terrain/item presentation refreshes on initial display, a camera-window change, an authoritative exploration-revision change, or an authoritative item-revision change, not every render frame; its non-authoritative scheduler runs at a nominal 4 Hz without catch-up. This proves rendering/input, camera-driven explored-terrain refresh, and a visual route probe only. The client also renders explored physical Wood/Stone ground stacks from detached snapshots. The remaining interface, richer navigation, item interaction UI, jobs/AI, speed/collision, persistence, residency, harvestable resource sources, stockpiles, construction, crafting, and save/load criteria are incomplete.
 
 Minimum capabilities:
 

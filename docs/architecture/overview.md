@@ -290,6 +290,14 @@ An item must not simultaneously exist in two locations.
 
 Large-scale aggregation is a later concern and must conserve quantities when introduced.
 
+### Current physical-item bootstrap
+
+`progressus-sim` owns a deterministic `ItemWorld` keyed by the same global stable `EntityId` space as characters. Prototype item content is deliberately tiny (`Wood` and `Stone`), but every stack has a positive quantity and exactly one canonical location: exact fixed-point ground position or carrier character ID. Ground items are indexed by chunk and carried items by character; transfer operations update the canonical stack and its indexes atomically. Character interaction reach uses integer `InteractionRadius` geometry, and dropping is rejected onto non-walkable effective terrain.
+
+`progressus-app` exposes only explored ground items in requested chunks as detached `GroundItemSnapshot` values plus an item revision. Carried stacks are authoritative but are not yet part of the player read model. The Bevy client reconciles disposable ground-item entities by stable Progressus ID and converts their exact positions relative to the nearby render origin, just like characters.
+
+This is an ownership/location foundation, not a completed inventory system: there is no stored/container location, stack split/merge, consumption/destruction, harvestable resource source, hauling job, stockpile, construction, crafting, persistence, or residency yet.
+
 ## 15. Production
 
 Recipes are data definitions interpreted by generic systems.
@@ -511,7 +519,7 @@ progressus-client --> Bevy
 ```
 
 - `progressus-worldgen` owns deterministic versioned terrain generation and coordinate types.
-- `progressus-sim` owns authoritative time, stable identities, characters, base-world identity, and sparse modified-world state.
+- `progressus-sim` owns authoritative time, stable identities, characters, physical item stacks and their chunk/carrier indexes, base-world identity, and sparse modified-world state.
 - `progressus-app` is the command/query boundary and returns detached read models.
 - `progressus-headless` proves that the application can run and be inspected without a renderer.
 - `progressus-client` is a native Bevy presentation consumer. Its only direct dependencies are Bevy and `progressus-app`; it must not directly depend on `progressus-sim` or `progressus-worldgen`.
@@ -520,8 +528,8 @@ The headless application chain is Bevy-free. The boundary guard scans that compl
 
 `progressus-sim` also owns the in-memory, monotonic `ExploredWorld`: every character reveals the Euclidean disk of cells within the provisional radius `5` around its containing cell at new-game creation and after each authoritative tick. Discovery is independent of selection and camera position. `progressus-app` publishes terrain as detached `KnownTerrain`; it omits entirely unknown chunks and never gives the client a terrain type for an undiscovered cell. Player `MoveTo` destinations and the bounded player A* are limited to explored cells, so an undiscovered terrain query cannot become a navigation side channel.
 
-The client first requests a lightweight character snapshot, establishes a disposable render origin, and requests only chunks intersecting the camera viewport plus a small presentation margin. It repeats that terrain request only when the viewport window or the authoritative exploration revision changes, not at render-frame frequency. The camera can pan over unknown background but cannot discover or inspect terrain; no character, including Cora (`EntityId` 3), is special to discovery or terrain selection. Arrow and Stop input become ordinary application commands; pan and zoom alter only presentation camera state.
+The client first requests a lightweight character snapshot, establishes a disposable render origin, and requests only chunks intersecting the camera viewport plus a small presentation margin. Those chunk-scoped snapshots also contain only explored ground-item stacks, so undiscovered item locations do not become a client-side information leak. It repeats that terrain request only when the viewport window, the authoritative exploration revision, or the authoritative item revision changes, not at render-frame frequency. The camera can pan over unknown background but cannot discover or inspect terrain; no character, including Cora (`EntityId` 3), is special to discovery or terrain selection. Arrow and Stop input become ordinary application commands; pan and zoom alter only presentation camera state.
 
 The presentation scheduler is non-authoritative: it requests at most one simulation tick every approximately 250 ms (nominally 4 Hz) and discards a long-frame backlog rather than catching up. Rendering frame time never becomes simulation input.
 
-This bootstrap proves rendering, input, snapshot-driven mapping, camera-driven explored-terrain refresh, effective-terrain snapshots, deterministic sub-cell living positions, and a bounded deterministic `MoveTo` route through the application boundary required by [`ADR-0004`](../adr/0004-grid-world-continuous-living-movement.md). A* remains cardinal and cell-topological; exact waypoints and per-tick motion traces are presentation-readable only on request. A trace is the path completed in that authoritative tick, including a one-point trace while idle, so presentation cannot replay stale arrival motion after a later snapshot. It does not implement diagonal or hierarchical navigation, auto-repath, jobs/AI, speed modifiers or collision, chunk residency, persistence, resources, construction, or save/load. Coordinates and provisional chunk geometry remain specified by [`ADR-0003`](../adr/0003-bootstrap-world-coordinates.md).
+This bootstrap proves rendering, input, snapshot-driven mapping, camera-driven explored-terrain refresh, effective-terrain snapshots, deterministic sub-cell living positions, and a bounded deterministic `MoveTo` route through the application boundary required by [`ADR-0004`](../adr/0004-grid-world-continuous-living-movement.md). A* remains cardinal and cell-topological; exact waypoints and per-tick motion traces are presentation-readable only on request. A trace is the path completed in that authoritative tick, including a one-point trace while idle, so presentation cannot replay stale arrival motion after a later snapshot. It does not implement diagonal or hierarchical navigation, auto-repath, jobs/AI, speed modifiers or collision, chunk residency, persistence, harvestable resource sources, hauling/stockpiles, construction, crafting, or save/load. The current Wood/Stone stacks prove physical ownership and detached presentation only. Coordinates and provisional chunk geometry remain specified by [`ADR-0003`](../adr/0003-bootstrap-world-coordinates.md).
