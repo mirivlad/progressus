@@ -5,8 +5,8 @@ use bevy::prelude::*;
 use progressus_app::{
     CHUNK_SIDE, CharacterSnapshot, ChunkCoord, ConstructionSiteSnapshot, EntityId,
     GroundItemSnapshot, JobKind, JobState, LocalCell, NaturalResourceKind, NaturalResourceSnapshot,
-    SUBUNITS_PER_CELL, StructureKind, StructureSnapshot, WorkstationSnapshot, WorldCell,
-    WorldPosition,
+    ProductionZoneKind, SUBUNITS_PER_CELL, StructureKind, StructureSnapshot, WorkstationSnapshot,
+    WorldCell, WorldPosition,
 };
 
 use crate::navigation::{SelectedCharacter, VisualMotion, interpolate_trace};
@@ -764,8 +764,15 @@ pub(crate) fn interpolate_selected_visual(
     }
 }
 
+fn production_zone_preview_neighbour(center: WorldCell, cell: WorldCell) -> bool {
+    let dx = i128::from(cell.x()) - i128::from(center.x());
+    let dy = i128::from(cell.y()) - i128::from(center.y());
+    dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0)
+}
+
 pub(crate) fn draw_tool_drag(
     tool: Res<ToolState>,
+    authoritative: Res<AuthoritativeClient>,
     cache: Res<PresentationCache>,
     mut gizmos: Gizmos,
 ) {
@@ -792,13 +799,33 @@ pub(crate) fn draw_tool_drag(
         ToolMode::StockpileRemove => Color::srgba(1.0, 0.35, 0.32, 0.9),
         ToolMode::Harvest => Color::srgba(1.0, 0.72, 0.18, 0.9),
         ToolMode::Wall => Color::srgba(0.35, 0.88, 1.0, 0.9),
+        ToolMode::ProductionZoneAdd { kind, .. } => match kind {
+            ProductionZoneKind::Input => Color::srgba(0.20, 0.88, 1.0, 0.9),
+            ProductionZoneKind::Output => Color::srgba(1.0, 0.62, 0.18, 0.9),
+        },
+        ToolMode::ProductionZoneRemove { .. } => Color::srgba(1.0, 0.28, 0.28, 0.9),
         ToolMode::CancelJobs => Color::srgba(1.0, 0.25, 0.25, 0.9),
+    };
+    let production_workstation_cell = match tool.mode {
+        ToolMode::ProductionZoneAdd { workstation_id, .. }
+        | ToolMode::ProductionZoneRemove { workstation_id, .. } => authoritative
+            .snapshot()
+            .workstations
+            .iter()
+            .find(|workstation| workstation.id == workstation_id)
+            .map(|workstation| workstation.cell),
+        _ => None,
     };
     let half = CELL_SIZE * 0.48;
     for y in min_y..=max_y {
         for x in min_x..=max_x {
-            let center =
-                world_translation(WorldCell::new(x, y), origin, CHARACTER_Z + 3.0).truncate();
+            let cell = WorldCell::new(x, y);
+            if let Some(workstation_cell) = production_workstation_cell
+                && !production_zone_preview_neighbour(workstation_cell, cell)
+            {
+                continue;
+            }
+            let center = world_translation(cell, origin, CHARACTER_Z + 3.0).truncate();
             let min = center - Vec2::splat(half);
             let max = center + Vec2::splat(half);
             gizmos.line_2d(Vec2::new(min.x, min.y), Vec2::new(max.x, min.y), color);
@@ -822,6 +849,55 @@ pub(crate) fn draw_stockpiles(
     for stockpile in &authoritative.snapshot().stockpiles {
         for &cell in &stockpile.cells {
             let center = world_translation(cell, origin, GROUND_ITEM_Z - 0.5).truncate();
+            let min = center - Vec2::splat(half);
+            let max = center + Vec2::splat(half);
+            for (from, to) in [
+                (Vec2::new(min.x, min.y), Vec2::new(max.x, min.y)),
+                (Vec2::new(max.x, min.y), Vec2::new(max.x, max.y)),
+                (Vec2::new(max.x, max.y), Vec2::new(min.x, max.y)),
+                (Vec2::new(min.x, max.y), Vec2::new(min.x, min.y)),
+            ] {
+                gizmos.line_2d(from, to, color);
+            }
+        }
+    }
+}
+
+pub(crate) fn draw_production_zones(
+    tool: Res<ToolState>,
+    authoritative: Res<AuthoritativeClient>,
+    cache: Res<PresentationCache>,
+    mut gizmos: Gizmos,
+) {
+    let workstation_id = match tool.mode {
+        ToolMode::ProductionZoneAdd { workstation_id, .. }
+        | ToolMode::ProductionZoneRemove { workstation_id, .. } => workstation_id,
+        _ => return,
+    };
+    let Some(origin) = cache.render_origin else {
+        return;
+    };
+    let Some(logistics) = authoritative
+        .snapshot()
+        .production_logistics
+        .iter()
+        .find(|logistics| logistics.workstation_id == workstation_id)
+    else {
+        return;
+    };
+    let half = CELL_SIZE * 0.45;
+    for (cells, color) in [
+        (
+            logistics.input_cells.as_slice(),
+            Color::srgba(0.20, 0.88, 1.0, 0.88),
+        ),
+        (
+            logistics.output_cells.as_slice(),
+            Color::srgba(1.0, 0.62, 0.18, 0.88),
+        ),
+    ] {
+        for &cell in cells {
+            let center = world_translation(cell, origin, WORKSTATION_Z - 0.5).truncate();
             let min = center - Vec2::splat(half);
             let max = center + Vec2::splat(half);
             for (from, to) in [
@@ -869,7 +945,7 @@ pub(crate) fn draw_job_designations(
                 };
                 (site.cell, CONSTRUCTION_Z + 1.0)
             }
-            JobKind::Haul { .. } => continue,
+            JobKind::Haul { .. } | JobKind::SupplyProduction { .. } => continue,
         };
         let center = world_translation(cell, origin, z).truncate();
         let half = CELL_SIZE * 0.46;

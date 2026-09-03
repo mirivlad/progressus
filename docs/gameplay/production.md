@@ -130,6 +130,8 @@ A workstation may expose persistent production orders rather than requiring the 
 
 An infinite order must not mean that one workstation owns all future resources. Physical input reservations belong to one concrete Craft job at a time. When two workstations can use the same stack, only one may reserve it; the other waits. Scheduling should remain deterministic and avoid starvation in ordinary shared-input cases. Ingredients are never shuttled back and forth merely because multiple workstations can use them.
 
+Production objects expose explicit physical Input and Output buffers rather than requiring ordinary stockpile ground beside every machine. Supply jobs move only the needed quantity from shared storage into the owning producer's Input zone; completed goods appear in its Output zone and then re-enter ordinary hauling. These zones remain physical ground, not hidden inventories.
+
 The UI should make the reason for waiting legible: missing inputs, unavailable worker, occupied workstation, or another reservation should be inspectable rather than hidden behind generic inactivity.
 
 ## 9. Design guardrail for agents

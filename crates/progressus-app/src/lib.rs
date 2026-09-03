@@ -10,15 +10,15 @@ pub use progressus_sim::{
     DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED, Direction, EntityId,
     InteractionRadius, ItemKind, ItemLocation, ItemQuantity, JobKind, JobState, LocalCell,
     MAX_PRODUCTION_ORDER_RUNS, MovementSpeed, MovementState, NaturalResource, NaturalResourceKind,
-    ProductionOrder, ProductionTarget, RecipeId, SUBUNITS_PER_CELL, SimulationTick, Stockpile,
-    Structure, StructureKind, Terrain, Workstation, WorkstationKind, WorldCell, WorldPosition,
-    WorldSeed, WorldgenVersion,
+    ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind, RecipeId,
+    SUBUNITS_PER_CELL, SimulationTick, Stockpile, Structure, StructureKind, Terrain, Workstation,
+    WorkstationKind, WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
 };
 pub use read_model::{
     CarriedItemSnapshot, CharacterSnapshot, ChunkSnapshot, ClientSnapshot,
     ConstructionSiteSnapshot, GroundItemSnapshot, JobSnapshot, KnownTerrain,
-    NaturalResourceSnapshot, NavigationSnapshot, ProductionOrderSnapshot, StockpileSnapshot,
-    StructureSnapshot, WorkstationSnapshot,
+    NaturalResourceSnapshot, NavigationSnapshot, ProductionLogisticsSnapshot,
+    ProductionOrderSnapshot, StockpileSnapshot, StructureSnapshot, WorkstationSnapshot,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -75,6 +75,12 @@ pub enum Command {
     SetProductionOrderTarget {
         order_id: EntityId,
         target: ProductionTarget,
+    },
+    SetProductionZoneCell {
+        workstation_id: EntityId,
+        kind: ProductionZoneKind,
+        cell: WorldCell,
+        enabled: bool,
     },
     RemoveProductionOrder {
         order_id: EntityId,
@@ -160,6 +166,14 @@ impl Application {
                 self.simulation
                     .set_production_order_target(order_id, target)?;
             }
+            Command::SetProductionZoneCell {
+                workstation_id,
+                kind,
+                cell,
+                enabled,
+            } => self
+                .simulation
+                .set_production_zone_cell(workstation_id, kind, cell, enabled)?,
             Command::RemoveProductionOrder { order_id } => {
                 self.simulation.remove_production_order(order_id)?;
             }
@@ -276,6 +290,11 @@ impl Application {
             .production_orders()
             .map(ProductionOrderSnapshot::from)
             .collect();
+        let production_logistics = self
+            .simulation
+            .production_logistics()
+            .map(ProductionLogisticsSnapshot::from)
+            .collect();
         let construction_sites = self
             .simulation
             .construction_sites()
@@ -297,6 +316,7 @@ impl Application {
             stockpile_revision: self.simulation.stockpile_revision(),
             workstation_revision: self.simulation.workstation_revision(),
             production_revision: self.simulation.production_revision(),
+            production_logistics_revision: self.simulation.production_logistics_revision(),
             construction_revision: self.simulation.construction_revision(),
             chunks,
             ground_items,
@@ -306,6 +326,7 @@ impl Application {
             stockpiles,
             workstations,
             production_orders,
+            production_logistics,
             construction_sites,
             structures,
             characters,

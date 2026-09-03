@@ -41,6 +41,15 @@ pub(crate) enum TextKey {
     PrimitiveTool,
     NoOrders,
     RemoveWorkstation,
+    Logistics,
+    InputZone,
+    OutputZone,
+    AddCells,
+    RemoveCells,
+    InputZoneAdd,
+    InputZoneRemove,
+    OutputZoneAdd,
+    OutputZoneRemove,
 }
 
 impl Locale {
@@ -63,6 +72,15 @@ impl Locale {
             (Language::Ru, TextKey::PrimitiveTool) => "Примитивный инструмент",
             (Language::Ru, TextKey::NoOrders) => "Заданий пока нет",
             (Language::Ru, TextKey::RemoveWorkstation) => "Убрать верстак",
+            (Language::Ru, TextKey::Logistics) => "Логистика",
+            (Language::Ru, TextKey::InputZone) => "Вход",
+            (Language::Ru, TextKey::OutputZone) => "Выход",
+            (Language::Ru, TextKey::AddCells) => "Добавить клетки",
+            (Language::Ru, TextKey::RemoveCells) => "Убрать клетки",
+            (Language::Ru, TextKey::InputZoneAdd) => "Вход +",
+            (Language::Ru, TextKey::InputZoneRemove) => "Вход -",
+            (Language::Ru, TextKey::OutputZoneAdd) => "Выход +",
+            (Language::Ru, TextKey::OutputZoneRemove) => "Выход -",
             (Language::En, TextKey::Select) => "Select",
             (Language::En, TextKey::StockpileAdd) => "Stockpile +",
             (Language::En, TextKey::StockpileRemove) => "Stockpile -",
@@ -80,6 +98,15 @@ impl Locale {
             (Language::En, TextKey::PrimitiveTool) => "Primitive tool",
             (Language::En, TextKey::NoOrders) => "No orders yet",
             (Language::En, TextKey::RemoveWorkstation) => "Remove workbench",
+            (Language::En, TextKey::Logistics) => "Logistics",
+            (Language::En, TextKey::InputZone) => "Input",
+            (Language::En, TextKey::OutputZone) => "Output",
+            (Language::En, TextKey::AddCells) => "Add cells",
+            (Language::En, TextKey::RemoveCells) => "Remove cells",
+            (Language::En, TextKey::InputZoneAdd) => "Input +",
+            (Language::En, TextKey::InputZoneRemove) => "Input -",
+            (Language::En, TextKey::OutputZoneAdd) => "Output +",
+            (Language::En, TextKey::OutputZoneRemove) => "Output -",
         }
     }
 

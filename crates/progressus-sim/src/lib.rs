@@ -7,6 +7,7 @@ mod job;
 mod pathfinding;
 mod position;
 mod production;
+mod production_logistics;
 mod recipe;
 mod simulation;
 mod stockpile;
@@ -30,6 +31,7 @@ pub use position::{
     within_interaction_range,
 };
 pub use production::{MAX_PRODUCTION_ORDER_RUNS, ProductionOrder, ProductionTarget};
+pub use production_logistics::{ProductionLogistics, ProductionZoneKind};
 pub use progressus_worldgen::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, GeneratedChunk, LocalCell, NaturalResource,
     NaturalResourceKind, Terrain, WorldCell, WorldSeed, WorldgenVersion,

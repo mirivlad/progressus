@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use progressus_app::{EntityId, ProductionZoneKind};
 
 use crate::i18n::{Language, Locale, TextKey};
 use crate::ui_font::UiFont;
@@ -12,6 +13,14 @@ pub(crate) enum ToolMode {
     Harvest,
     Wall,
     Workbench,
+    ProductionZoneAdd {
+        workstation_id: EntityId,
+        kind: ProductionZoneKind,
+    },
+    ProductionZoneRemove {
+        workstation_id: EntityId,
+        kind: ProductionZoneKind,
+    },
     CancelJobs,
 }
 
@@ -24,6 +33,22 @@ impl ToolMode {
             Self::Harvest => TextKey::Harvest,
             Self::Wall => TextKey::StoneWall,
             Self::Workbench => TextKey::Workbench,
+            Self::ProductionZoneAdd {
+                kind: ProductionZoneKind::Input,
+                ..
+            } => TextKey::InputZoneAdd,
+            Self::ProductionZoneRemove {
+                kind: ProductionZoneKind::Input,
+                ..
+            } => TextKey::InputZoneRemove,
+            Self::ProductionZoneAdd {
+                kind: ProductionZoneKind::Output,
+                ..
+            } => TextKey::OutputZoneAdd,
+            Self::ProductionZoneRemove {
+                kind: ProductionZoneKind::Output,
+                ..
+            } => TextKey::OutputZoneRemove,
             Self::CancelJobs => TextKey::CancelJobs,
         }
     }
@@ -35,6 +60,8 @@ impl ToolMode {
                 | Self::StockpileRemove
                 | Self::Harvest
                 | Self::Wall
+                | Self::ProductionZoneAdd { .. }
+                | Self::ProductionZoneRemove { .. }
                 | Self::CancelJobs
         )
     }

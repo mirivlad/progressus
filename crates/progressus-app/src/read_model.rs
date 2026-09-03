@@ -1,8 +1,8 @@
 use progressus_sim::{
     Character, ConstructionMaterialState, ConstructionSite, ItemKind, ItemStack, Job, JobKind,
-    JobState, MovementState, NaturalResource, NaturalResourceKind, ProductionOrder,
-    ProductionTarget, RecipeId, Stockpile, Structure, StructureKind, Workstation, WorkstationKind,
-    WorldPosition,
+    JobState, MovementState, NaturalResource, NaturalResourceKind, ProductionLogistics,
+    ProductionOrder, ProductionTarget, ProductionZoneKind, RecipeId, Stockpile, Structure,
+    StructureKind, Workstation, WorkstationKind, WorldPosition,
 };
 
 use crate::{ChunkCoord, EntityId, LocalCell, SimulationTick, Terrain, WorldCell, WorldgenVersion};
@@ -18,6 +18,7 @@ pub struct ClientSnapshot {
     pub stockpile_revision: u64,
     pub workstation_revision: u64,
     pub production_revision: u64,
+    pub production_logistics_revision: u64,
     pub construction_revision: u64,
     pub chunks: Vec<ChunkSnapshot>,
     pub ground_items: Vec<GroundItemSnapshot>,
@@ -27,6 +28,7 @@ pub struct ClientSnapshot {
     pub stockpiles: Vec<StockpileSnapshot>,
     pub workstations: Vec<WorkstationSnapshot>,
     pub production_orders: Vec<ProductionOrderSnapshot>,
+    pub production_logistics: Vec<ProductionLogisticsSnapshot>,
     pub construction_sites: Vec<ConstructionSiteSnapshot>,
     pub structures: Vec<StructureSnapshot>,
     pub characters: Vec<CharacterSnapshot>,
@@ -156,6 +158,23 @@ impl From<&ProductionOrder> for ProductionOrderSnapshot {
             workstation_id: order.workstation_id(),
             recipe_id: order.recipe_id(),
             target: order.target(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProductionLogisticsSnapshot {
+    pub workstation_id: EntityId,
+    pub input_cells: Vec<WorldCell>,
+    pub output_cells: Vec<WorldCell>,
+}
+
+impl From<&ProductionLogistics> for ProductionLogisticsSnapshot {
+    fn from(logistics: &ProductionLogistics) -> Self {
+        Self {
+            workstation_id: logistics.workstation_id(),
+            input_cells: logistics.cells(ProductionZoneKind::Input).collect(),
+            output_cells: logistics.cells(ProductionZoneKind::Output).collect(),
         }
     }
 }

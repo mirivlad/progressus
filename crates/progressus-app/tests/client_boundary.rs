@@ -1,8 +1,8 @@
 use progressus_app::{
     Application, CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, CharacterSnapshot, ChunkCoord, Command,
     Direction, EntityId, ItemKind, JobKind, JobState, KnownTerrain, LocalCell, MovementState,
-    NaturalResourceKind, NewGameOptions, RecipeId, SimulationTick, SnapshotQuery, StructureKind,
-    Terrain, WorkstationKind, WorldCell, WorldPosition, WorldSeed,
+    NaturalResourceKind, NewGameOptions, ProductionZoneKind, RecipeId, SimulationTick,
+    SnapshotQuery, StructureKind, Terrain, WorkstationKind, WorldCell, WorldPosition, WorldSeed,
 };
 
 fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
@@ -346,30 +346,60 @@ fn workbench_and_craft_cycle_cross_the_public_application_boundary() {
     assert_eq!(placed.workstations[0].cell, workbench_cell);
     assert_eq!(placed.workstations[0].kind, WorkstationKind::Workbench);
     let workstation_id = placed.workstations[0].id;
+    assert_eq!(placed.production_logistics.len(), 1);
+    assert_eq!(
+        placed.production_logistics[0].workstation_id,
+        workstation_id
+    );
+    assert!(placed.production_logistics[0].input_cells.len() >= 2);
+    assert_eq!(placed.production_logistics[0].output_cells.len(), 1);
 
+    let edited_input = placed.production_logistics[0].input_cells[0];
     application
-        .execute(Command::CreateStockpile {
-            cell: WorldCell::new(-1, 1),
+        .execute(Command::SetProductionZoneCell {
+            workstation_id,
+            kind: ProductionZoneKind::Input,
+            cell: edited_input,
+            enabled: false,
         })
+        .unwrap();
+    let removed = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert!(
+        !removed.production_logistics[0]
+            .input_cells
+            .contains(&edited_input)
+    );
+    application
+        .execute(Command::SetProductionZoneCell {
+            workstation_id,
+            kind: ProductionZoneKind::Input,
+            cell: edited_input,
+            enabled: true,
+        })
+        .unwrap();
+    assert!(
+        application
+            .execute(Command::CreateStockpile { cell: edited_input })
+            .is_err()
+    );
+
+    let first_stock = WorldCell::new(-2, 0);
+    let second_stock = WorldCell::new(2, 0);
+    application
+        .execute(Command::CreateStockpile { cell: first_stock })
         .unwrap();
     let stockpile_id = application
         .snapshot(SnapshotQuery::default())
         .unwrap()
         .stockpiles[0]
         .id;
-    for cell in [
-        WorldCell::new(1, 1),
-        WorldCell::new(0, 0),
-        WorldCell::new(0, 2),
-    ] {
-        application
-            .execute(Command::SetStockpileCell {
-                stockpile_id,
-                cell,
-                enabled: true,
-            })
-            .unwrap();
-    }
+    application
+        .execute(Command::SetStockpileCell {
+            stockpile_id,
+            cell: second_stock,
+            enabled: true,
+        })
+        .unwrap();
     application
         .execute(Command::AddProductionOrder {
             workstation_id,
@@ -395,7 +425,7 @@ fn workbench_and_craft_cycle_cross_the_public_application_boundary() {
     }));
 
     let mut produced = false;
-    for _ in 0..768 {
+    for _ in 0..1024 {
         application
             .execute(Command::AdvanceTicks { count: 1 })
             .unwrap();
@@ -447,13 +477,9 @@ fn workbench_and_craft_cycle_cross_the_public_application_boundary() {
     application
         .execute(Command::RemoveWorkstation { workstation_id })
         .unwrap();
-    assert!(
-        application
-            .snapshot(SnapshotQuery::default())
-            .unwrap()
-            .workstations
-            .is_empty()
-    );
+    let removed = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert!(removed.workstations.is_empty());
+    assert!(removed.production_logistics.is_empty());
 }
 
 #[test]

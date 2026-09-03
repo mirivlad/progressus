@@ -2,12 +2,12 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use progressus_app::{
     ClientSnapshot, Command, EntityId, MAX_PRODUCTION_ORDER_RUNS, ProductionOrderSnapshot,
-    ProductionTarget, RecipeId, WorkstationKind,
+    ProductionTarget, ProductionZoneKind, RecipeId, WorkstationKind,
 };
 
 use crate::i18n::{Locale, TextKey};
 use crate::runtime::AuthoritativeClient;
-use crate::ui::UiCapture;
+use crate::ui::{ToolMode, ToolState, UiCapture};
 use crate::ui_font::UiFont;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,7 +40,7 @@ impl ModalState {
 #[derive(Resource, Default)]
 pub(crate) struct ModalPresentation {
     root: Option<Entity>,
-    signature: Option<(ModalKind, u64, u64, crate::i18n::Language)>,
+    signature: Option<(ModalKind, u64, u64, u64, crate::i18n::Language)>,
 }
 
 #[derive(Component)]
@@ -79,6 +79,13 @@ pub(crate) struct RemoveWorkstationButton {
     workstation_id: EntityId,
 }
 
+#[derive(Component)]
+pub(crate) struct EditProductionZoneButton {
+    workstation_id: EntityId,
+    kind: ProductionZoneKind,
+    enabled: bool,
+}
+
 #[derive(SystemParam)]
 pub(crate) struct ModalInteractionQueries<'w, 's> {
     close: Query<'w, 's, &'static Interaction, (Changed<Interaction>, With<ModalCloseButton>)>,
@@ -97,6 +104,12 @@ pub(crate) struct ModalInteractionQueries<'w, 's> {
         'w,
         's,
         (&'static Interaction, &'static RemoveWorkstationButton),
+        Changed<Interaction>,
+    >,
+    edit_zone: Query<
+        'w,
+        's,
+        (&'static Interaction, &'static EditProductionZoneButton),
         Changed<Interaction>,
     >,
 }
@@ -135,6 +148,7 @@ pub(crate) fn sync_modal(
         kind,
         authoritative.snapshot().production_revision,
         authoritative.snapshot().workstation_revision,
+        authoritative.snapshot().production_logistics_revision,
         locale.language,
     );
     if !state.dirty && presentation.signature == Some(signature) {
@@ -231,7 +245,7 @@ fn spawn_workstation_modal(
                 .spawn((
                     Node {
                         width: px(600),
-                        min_height: px(330),
+                        min_height: px(410),
                         padding: UiRect::all(px(16)),
                         row_gap: px(12),
                         flex_direction: FlexDirection::Column,
@@ -244,6 +258,7 @@ fn spawn_workstation_modal(
                 ))
                 .with_children(|panel| {
                     spawn_title_row(panel, workstation_id, workstation_kind, locale, font);
+                    spawn_logistics(panel, snapshot, workstation_id, locale, font);
                     spawn_recipe_row(panel, workstation_id, locale, font);
                     spawn_orders(panel, &orders, locale, font);
                     spawn_footer(panel, workstation_id, locale, font);
@@ -288,6 +303,81 @@ fn spawn_title_row(
                 button.spawn(text_bundle(locale.tr(TextKey::Close), font, 14.0, TEXT));
             });
         });
+}
+
+fn spawn_logistics(
+    panel: &mut ChildSpawnerCommands,
+    snapshot: &ClientSnapshot,
+    workstation_id: EntityId,
+    locale: Locale,
+    font: &UiFont,
+) {
+    let logistics = snapshot
+        .production_logistics
+        .iter()
+        .find(|logistics| logistics.workstation_id == workstation_id);
+    let input_count = logistics.map_or(0, |logistics| logistics.input_cells.len());
+    let output_count = logistics.map_or(0, |logistics| logistics.output_cells.len());
+
+    panel.spawn(text_bundle(
+        locale.tr(TextKey::Logistics),
+        font,
+        16.0,
+        MUTED,
+    ));
+    for (kind, count, label_key) in [
+        (ProductionZoneKind::Input, input_count, TextKey::InputZone),
+        (
+            ProductionZoneKind::Output,
+            output_count,
+            TextKey::OutputZone,
+        ),
+    ] {
+        panel
+            .spawn((
+                Node {
+                    width: percent(100),
+                    padding: UiRect::all(px(10)),
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(ROW),
+            ))
+            .with_children(|row| {
+                row.spawn(text_bundle(
+                    format!("{}: {}", locale.tr(label_key), count),
+                    font,
+                    15.0,
+                    TEXT,
+                ));
+                row.spawn(Node {
+                    column_gap: px(7),
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|actions| {
+                    for (enabled, key) in [(true, TextKey::AddCells), (false, TextKey::RemoveCells)]
+                    {
+                        actions
+                            .spawn((
+                                Button,
+                                EditProductionZoneButton {
+                                    workstation_id,
+                                    kind,
+                                    enabled,
+                                },
+                                UiCapture,
+                                button_node(),
+                                BackgroundColor(BUTTON),
+                            ))
+                            .with_children(|button| {
+                                button.spawn(text_bundle(locale.tr(key), font, 13.0, TEXT));
+                            });
+                    }
+                });
+            });
+    }
 }
 
 fn spawn_recipe_row(
@@ -486,6 +576,7 @@ fn spawn_footer(
 pub(crate) fn modal_interaction(
     mut authoritative: ResMut<AuthoritativeClient>,
     mut state: ResMut<ModalState>,
+    mut tool: ResMut<ToolState>,
     interactions: ModalInteractionQueries,
 ) {
     let ModalInteractionQueries {
@@ -496,6 +587,7 @@ pub(crate) fn modal_interaction(
         toggle_infinite,
         delete,
         remove,
+        edit_zone,
     } = interactions;
     if close
         .iter()
@@ -629,6 +721,26 @@ pub(crate) fn modal_interaction(
             refresh(&mut authoritative);
             state.dirty = true;
         }
+    }
+
+    for (interaction, button) in &edit_zone {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        tool.mode = if button.enabled {
+            ToolMode::ProductionZoneAdd {
+                workstation_id: button.workstation_id,
+                kind: button.kind,
+            }
+        } else {
+            ToolMode::ProductionZoneRemove {
+                workstation_id: button.workstation_id,
+                kind: button.kind,
+            }
+        };
+        tool.cancel_drag();
+        state.close();
+        return;
     }
 
     for (interaction, button) in &remove {

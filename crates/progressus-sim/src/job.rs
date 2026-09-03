@@ -19,6 +19,11 @@ pub enum JobKind {
         order_id: EntityId,
         recipe_id: RecipeId,
     },
+    SupplyProduction {
+        workstation_id: EntityId,
+        item_id: EntityId,
+        destination: WorldCell,
+    },
     DeliverConstruction {
         site_id: EntityId,
         item_id: EntityId,
@@ -89,6 +94,8 @@ pub(crate) struct JobWorld {
     harvest_by_source: BTreeMap<WorldCell, EntityId>,
     haul_by_item: BTreeMap<EntityId, EntityId>,
     haul_by_destination: BTreeMap<WorldCell, EntityId>,
+    production_supply_by_item: BTreeMap<EntityId, EntityId>,
+    production_supply_by_destination: BTreeMap<WorldCell, EntityId>,
     craft_by_workstation: BTreeMap<EntityId, EntityId>,
     craft_by_order: BTreeMap<EntityId, EntityId>,
     craft_item_reservations: BTreeMap<EntityId, EntityId>,
@@ -126,6 +133,29 @@ impl JobWorld {
 
     pub(crate) fn haul_job_for_destination(&self, destination: WorldCell) -> Option<EntityId> {
         self.haul_by_destination.get(&destination).copied()
+    }
+
+    pub(crate) fn production_supply_job_for_item(&self, item_id: EntityId) -> Option<EntityId> {
+        self.production_supply_by_item.get(&item_id).copied()
+    }
+
+    pub(crate) fn production_supply_job_for_destination(
+        &self,
+        destination: WorldCell,
+    ) -> Option<EntityId> {
+        self.production_supply_by_destination
+            .get(&destination)
+            .copied()
+    }
+
+    pub(crate) fn logistics_job_for_item(&self, item_id: EntityId) -> Option<EntityId> {
+        self.haul_job_for_item(item_id)
+            .or_else(|| self.production_supply_job_for_item(item_id))
+    }
+
+    pub(crate) fn logistics_job_for_destination(&self, destination: WorldCell) -> Option<EntityId> {
+        self.haul_job_for_destination(destination)
+            .or_else(|| self.production_supply_job_for_destination(destination))
     }
 
     pub(crate) fn craft_job_for_workstation(&self, workstation_id: EntityId) -> Option<EntityId> {
@@ -169,14 +199,31 @@ impl JobWorld {
                 destination,
                 ..
             } => {
-                if self.haul_by_item.contains_key(&item_id) {
+                if self.logistics_job_for_item(item_id).is_some() {
                     return Err(JobWorldError::HaulItemAlreadyReserved(item_id));
                 }
-                if self.haul_by_destination.contains_key(&destination) {
+                if self.logistics_job_for_destination(destination).is_some() {
                     return Err(JobWorldError::HaulDestinationAlreadyReserved(destination));
                 }
                 self.haul_by_item.insert(item_id, id);
                 self.haul_by_destination.insert(destination, id);
+            }
+            JobKind::SupplyProduction {
+                item_id,
+                destination,
+                ..
+            } => {
+                if self.logistics_job_for_item(item_id).is_some() {
+                    return Err(JobWorldError::ProductionSupplyItemAlreadyReserved(item_id));
+                }
+                if self.logistics_job_for_destination(destination).is_some() {
+                    return Err(JobWorldError::ProductionSupplyDestinationAlreadyReserved(
+                        destination,
+                    ));
+                }
+                self.production_supply_by_item.insert(item_id, id);
+                self.production_supply_by_destination
+                    .insert(destination, id);
             }
             JobKind::Craft {
                 workstation_id,
@@ -358,6 +405,17 @@ impl JobWorld {
                     return Err(JobWorldError::IndexCorruption);
                 }
             }
+            JobKind::SupplyProduction {
+                item_id,
+                destination,
+                ..
+            } => {
+                if self.production_supply_by_item.remove(&item_id) != Some(job_id)
+                    || self.production_supply_by_destination.remove(&destination) != Some(job_id)
+                {
+                    return Err(JobWorldError::IndexCorruption);
+                }
+            }
             JobKind::Craft {
                 workstation_id,
                 order_id,
@@ -425,6 +483,17 @@ impl JobWorld {
                         return false;
                     }
                 }
+                JobKind::SupplyProduction {
+                    item_id,
+                    destination,
+                    ..
+                } => {
+                    if self.production_supply_by_item.get(&item_id) != Some(id)
+                        || self.production_supply_by_destination.get(&destination) != Some(id)
+                    {
+                        return false;
+                    }
+                }
                 JobKind::Craft {
                     workstation_id,
                     order_id,
@@ -477,6 +546,13 @@ impl JobWorld {
                     .filter(|job| matches!(job.kind(), JobKind::Haul { .. }))
                     .count()
             && self.haul_by_item.len() == self.haul_by_destination.len()
+            && self.production_supply_by_item.len()
+                == self
+                    .jobs
+                    .values()
+                    .filter(|job| matches!(job.kind(), JobKind::SupplyProduction { .. }))
+                    .count()
+            && self.production_supply_by_item.len() == self.production_supply_by_destination.len()
             && self.craft_by_workstation.len()
                 == self
                     .jobs
@@ -521,6 +597,8 @@ pub(crate) enum JobWorldError {
     HarvestSourceAlreadyDesignated(WorldCell),
     HaulItemAlreadyReserved(EntityId),
     HaulDestinationAlreadyReserved(WorldCell),
+    ProductionSupplyItemAlreadyReserved(EntityId),
+    ProductionSupplyDestinationAlreadyReserved(WorldCell),
     CraftWorkstationAlreadyDesignated(EntityId),
     CraftOrderAlreadyDesignated(EntityId),
     CraftItemAlreadyReserved(EntityId),

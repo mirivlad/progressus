@@ -2,6 +2,8 @@
 
 Status: **Accepted**
 
+Amended by [ADR-0012](0012-production-input-output-logistics-zones.md): dedicated production Input/Output zones replace adjacent ordinary-stockpile staging.
+
 ## Context
 
 The first crafting bootstrap used a map `Craft tool` that toggled one job on a workbench. That is too narrow once a workstation can expose several recipes, quantities, repeat policies, priorities, or later stock-target orders.

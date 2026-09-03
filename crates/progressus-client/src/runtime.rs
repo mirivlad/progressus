@@ -6,7 +6,8 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use progressus_app::{
     Application, ApplicationError, ChunkCoord, ClientSnapshot, Command, EntityId, JobKind,
-    NewGameOptions, SnapshotQuery, StructureKind, WorkstationKind, WorldCell, WorldSeed,
+    NewGameOptions, ProductionZoneKind, SnapshotQuery, StructureKind, WorkstationKind, WorldCell,
+    WorldSeed,
 };
 
 use crate::i18n::Locale;
@@ -17,8 +18,8 @@ use crate::presentation::PresentationError;
 use crate::procedural_assets::ProceduralAssetRegistry;
 use crate::render::{
     NavigationDebug, PresentationCache, camera_controls, draw_job_designations,
-    draw_selected_character, draw_selected_navigation, draw_stockpiles, draw_tool_drag,
-    setup_camera, sync_presentation,
+    draw_production_zones, draw_selected_character, draw_selected_navigation, draw_stockpiles,
+    draw_tool_drag, setup_camera, sync_presentation,
 };
 use crate::ui::{
     ToolMode, ToolState, language_toggle_interaction, refresh_toolbar_localization, setup_toolbar,
@@ -338,6 +339,8 @@ fn apply_point_tool(
         | ToolMode::StockpileRemove
         | ToolMode::Harvest
         | ToolMode::Wall
+        | ToolMode::ProductionZoneAdd { .. }
+        | ToolMode::ProductionZoneRemove { .. }
         | ToolMode::CancelJobs => {}
     }
     Ok(())
@@ -371,6 +374,17 @@ fn apply_tool_area(
                 .iter()
                 .map(|resource| resource.cell)
                 .collect::<BTreeSet<_>>();
+            let production_zone_cells = area_snapshot
+                .production_logistics
+                .iter()
+                .flat_map(|logistics| {
+                    logistics
+                        .input_cells
+                        .iter()
+                        .chain(logistics.output_cells.iter())
+                        .copied()
+                })
+                .collect::<BTreeSet<_>>();
             let mut stockpile_id = area_snapshot
                 .stockpiles
                 .first()
@@ -378,6 +392,7 @@ fn apply_tool_area(
             for cell in cells {
                 if known_terrain_at(&area_snapshot, cell) != Some(progressus_app::Terrain::Grass)
                     || resource_cells.contains(&cell)
+                    || production_zone_cells.contains(&cell)
                 {
                     continue;
                 }
@@ -437,6 +452,7 @@ fn apply_tool_area(
                 .filter_map(|job| match job.kind {
                     JobKind::Harvest { source } => Some(source),
                     JobKind::Haul { .. }
+                    | JobKind::SupplyProduction { .. }
                     | JobKind::Craft { .. }
                     | JobKind::DeliverConstruction { .. }
                     | JobKind::Construct { .. } => None,
@@ -474,6 +490,17 @@ fn apply_tool_area(
                 .iter()
                 .map(|item| item.position.containing_cell())
                 .collect::<BTreeSet<_>>();
+            let production_zone_cells = area_snapshot
+                .production_logistics
+                .iter()
+                .flat_map(|logistics| {
+                    logistics
+                        .input_cells
+                        .iter()
+                        .chain(logistics.output_cells.iter())
+                        .copied()
+                })
+                .collect::<BTreeSet<_>>();
             let construction_cells = area_snapshot
                 .construction_sites
                 .iter()
@@ -496,6 +523,7 @@ fn apply_tool_area(
                     || stockpile_cells.contains(&cell)
                     || workstation_cells.contains(&cell)
                     || item_cells.contains(&cell)
+                    || production_zone_cells.contains(&cell)
                     || construction_cells.contains(&cell)
                     || character_cells.contains(&cell)
                 {
@@ -510,6 +538,118 @@ fn apply_tool_area(
             }
         }
         ToolMode::Workbench => {}
+        ToolMode::ProductionZoneAdd {
+            workstation_id,
+            kind,
+        } => {
+            let Some(workstation_cell) = area_snapshot
+                .workstations
+                .iter()
+                .find(|workstation| workstation.id == workstation_id)
+                .map(|workstation| workstation.cell)
+            else {
+                return Ok(());
+            };
+            let resource_cells = area_snapshot
+                .natural_resources
+                .iter()
+                .map(|resource| resource.cell)
+                .collect::<BTreeSet<_>>();
+            let stockpile_cells = area_snapshot
+                .stockpiles
+                .iter()
+                .flat_map(|stockpile| stockpile.cells.iter().copied())
+                .collect::<BTreeSet<_>>();
+            let workstation_cells = area_snapshot
+                .workstations
+                .iter()
+                .map(|workstation| workstation.cell)
+                .collect::<BTreeSet<_>>();
+            let item_cells = area_snapshot
+                .ground_items
+                .iter()
+                .map(|item| item.position.containing_cell())
+                .collect::<BTreeSet<_>>();
+            let construction_cells = area_snapshot
+                .construction_sites
+                .iter()
+                .map(|site| site.cell)
+                .chain(
+                    area_snapshot
+                        .structures
+                        .iter()
+                        .map(|structure| structure.cell),
+                )
+                .collect::<BTreeSet<_>>();
+            let zone_cells = area_snapshot
+                .production_logistics
+                .iter()
+                .flat_map(|logistics| {
+                    logistics
+                        .input_cells
+                        .iter()
+                        .chain(logistics.output_cells.iter())
+                        .copied()
+                })
+                .collect::<BTreeSet<_>>();
+            for cell in cells {
+                if !is_production_zone_neighbour(workstation_cell, cell)
+                    || known_terrain_at(&area_snapshot, cell)
+                        != Some(progressus_app::Terrain::Grass)
+                    || resource_cells.contains(&cell)
+                    || stockpile_cells.contains(&cell)
+                    || workstation_cells.contains(&cell)
+                    || item_cells.contains(&cell)
+                    || construction_cells.contains(&cell)
+                    || zone_cells.contains(&cell)
+                {
+                    continue;
+                }
+                authoritative
+                    .application
+                    .execute(Command::SetProductionZoneCell {
+                        workstation_id,
+                        kind,
+                        cell,
+                        enabled: true,
+                    })?;
+            }
+        }
+        ToolMode::ProductionZoneRemove {
+            workstation_id,
+            kind,
+        } => {
+            let owned = area_snapshot
+                .production_logistics
+                .iter()
+                .find(|logistics| logistics.workstation_id == workstation_id)
+                .map(|logistics| match kind {
+                    ProductionZoneKind::Input => logistics
+                        .input_cells
+                        .iter()
+                        .copied()
+                        .collect::<BTreeSet<_>>(),
+                    ProductionZoneKind::Output => logistics
+                        .output_cells
+                        .iter()
+                        .copied()
+                        .collect::<BTreeSet<_>>(),
+                })
+                .unwrap_or_default();
+            for cell in cells {
+                if !owned.contains(&cell) {
+                    continue;
+                }
+                authoritative
+                    .application
+                    .execute(Command::SetProductionZoneCell {
+                        workstation_id,
+                        kind,
+                        cell,
+                        enabled: false,
+                    })?;
+            }
+        }
         ToolMode::CancelJobs => {
             let selected = cells.into_iter().collect::<BTreeSet<_>>();
             let jobs = area_snapshot
@@ -519,6 +659,7 @@ fn apply_tool_area(
                     JobKind::Harvest { source } if selected.contains(&source) => Some(job.id),
                     JobKind::Harvest { .. }
                     | JobKind::Haul { .. }
+                    | JobKind::SupplyProduction { .. }
                     | JobKind::Craft { .. }
                     | JobKind::DeliverConstruction { .. }
                     | JobKind::Construct { .. } => None,
@@ -543,6 +684,12 @@ fn apply_tool_area(
         }
     }
     Ok(())
+}
+
+fn is_production_zone_neighbour(center: WorldCell, cell: WorldCell) -> bool {
+    let dx = i128::from(cell.x()) - i128::from(center.x());
+    let dy = i128::from(cell.y()) - i128::from(center.y());
+    dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0)
 }
 
 fn rectangle_cells(first: WorldCell, last: WorldCell) -> Option<Vec<WorldCell>> {
@@ -694,6 +841,7 @@ pub fn run() -> Result<(), ClientError> {
                 crate::render::draw_navigation_debug,
                 draw_tool_drag,
                 draw_job_designations,
+                draw_production_zones,
                 draw_stockpiles,
                 camera_controls,
             )
