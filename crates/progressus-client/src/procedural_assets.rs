@@ -87,6 +87,14 @@ impl ProceduralAssetRegistry {
         sprite
     }
 
+    pub(crate) fn image_handle(
+        &mut self,
+        images: &mut Assets<Image>,
+        key: ProceduralAssetKey,
+    ) -> Handle<Image> {
+        self.image(images, key)
+    }
+
     pub(crate) fn quantity_sprite(&mut self, images: &mut Assets<Image>, quantity: u32) -> Sprite {
         let image = if let Some(handle) = self.quantity_images.get(&quantity) {
             handle.clone()

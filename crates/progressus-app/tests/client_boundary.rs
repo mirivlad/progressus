@@ -351,35 +351,61 @@ fn workbench_and_craft_cycle_cross_the_public_application_boundary() {
         placed.production_logistics[0].workstation_id,
         workstation_id
     );
-    assert!(placed.production_logistics[0].input_cells.len() >= 2);
+    assert_eq!(placed.production_logistics[0].input_cells.len(), 2);
     assert_eq!(placed.production_logistics[0].output_cells.len(), 1);
 
-    let edited_input = placed.production_logistics[0].input_cells[0];
-    application
-        .execute(Command::SetProductionZoneCell {
-            workstation_id,
-            kind: ProductionZoneKind::Input,
-            cell: edited_input,
-            enabled: false,
-        })
-        .unwrap();
-    let removed = application.snapshot(SnapshotQuery::default()).unwrap();
-    assert!(
-        !removed.production_logistics[0]
-            .input_cells
-            .contains(&edited_input)
-    );
-    application
-        .execute(Command::SetProductionZoneCell {
-            workstation_id,
-            kind: ProductionZoneKind::Input,
-            cell: edited_input,
-            enabled: true,
-        })
-        .unwrap();
+    let original_inputs = placed.production_logistics[0].input_cells.clone();
+    let edited_input = original_inputs[0];
     assert!(
         application
-            .execute(Command::CreateStockpile { cell: edited_input })
+            .execute(Command::SetProductionZoneCell {
+                workstation_id,
+                kind: ProductionZoneKind::Input,
+                cell: edited_input,
+                enabled: false,
+            })
+            .is_err(),
+        "workbench input ports are rotated as a pair rather than edited cell-by-cell"
+    );
+    application
+        .execute(Command::CycleWorkstationInputs { workstation_id })
+        .unwrap();
+    let rotated = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert_eq!(rotated.production_logistics[0].input_cells.len(), 2);
+    assert_ne!(rotated.production_logistics[0].input_cells, original_inputs);
+    let mut layouts = vec![
+        original_inputs.clone(),
+        rotated.production_logistics[0].input_cells.clone(),
+    ];
+    for _ in 0..4 {
+        application
+            .execute(Command::CycleWorkstationInputs { workstation_id })
+            .unwrap();
+        layouts.push(
+            application
+                .snapshot(SnapshotQuery::default())
+                .unwrap()
+                .production_logistics[0]
+                .input_cells
+                .clone(),
+        );
+    }
+    layouts.sort();
+    layouts.dedup();
+    assert_eq!(
+        layouts.len(),
+        6,
+        "the workbench exposes all six two-port layouts"
+    );
+    application
+        .execute(Command::CycleWorkstationInputs { workstation_id })
+        .unwrap();
+    let wrapped = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert_eq!(wrapped.production_logistics[0].input_cells, original_inputs);
+    let active_input = wrapped.production_logistics[0].input_cells[0];
+    assert!(
+        application
+            .execute(Command::CreateStockpile { cell: active_input })
             .is_err()
     );
 

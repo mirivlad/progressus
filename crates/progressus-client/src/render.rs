@@ -764,10 +764,10 @@ pub(crate) fn interpolate_selected_visual(
     }
 }
 
-fn production_zone_preview_neighbour(center: WorldCell, cell: WorldCell) -> bool {
+fn production_zone_preview_diagonal(center: WorldCell, cell: WorldCell) -> bool {
     let dx = i128::from(cell.x()) - i128::from(center.x());
     let dy = i128::from(cell.y()) - i128::from(center.y());
-    dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0)
+    dx.abs() == 1 && dy.abs() == 1
 }
 
 pub(crate) fn draw_tool_drag(
@@ -820,10 +820,22 @@ pub(crate) fn draw_tool_drag(
     for y in min_y..=max_y {
         for x in min_x..=max_x {
             let cell = WorldCell::new(x, y);
-            if let Some(workstation_cell) = production_workstation_cell
-                && !production_zone_preview_neighbour(workstation_cell, cell)
-            {
-                continue;
+            if let Some(workstation_cell) = production_workstation_cell {
+                let in_range = match tool.mode {
+                    ToolMode::ProductionZoneAdd {
+                        kind: ProductionZoneKind::Output,
+                        ..
+                    } => production_zone_preview_diagonal(workstation_cell, cell),
+                    ToolMode::ProductionZoneAdd {
+                        kind: ProductionZoneKind::Input,
+                        ..
+                    } => false,
+                    ToolMode::ProductionZoneRemove { .. } => true,
+                    _ => true,
+                };
+                if !in_range {
+                    continue;
+                }
             }
             let center = world_translation(cell, origin, CHARACTER_Z + 3.0).truncate();
             let min = center - Vec2::splat(half);

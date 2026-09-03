@@ -6,6 +6,7 @@ use progressus_app::{
 };
 
 use crate::i18n::{Locale, TextKey};
+use crate::procedural_assets::{ProceduralAssetParams, workstation_asset};
 use crate::runtime::AuthoritativeClient;
 use crate::ui::{ToolMode, ToolState, UiCapture};
 use crate::ui_font::UiFont;
@@ -80,6 +81,11 @@ pub(crate) struct RemoveWorkstationButton {
 }
 
 #[derive(Component)]
+pub(crate) struct RotateWorkbenchInputsButton {
+    workstation_id: EntityId,
+}
+
+#[derive(Component)]
 pub(crate) struct EditProductionZoneButton {
     workstation_id: EntityId,
     kind: ProductionZoneKind,
@@ -104,6 +110,12 @@ pub(crate) struct ModalInteractionQueries<'w, 's> {
         'w,
         's,
         (&'static Interaction, &'static RemoveWorkstationButton),
+        Changed<Interaction>,
+    >,
+    rotate_inputs: Query<
+        'w,
+        's,
+        (&'static Interaction, &'static RotateWorkbenchInputsButton),
         Changed<Interaction>,
     >,
     edit_zone: Query<
@@ -134,6 +146,7 @@ pub(crate) fn sync_modal(
     mut presentation: ResMut<ModalPresentation>,
     locale: Res<Locale>,
     font: Res<UiFont>,
+    mut procedural: ProceduralAssetParams,
 ) {
     let Some(kind) = state.open else {
         if let Some(root) = presentation.root.take() {
@@ -171,6 +184,10 @@ pub(crate) fn sync_modal(
                 presentation.signature = None;
                 return;
             };
+            let workbench_image = {
+                let (images, registry) = procedural.parts();
+                registry.image_handle(images, workstation_asset(workstation.kind, workstation_id))
+            };
             spawn_workstation_modal(
                 &mut commands,
                 authoritative.snapshot(),
@@ -178,6 +195,7 @@ pub(crate) fn sync_modal(
                 workstation.kind,
                 *locale,
                 &font,
+                workbench_image,
             )
         }
     };
@@ -217,6 +235,7 @@ fn spawn_workstation_modal(
     workstation_kind: WorkstationKind,
     locale: Locale,
     font: &UiFont,
+    workbench_image: Handle<Image>,
 ) -> Entity {
     let orders = snapshot
         .production_orders
@@ -258,7 +277,14 @@ fn spawn_workstation_modal(
                 ))
                 .with_children(|panel| {
                     spawn_title_row(panel, workstation_id, workstation_kind, locale, font);
-                    spawn_logistics(panel, snapshot, workstation_id, locale, font);
+                    spawn_logistics(
+                        panel,
+                        snapshot,
+                        workstation_id,
+                        locale,
+                        font,
+                        &workbench_image,
+                    );
                     spawn_recipe_row(panel, workstation_id, locale, font);
                     spawn_orders(panel, &orders, locale, font);
                     spawn_footer(panel, workstation_id, locale, font);
@@ -311,12 +337,16 @@ fn spawn_logistics(
     workstation_id: EntityId,
     locale: Locale,
     font: &UiFont,
+    workbench_image: &Handle<Image>,
 ) {
+    let workstation = snapshot
+        .workstations
+        .iter()
+        .find(|item| item.id == workstation_id);
     let logistics = snapshot
         .production_logistics
         .iter()
         .find(|logistics| logistics.workstation_id == workstation_id);
-    let input_count = logistics.map_or(0, |logistics| logistics.input_cells.len());
     let output_count = logistics.map_or(0, |logistics| logistics.output_cells.len());
 
     panel.spawn(text_bundle(
@@ -325,59 +355,158 @@ fn spawn_logistics(
         16.0,
         MUTED,
     ));
-    for (kind, count, label_key) in [
-        (ProductionZoneKind::Input, input_count, TextKey::InputZone),
-        (
-            ProductionZoneKind::Output,
-            output_count,
-            TextKey::OutputZone,
-        ),
-    ] {
-        panel
-            .spawn((
-                Node {
-                    width: percent(100),
-                    padding: UiRect::all(px(10)),
-                    justify_content: JustifyContent::SpaceBetween,
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
-                BackgroundColor(ROW),
-            ))
-            .with_children(|row| {
-                row.spawn(text_bundle(
-                    format!("{}: {}", locale.tr(label_key), count),
+    panel
+        .spawn((
+            Node {
+                width: percent(100),
+                padding: UiRect::all(px(10)),
+                column_gap: px(14),
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(ROW),
+        ))
+        .with_children(|row| {
+            row.spawn(Node {
+                width: px(112),
+                height: px(112),
+                position_type: PositionType::Relative,
+                ..default()
+            })
+            .with_children(|diagram| {
+                diagram.spawn((
+                    ImageNode::new(workbench_image.clone()),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(32),
+                        top: px(32),
+                        width: px(48),
+                        height: px(48),
+                        ..default()
+                    },
+                ));
+                if let (Some(workstation), Some(logistics)) = (workstation, logistics) {
+                    for cell in &logistics.input_cells {
+                        let dx = cell.x() - workstation.cell.x();
+                        let dy = cell.y() - workstation.cell.y();
+                        let (left, top) = match (dx, dy) {
+                            (0, 1) => (50.0, 8.0),
+                            (1, 0) => (92.0, 50.0),
+                            (0, -1) => (50.0, 92.0),
+                            (-1, 0) => (8.0, 50.0),
+                            _ => continue,
+                        };
+                        diagram.spawn((
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: px(left),
+                                top: px(top),
+                                width: px(12),
+                                height: px(12),
+                                border_radius: BorderRadius::MAX,
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.88, 0.16, 0.14)),
+                        ));
+                    }
+                    for cell in &logistics.output_cells {
+                        let dx = cell.x() - workstation.cell.x();
+                        let dy = cell.y() - workstation.cell.y();
+                        let (left, top) = match (dx, dy) {
+                            (-1, 1) => (18.0, 18.0),
+                            (1, 1) => (84.0, 18.0),
+                            (1, -1) => (84.0, 84.0),
+                            (-1, -1) => (18.0, 84.0),
+                            _ => continue,
+                        };
+                        diagram.spawn((
+                            Node {
+                                position_type: PositionType::Absolute,
+                                left: px(left),
+                                top: px(top),
+                                width: px(10),
+                                height: px(10),
+                                border_radius: BorderRadius::MAX,
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.95, 0.62, 0.12)),
+                        ));
+                    }
+                }
+            });
+            row.spawn(Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(8),
+                ..default()
+            })
+            .with_children(|actions| {
+                actions.spawn(text_bundle(
+                    locale.tr(TextKey::InputPorts),
                     font,
                     15.0,
                     TEXT,
                 ));
-                row.spawn(Node {
-                    column_gap: px(7),
-                    align_items: AlignItems::Center,
-                    ..default()
-                })
-                .with_children(|actions| {
-                    for (enabled, key) in [(true, TextKey::AddCells), (false, TextKey::RemoveCells)]
-                    {
-                        actions
-                            .spawn((
-                                Button,
-                                EditProductionZoneButton {
-                                    workstation_id,
-                                    kind,
-                                    enabled,
-                                },
-                                UiCapture,
-                                button_node(),
-                                BackgroundColor(BUTTON),
-                            ))
-                            .with_children(|button| {
-                                button.spawn(text_bundle(locale.tr(key), font, 13.0, TEXT));
-                            });
-                    }
-                });
+                actions
+                    .spawn((
+                        Button,
+                        RotateWorkbenchInputsButton { workstation_id },
+                        UiCapture,
+                        button_node(),
+                        BackgroundColor(BUTTON),
+                    ))
+                    .with_children(|button| {
+                        button.spawn(text_bundle(
+                            locale.tr(TextKey::RotateInputs),
+                            font,
+                            13.0,
+                            TEXT,
+                        ));
+                    });
             });
-    }
+        });
+
+    panel
+        .spawn((
+            Node {
+                width: percent(100),
+                padding: UiRect::all(px(10)),
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(ROW),
+        ))
+        .with_children(|row| {
+            row.spawn(text_bundle(
+                format!("{}: {}", locale.tr(TextKey::OutputZone), output_count),
+                font,
+                15.0,
+                TEXT,
+            ));
+            row.spawn(Node {
+                column_gap: px(7),
+                ..default()
+            })
+            .with_children(|actions| {
+                for (enabled, key) in [(true, TextKey::AddCells), (false, TextKey::RemoveCells)] {
+                    actions
+                        .spawn((
+                            Button,
+                            EditProductionZoneButton {
+                                workstation_id,
+                                kind: ProductionZoneKind::Output,
+                                enabled,
+                            },
+                            UiCapture,
+                            button_node(),
+                            BackgroundColor(BUTTON),
+                        ))
+                        .with_children(|button| {
+                            button.spawn(text_bundle(locale.tr(key), font, 13.0, TEXT));
+                        });
+                }
+            });
+        });
 }
 
 fn spawn_recipe_row(
@@ -587,6 +716,7 @@ pub(crate) fn modal_interaction(
         toggle_infinite,
         delete,
         remove,
+        rotate_inputs,
         edit_zone,
     } = interactions;
     if close
@@ -717,6 +847,24 @@ pub(crate) fn modal_interaction(
                 })
         {
             warn!("production order removal rejected: {error}");
+        } else {
+            refresh(&mut authoritative);
+            state.dirty = true;
+        }
+    }
+
+    for (interaction, button) in &rotate_inputs {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        if let Err(error) =
+            authoritative
+                .application_mut()
+                .execute(Command::CycleWorkstationInputs {
+                    workstation_id: button.workstation_id,
+                })
+        {
+            warn!("workstation input rotation rejected: {error}");
         } else {
             refresh(&mut authoritative);
             state.dirty = true;

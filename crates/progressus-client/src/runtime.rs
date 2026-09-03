@@ -542,14 +542,15 @@ fn apply_tool_area(
             workstation_id,
             kind,
         } => {
-            let Some(workstation_cell) = area_snapshot
+            let Some(workstation) = area_snapshot
                 .workstations
                 .iter()
                 .find(|workstation| workstation.id == workstation_id)
-                .map(|workstation| workstation.cell)
+                .copied()
             else {
                 return Ok(());
             };
+            let workstation_cell = workstation.cell;
             let resource_cells = area_snapshot
                 .natural_resources
                 .iter()
@@ -593,7 +594,13 @@ fn apply_tool_area(
                 })
                 .collect::<BTreeSet<_>>();
             for cell in cells {
-                if !is_production_zone_neighbour(workstation_cell, cell)
+                let in_range = match kind {
+                    ProductionZoneKind::Input => false,
+                    ProductionZoneKind::Output => {
+                        is_diagonal_production_neighbour(workstation_cell, cell)
+                    }
+                };
+                if !in_range
                     || known_terrain_at(&area_snapshot, cell)
                         != Some(progressus_app::Terrain::Grass)
                     || resource_cells.contains(&cell)
@@ -686,10 +693,10 @@ fn apply_tool_area(
     Ok(())
 }
 
-fn is_production_zone_neighbour(center: WorldCell, cell: WorldCell) -> bool {
+fn is_diagonal_production_neighbour(center: WorldCell, cell: WorldCell) -> bool {
     let dx = i128::from(cell.x()) - i128::from(center.x());
     let dy = i128::from(cell.y()) - i128::from(center.y());
-    dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0)
+    dx.abs() == 1 && dy.abs() == 1
 }
 
 fn rectangle_cells(first: WorldCell, last: WorldCell) -> Option<Vec<WorldCell>> {

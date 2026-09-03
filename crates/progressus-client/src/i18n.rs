@@ -42,7 +42,6 @@ pub(crate) enum TextKey {
     NoOrders,
     RemoveWorkstation,
     Logistics,
-    InputZone,
     OutputZone,
     AddCells,
     RemoveCells,
@@ -50,6 +49,8 @@ pub(crate) enum TextKey {
     InputZoneRemove,
     OutputZoneAdd,
     OutputZoneRemove,
+    InputPorts,
+    RotateInputs,
 }
 
 impl Locale {
@@ -73,7 +74,6 @@ impl Locale {
             (Language::Ru, TextKey::NoOrders) => "Заданий пока нет",
             (Language::Ru, TextKey::RemoveWorkstation) => "Убрать верстак",
             (Language::Ru, TextKey::Logistics) => "Логистика",
-            (Language::Ru, TextKey::InputZone) => "Вход",
             (Language::Ru, TextKey::OutputZone) => "Выход",
             (Language::Ru, TextKey::AddCells) => "Добавить клетки",
             (Language::Ru, TextKey::RemoveCells) => "Убрать клетки",
@@ -81,6 +81,8 @@ impl Locale {
             (Language::Ru, TextKey::InputZoneRemove) => "Вход -",
             (Language::Ru, TextKey::OutputZoneAdd) => "Выход +",
             (Language::Ru, TextKey::OutputZoneRemove) => "Выход -",
+            (Language::Ru, TextKey::InputPorts) => "Входы сырья",
+            (Language::Ru, TextKey::RotateInputs) => "Повернуть входы",
             (Language::En, TextKey::Select) => "Select",
             (Language::En, TextKey::StockpileAdd) => "Stockpile +",
             (Language::En, TextKey::StockpileRemove) => "Stockpile -",
@@ -99,7 +101,6 @@ impl Locale {
             (Language::En, TextKey::NoOrders) => "No orders yet",
             (Language::En, TextKey::RemoveWorkstation) => "Remove workbench",
             (Language::En, TextKey::Logistics) => "Logistics",
-            (Language::En, TextKey::InputZone) => "Input",
             (Language::En, TextKey::OutputZone) => "Output",
             (Language::En, TextKey::AddCells) => "Add cells",
             (Language::En, TextKey::RemoveCells) => "Remove cells",
@@ -107,6 +108,8 @@ impl Locale {
             (Language::En, TextKey::InputZoneRemove) => "Input -",
             (Language::En, TextKey::OutputZoneAdd) => "Output +",
             (Language::En, TextKey::OutputZoneRemove) => "Output -",
+            (Language::En, TextKey::InputPorts) => "Material inputs",
+            (Language::En, TextKey::RotateInputs) => "Rotate inputs",
         }
     }
 
