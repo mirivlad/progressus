@@ -256,7 +256,7 @@ pub(crate) fn save_modal_interaction(
             state.tool.mode = ToolMode::Select;
             state.tool.cancel_drag();
             state.cache.invalidate_loaded_world();
-            *state.scheduler = TickScheduler::default();
+            state.scheduler.reset_timing();
             if let Ok(mut camera) = cameras.single_mut() {
                 camera.translation.x = 0.0;
                 camera.translation.y = 0.0;

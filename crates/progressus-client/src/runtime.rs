@@ -26,8 +26,9 @@ use crate::render::{
 };
 use crate::save_slots::SaveStore;
 use crate::ui::{
-    ToolMode, ToolState, language_toggle_interaction, refresh_toolbar_localization,
-    save_menu_interaction, setup_toolbar, toolbar_interaction, update_ui_capture,
+    ToolMode, ToolState, language_toggle_interaction, pause_toggle_interaction,
+    refresh_toolbar_localization, save_menu_interaction, setup_toolbar, toolbar_interaction,
+    update_ui_capture,
 };
 use crate::ui_font::setup_ui_font;
 
@@ -850,6 +851,7 @@ pub fn run() -> Result<(), ClientError> {
             (
                 (
                     language_toggle_interaction,
+                    pause_toggle_interaction,
                     modal_keyboard,
                     save_menu_interaction,
                     save_modal_interaction,
@@ -885,6 +887,7 @@ pub fn run() -> Result<(), ClientError> {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, VecDeque, btree_map::Entry};
+    use std::time::Duration;
 
     use bevy::prelude::{
         App, Assets, ButtonInput, Camera2d, Children, Entity, Image, IntoScheduleConfigs, KeyCode,
@@ -961,6 +964,66 @@ mod tests {
             .iter()
             .copied()
             .collect()
+    }
+
+    #[test]
+    fn paused_scheduler_stops_authoritative_ticks_and_resume_has_no_backlog() {
+        let mut app = App::new();
+        app.insert_resource(AuthoritativeClient::new().unwrap())
+            .insert_resource(TickScheduler::default())
+            .insert_resource(SelectedCharacter::default())
+            .insert_resource(crate::modal::ModalState::default())
+            .insert_resource(ButtonInput::<KeyCode>::default())
+            .insert_resource(Time::<()>::default())
+            .add_systems(Update, advance_authority);
+
+        let initial_tick = app
+            .world()
+            .resource::<AuthoritativeClient>()
+            .snapshot()
+            .tick;
+        app.world_mut()
+            .resource_mut::<TickScheduler>()
+            .set_paused(true);
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs(5));
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<AuthoritativeClient>()
+                .snapshot()
+                .tick,
+            initial_tick
+        );
+
+        app.world_mut()
+            .resource_mut::<TickScheduler>()
+            .set_paused(false);
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_millis(249));
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<AuthoritativeClient>()
+                .snapshot()
+                .tick,
+            initial_tick
+        );
+
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_millis(1));
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<AuthoritativeClient>()
+                .snapshot()
+                .tick
+                .value(),
+            initial_tick.value() + 1
+        );
     }
 
     #[test]

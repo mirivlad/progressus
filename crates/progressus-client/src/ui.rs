@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use progressus_app::{EntityId, ProductionZoneKind};
 
 use crate::i18n::{Language, Locale, TextKey};
+use crate::interaction::TickScheduler;
 use crate::modal::ModalState;
 use crate::save_slots::SaveStore;
 use crate::ui_font::UiFont;
@@ -91,6 +92,10 @@ pub(crate) struct ToolButtonLabel(ToolMode);
 #[derive(Component)]
 pub(crate) struct ToolStatus;
 #[derive(Component)]
+pub(crate) struct PauseToggle;
+#[derive(Component)]
+pub(crate) struct PauseToggleLabel;
+#[derive(Component)]
 pub(crate) struct SaveMenuButton;
 #[derive(Component)]
 pub(crate) struct SaveMenuButtonLabel;
@@ -105,7 +110,12 @@ const NORMAL_BUTTON: Color = Color::srgb(0.12, 0.14, 0.15);
 const HOVERED_BUTTON: Color = Color::srgb(0.20, 0.24, 0.26);
 const ACTIVE_BUTTON: Color = Color::srgb(0.10, 0.46, 0.58);
 
-pub(crate) fn setup_toolbar(mut commands: Commands, locale: Res<Locale>, font: Res<UiFont>) {
+pub(crate) fn setup_toolbar(
+    mut commands: Commands,
+    locale: Res<Locale>,
+    scheduler: Res<TickScheduler>,
+    font: Res<UiFont>,
+) {
     let modes = [
         ToolMode::Select,
         ToolMode::StockpileAdd,
@@ -176,6 +186,37 @@ pub(crate) fn setup_toolbar(mut commands: Commands, locale: Res<Locale>, font: R
                 },
                 ToolStatus,
             ));
+
+            toolbar
+                .spawn((
+                    Button,
+                    PauseToggle,
+                    UiCapture,
+                    Node {
+                        min_width: px(96),
+                        height: px(36),
+                        margin: UiRect::left(px(8)),
+                        padding: UiRect::horizontal(px(10)),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(px(1)),
+                        ..default()
+                    },
+                    BackgroundColor(NORMAL_BUTTON),
+                    BorderColor::all(Color::srgb(0.30, 0.34, 0.36)),
+                ))
+                .with_children(|button| {
+                    button.spawn((
+                        Text::new(pause_label(*locale, scheduler.is_paused())),
+                        TextFont {
+                            font: font.0.clone(),
+                            font_size: 13.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.91, 0.93, 0.94)),
+                        PauseToggleLabel,
+                    ));
+                });
 
             toolbar
                 .spawn((
@@ -259,6 +300,14 @@ const fn language_target(language: Language) -> &'static str {
     }
 }
 
+fn pause_label(locale: Locale, paused: bool) -> &'static str {
+    locale.tr(if paused {
+        TextKey::Resume
+    } else {
+        TextKey::Pause
+    })
+}
+
 pub(crate) fn toolbar_interaction(
     keys: Res<ButtonInput<KeyCode>>,
     locale: Res<Locale>,
@@ -307,6 +356,25 @@ pub(crate) fn toolbar_interaction(
     }
 }
 
+pub(crate) fn pause_toggle_interaction(
+    keys: Res<ButtonInput<KeyCode>>,
+    locale: Res<Locale>,
+    mut scheduler: ResMut<TickScheduler>,
+    buttons: Query<&Interaction, (Changed<Interaction>, With<PauseToggle>)>,
+    mut labels: Query<&mut Text, With<PauseToggleLabel>>,
+) {
+    let pressed = buttons
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed);
+    if !pressed && !keys.just_pressed(KeyCode::KeyP) {
+        return;
+    }
+    let paused = scheduler.toggle_paused();
+    if let Ok(mut text) = labels.single_mut() {
+        **text = pause_label(*locale, paused).to_owned();
+    }
+}
+
 pub(crate) fn save_menu_interaction(
     buttons: Query<&Interaction, (Changed<Interaction>, With<SaveMenuButton>)>,
     mut modal: ResMut<ModalState>,
@@ -336,16 +404,24 @@ pub(crate) fn language_toggle_interaction(
     }
 }
 
-type SaveMenuLabelFilter = (With<SaveMenuButtonLabel>, Without<ToolButtonLabel>);
+type PauseLabelFilter = (With<PauseToggleLabel>, Without<ToolButtonLabel>);
+type SaveMenuLabelFilter = (
+    With<SaveMenuButtonLabel>,
+    Without<ToolButtonLabel>,
+    Without<PauseToggleLabel>,
+);
 type LanguageLabelFilter = (
     With<LanguageToggleLabel>,
     Without<ToolButtonLabel>,
+    Without<PauseToggleLabel>,
     Without<SaveMenuButtonLabel>,
 );
 
 pub(crate) fn refresh_toolbar_localization(
     locale: Res<Locale>,
+    scheduler: Res<TickScheduler>,
     mut tool_labels: Query<(&ToolButtonLabel, &mut Text)>,
+    mut pause_labels: Query<&mut Text, PauseLabelFilter>,
     mut save_labels: Query<&mut Text, SaveMenuLabelFilter>,
     mut language_labels: Query<&mut Text, LanguageLabelFilter>,
 ) {
@@ -354,6 +430,9 @@ pub(crate) fn refresh_toolbar_localization(
     }
     for (label, mut text) in &mut tool_labels {
         **text = locale.tr(label.0.text_key()).to_owned();
+    }
+    if let Ok(mut text) = pause_labels.single_mut() {
+        **text = pause_label(*locale, scheduler.is_paused()).to_owned();
     }
     if let Ok(mut text) = save_labels.single_mut() {
         **text = locale.tr(TextKey::Saves).to_owned();
