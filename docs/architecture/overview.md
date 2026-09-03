@@ -151,7 +151,7 @@ A chunk can be in states such as:
 
 The state machine should be explicit rather than inferred from renderer visibility.
 
-Chunk size is not fixed by this document. It must be benchmarked against generation, pathfinding, persistence, and rendering costs.
+The current bootstrap chunk side is 32 cells. Raw chunk residency follows [`ADR-0015`](../adr/0015-character-centered-derived-chunk-residency.md): `Simulation` keeps only the deduplicated radius-one neighborhoods around authoritative character chunk positions. Camera visibility does not define residency, and reads outside that set are ephemeral.
 
 ## 8. Deterministic world generation
 
@@ -175,7 +175,7 @@ Worldgen v1 now derives two independent untouched layers from `(seed, worldgen v
 
 `EffectiveChunk` is built on demand by applying those overrides to a raw generated chunk. Authoritative movement passability and application terrain snapshots query this effective terrain, so they agree on the current world rather than bypassing modifications.
 
-This is an in-memory bootstrap only. It does not yet provide save/load, resident caching or unloading policy, or a terrain gameplay command.
+Save format v1 persists sparse authoritative changes rather than materialized base chunks. A private derived `ChunkResidency` caches only raw deterministic chunks near characters and unloads them when those character-centered neighborhoods move away; loading rebuilds that cache from restored character positions. A terrain gameplay command remains outside the current bootstrap.
 
 ## 9. Persistence
 

@@ -18,6 +18,7 @@ use crate::job::{JobWorld, JobWorldError};
 use crate::pathfinding::{PathfindingError, find_explored_path};
 use crate::production::{ProductionWorld, ProductionWorldError};
 use crate::production_logistics::{ProductionLogisticsWorld, ProductionLogisticsWorldError};
+use crate::residency::ChunkResidency;
 use crate::stockpile::{StockpileWorld, StockpileWorldError};
 use crate::workstation::{WorkstationWorld, WorkstationWorldError};
 use crate::world_state::ModifiedWorld;
@@ -54,6 +55,7 @@ pub struct Simulation {
     stockpile_world: StockpileWorld,
     workstation_world: WorkstationWorld,
     construction_world: ConstructionWorld,
+    chunk_residency: ChunkResidency,
     depleted_resources: BTreeSet<WorldCell>,
     resource_revision: u64,
     explored_world: ExploredWorld,
@@ -111,6 +113,13 @@ impl Simulation {
             .iter()
             .map(|(id, character)| (*id, character.position().containing_cell()))
             .collect();
+        let mut chunk_residency = ChunkResidency::default();
+        chunk_residency.reconcile(
+            generator,
+            characters
+                .values()
+                .map(|character| character.position().containing_cell().split().0),
+        )?;
 
         Ok(Self {
             generator,
@@ -125,6 +134,7 @@ impl Simulation {
             stockpile_world: StockpileWorld::default(),
             workstation_world: WorkstationWorld::default(),
             construction_world: ConstructionWorld::default(),
+            chunk_residency,
             depleted_resources: BTreeSet::new(),
             resource_revision: 0,
             explored_world,
@@ -144,6 +154,18 @@ impl Simulation {
 
     pub fn next_entity_id(&self) -> Option<EntityId> {
         self.id_allocator.peek()
+    }
+
+    pub fn resident_chunks(&self) -> impl ExactSizeIterator<Item = ChunkCoord> + '_ {
+        self.chunk_residency.coordinates()
+    }
+
+    pub fn resident_chunk_count(&self) -> usize {
+        self.chunk_residency.len()
+    }
+
+    pub const fn residency_revision(&self) -> u64 {
+        self.chunk_residency.revision()
     }
 
     pub fn is_explored(&self, position: WorldCell) -> bool {
@@ -169,6 +191,7 @@ impl Simulation {
             self.maintain_craft_supply_jobs()?;
             self.maintain_haul_jobs()?;
             self.advance_jobs_one_tick()?;
+            self.reconcile_chunk_residency()?;
         }
 
         Ok(())
@@ -242,6 +265,10 @@ impl Simulation {
     ) -> Result<Option<NaturalResource>, SimulationError> {
         if self.depleted_resources.contains(&position) {
             return Ok(None);
+        }
+        let (coordinate, local) = position.split();
+        if let Some(chunk) = self.chunk_residency.get(coordinate) {
+            return Ok(chunk.natural_resource_at(local));
         }
         Ok(self.generator.natural_resource_at(position))
     }
@@ -982,6 +1009,9 @@ impl Simulation {
         &self,
         coordinate: ChunkCoord,
     ) -> Result<GeneratedChunk, SimulationError> {
+        if let Some(chunk) = self.chunk_residency.get(coordinate) {
+            return Ok(chunk.clone());
+        }
         self.generator.generate(coordinate).map_err(Into::into)
     }
 
@@ -3025,7 +3055,23 @@ impl Simulation {
         self.base_terrain_query_count
             .set(self.base_terrain_query_count.get() + 1);
 
+        let (coordinate, local) = position.split();
+        if let Some(chunk) = self.chunk_residency.get(coordinate) {
+            return chunk.terrain_at(local).ok_or(SimulationError::Worldgen(
+                WorldgenError::CoordinateOutOfRange(coordinate),
+            ));
+        }
         Ok(self.generator.terrain_at(position))
+    }
+
+    fn reconcile_chunk_residency(&mut self) -> Result<(), SimulationError> {
+        self.chunk_residency.reconcile(
+            self.generator,
+            self.characters
+                .values()
+                .map(|character| character.position().containing_cell().split().0),
+        )?;
+        Ok(())
     }
 
     fn resolve_terrain(&self, coordinate: ChunkCoord, local: LocalCell, base: Terrain) -> Terrain {
@@ -6537,5 +6583,92 @@ mod tests {
             }
         }
         panic!("expected raw grass next to {neighbor:?}");
+    }
+
+    #[test]
+    fn distant_sparse_modifications_survive_resident_unload_reload_cycles() {
+        let mut simulation = Simulation::new(WorldSeed::new(73)).unwrap();
+        let first_chunk = ChunkCoord::new(800, -900);
+        let second_chunk = ChunkCoord::new(-1_200, 1_400);
+        let first_cell = first_chunk.world_cell(LocalCell::new(7, 11)).unwrap();
+        let second_cell = second_chunk.world_cell(LocalCell::new(19, 23)).unwrap();
+
+        let changed = |terrain| match terrain {
+            Terrain::Grass => Terrain::Rock,
+            Terrain::Water | Terrain::Rock => Terrain::Grass,
+        };
+        let first_changed = changed(simulation.effective_terrain_at(first_cell).unwrap());
+        let second_changed = changed(simulation.effective_terrain_at(second_cell).unwrap());
+        simulation
+            .set_terrain_override(first_cell, first_changed)
+            .unwrap();
+        simulation
+            .set_terrain_override(second_cell, second_changed)
+            .unwrap();
+
+        let relocate = |simulation: &mut Simulation, cell: WorldCell| {
+            let position = WorldPosition::from_cell_center(cell).unwrap();
+            for character in simulation.characters.values_mut() {
+                character.set_position(position);
+                character.set_movement(MovementState::Idle);
+            }
+            simulation.reconcile_chunk_residency().unwrap();
+        };
+
+        relocate(&mut simulation, first_cell);
+        assert_eq!(
+            simulation.resident_chunk_count(),
+            crate::RESIDENT_CHUNKS_PER_CENTER
+        );
+        assert!(
+            simulation
+                .resident_chunks()
+                .any(|chunk| chunk == first_chunk)
+        );
+        assert!(
+            !simulation
+                .resident_chunks()
+                .any(|chunk| chunk == second_chunk)
+        );
+        assert_eq!(
+            simulation.effective_terrain_at(first_cell).unwrap(),
+            first_changed
+        );
+
+        relocate(&mut simulation, second_cell);
+        assert!(
+            !simulation
+                .resident_chunks()
+                .any(|chunk| chunk == first_chunk)
+        );
+        assert!(
+            simulation
+                .resident_chunks()
+                .any(|chunk| chunk == second_chunk)
+        );
+        assert_eq!(
+            simulation.effective_terrain_at(first_cell).unwrap(),
+            first_changed
+        );
+        assert_eq!(
+            simulation.effective_terrain_at(second_cell).unwrap(),
+            second_changed
+        );
+
+        relocate(&mut simulation, first_cell);
+        assert!(
+            simulation
+                .resident_chunks()
+                .any(|chunk| chunk == first_chunk)
+        );
+        assert!(
+            !simulation
+                .resident_chunks()
+                .any(|chunk| chunk == second_chunk)
+        );
+        assert_eq!(
+            simulation.effective_terrain_at(first_cell).unwrap(),
+            first_changed
+        );
     }
 }

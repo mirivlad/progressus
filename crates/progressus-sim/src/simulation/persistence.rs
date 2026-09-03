@@ -13,6 +13,7 @@ use crate::item::ItemWorld;
 use crate::job::JobWorld;
 use crate::production::ProductionWorld;
 use crate::production_logistics::ProductionLogisticsWorld;
+use crate::residency::ChunkResidency;
 use crate::stockpile::StockpileWorld;
 use crate::workstation::WorkstationWorld;
 use crate::world_state::ModifiedWorld;
@@ -244,6 +245,15 @@ impl SaveV1 {
             .iter()
             .map(|(id, character)| (*id, character.position().containing_cell()))
             .collect();
+        let mut chunk_residency = ChunkResidency::default();
+        chunk_residency
+            .reconcile(
+                generator,
+                characters
+                    .values()
+                    .map(|character| character.position().containing_cell().split().0),
+            )
+            .map_err(SaveError::UnsupportedWorldgen)?;
 
         let simulation = Simulation {
             generator,
@@ -258,6 +268,7 @@ impl SaveV1 {
             stockpile_world,
             workstation_world,
             construction_world,
+            chunk_residency,
             depleted_resources,
             resource_revision: 0,
             explored_world,
@@ -1949,6 +1960,7 @@ mod tests {
     #[test]
     fn pristine_save_round_trips_canonically_and_metadata_is_readable() {
         let simulation = Simulation::new(WorldSeed::new(42)).unwrap();
+        let resident_before = simulation.resident_chunks().collect::<Vec<_>>();
         let encoded = simulation.save_json().unwrap();
         let metadata = Simulation::save_metadata(&encoded).unwrap();
         assert_eq!(metadata.format_version, SAVE_FORMAT_VERSION);
@@ -1958,6 +1970,10 @@ mod tests {
 
         let restored = Simulation::load_json(&encoded).unwrap();
         assert_eq!(restored.save_json().unwrap(), encoded);
+        assert_eq!(
+            restored.resident_chunks().collect::<Vec<_>>(),
+            resident_before
+        );
         assert!(
             restored
                 .characters()

@@ -1,8 +1,9 @@
 use progressus_app::{
     Application, CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, CharacterSnapshot, ChunkCoord, Command,
     Direction, EntityId, ItemKind, JobKind, JobState, KnownTerrain, LocalCell, MovementState,
-    NaturalResourceKind, NewGameOptions, ProductionZoneKind, RecipeId, SimulationTick,
-    SnapshotQuery, StructureKind, Terrain, WorkstationKind, WorldCell, WorldPosition, WorldSeed,
+    NaturalResourceKind, NewGameOptions, ProductionZoneKind, RESIDENT_CHUNKS_PER_CENTER, RecipeId,
+    SimulationTick, SnapshotQuery, StructureKind, Terrain, WorkstationKind, WorldCell,
+    WorldPosition, WorldSeed,
 };
 
 fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
@@ -114,6 +115,23 @@ fn snapshot_is_bounded_ordered_and_renderable() {
             },
         ]
     );
+}
+
+#[test]
+fn resident_chunk_diagnostics_are_bounded_and_cover_every_character() {
+    let application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(42),
+    })
+    .unwrap();
+    let snapshot = application.snapshot(SnapshotQuery::default()).unwrap();
+
+    assert!(
+        snapshot.resident_chunks.len() <= snapshot.characters.len() * RESIDENT_CHUNKS_PER_CENTER
+    );
+    for character in &snapshot.characters {
+        let chunk = character.containing_cell.split().0;
+        assert!(snapshot.resident_chunks.binary_search(&chunk).is_ok());
+    }
 }
 
 #[test]

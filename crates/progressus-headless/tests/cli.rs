@@ -13,7 +13,9 @@ fn long_run_prints_deterministic_client_summary() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("seed=42 tick=100000 worldgen_version=2 chunks=2 characters=5"));
+    assert!(stdout.contains(
+        "seed=42 tick=100000 worldgen_version=2 chunks=2 characters=5 resident_chunks=12"
+    ));
     assert!(stdout.contains(
         "character id=1 name=Ada position_subunits=(-1536, 512) containing_cell=(-2, 0)"
     ));
@@ -100,6 +102,8 @@ fn travel_chunks_crosses_many_boundaries_deterministically() {
     assert!(stdout.contains("travel character_id=3"));
     assert!(stdout.contains("crossed_boundaries=64"));
     assert!(stdout.contains("steps=2239"));
+    assert!(stdout.contains("resident_chunks="));
+    assert!(stdout.contains("max_resident_chunks="));
 }
 
 #[test]

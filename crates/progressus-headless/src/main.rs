@@ -6,7 +6,8 @@ use std::{cmp::Ordering, collections::BTreeMap};
 
 use progressus_app::{
     Application, ChunkCoord, ClientSnapshot, Command, DEFAULT_CHARACTER_SPEED, Direction, EntityId,
-    NewGameOptions, SUBUNITS_PER_CELL, SnapshotQuery, Terrain, WorldCell, WorldPosition, WorldSeed,
+    NewGameOptions, RESIDENT_CHUNKS_PER_CENTER, SUBUNITS_PER_CELL, SnapshotQuery, Terrain,
+    WorldCell, WorldPosition, WorldSeed,
 };
 
 const USAGE: &str =
@@ -81,14 +82,16 @@ fn run_ticks(application: &mut Application, seed: u64, ticks: u64) -> Result<(),
         ],
         ..SnapshotQuery::default()
     })?;
+    validate_residency(&snapshot)?;
 
     println!(
-        "seed={} tick={} worldgen_version={} chunks={} characters={}",
+        "seed={} tick={} worldgen_version={} chunks={} characters={} resident_chunks={}",
         seed,
         snapshot.tick.value(),
         snapshot.worldgen_version.value(),
         snapshot.chunks.len(),
-        snapshot.characters.len()
+        snapshot.characters.len(),
+        snapshot.resident_chunks.len()
     );
     for character in &snapshot.characters {
         println!(
@@ -125,6 +128,8 @@ fn run_travel(
     requested_boundaries: u64,
 ) -> Result<(), Box<dyn Error>> {
     let mut snapshot = application.snapshot(SnapshotQuery::default())?;
+    validate_residency(&snapshot)?;
+    let mut max_resident_chunks = snapshot.resident_chunks.len();
     let mut position = character_exact_position(&snapshot, WALKER_CHARACTER_ID)?.containing_cell();
     let (start_chunk, _) = position.split();
     let mut max_chunk_x = start_chunk.x();
@@ -202,6 +207,8 @@ fn run_travel(
                     )
                 })?;
             snapshot = application.snapshot(SnapshotQuery::default())?;
+            validate_residency(&snapshot)?;
+            max_resident_chunks = max_resident_chunks.max(snapshot.resident_chunks.len());
             actual = character_exact_position(&snapshot, WALKER_CHARACTER_ID)?;
             if actual == target_position {
                 break;
@@ -238,7 +245,7 @@ fn run_travel(
         }
         if crossed_boundaries >= requested_boundaries {
             println!(
-                "travel character_id={} seed={} start_chunk_x={} max_chunk_x={} crossed_boundaries={} steps={} position=({}, {})",
+                "travel character_id={} seed={} start_chunk_x={} max_chunk_x={} crossed_boundaries={} steps={} position=({}, {}) resident_chunks={} max_resident_chunks={}",
                 WALKER_CHARACTER_ID.value(),
                 seed,
                 start_chunk.x(),
@@ -246,7 +253,9 @@ fn run_travel(
                 crossed_boundaries,
                 steps + 1,
                 position.x(),
-                position.y()
+                position.y(),
+                snapshot.resident_chunks.len(),
+                max_resident_chunks
             );
             return Ok(());
         }
@@ -292,6 +301,32 @@ fn select_direction(
         })
         .map(|(direction, _)| direction)
         .ok_or("no adjacent grass cell is available")
+}
+
+fn validate_residency(snapshot: &ClientSnapshot) -> Result<(), CliError> {
+    let bound = snapshot
+        .characters
+        .len()
+        .checked_mul(RESIDENT_CHUNKS_PER_CENTER)
+        .ok_or_else(|| CliError("resident chunk bound overflowed".to_owned()))?;
+    if snapshot.resident_chunks.len() > bound {
+        return Err(CliError(format!(
+            "resident chunk count {} exceeds bound {bound}",
+            snapshot.resident_chunks.len()
+        )));
+    }
+    for character in &snapshot.characters {
+        let chunk = character.containing_cell.split().0;
+        if snapshot.resident_chunks.binary_search(&chunk).is_err() {
+            return Err(CliError(format!(
+                "character {} occupies non-resident chunk ({}, {})",
+                character.id.value(),
+                chunk.x(),
+                chunk.y()
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn character_exact_position(

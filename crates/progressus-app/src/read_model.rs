@@ -20,6 +20,8 @@ pub struct ClientSnapshot {
     pub production_revision: u64,
     pub production_logistics_revision: u64,
     pub construction_revision: u64,
+    pub residency_revision: u64,
+    pub resident_chunks: Vec<ChunkCoord>,
     pub chunks: Vec<ChunkSnapshot>,
     pub ground_items: Vec<GroundItemSnapshot>,
     pub carried_items: Vec<CarriedItemSnapshot>,

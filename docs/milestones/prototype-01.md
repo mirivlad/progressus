@@ -49,7 +49,7 @@ A character can move across many chunk boundaries in positive and negative coord
 
 The acceptance test should cover enough distance to catch hidden finite-grid assumptions.
 
-**Partially advanced (bootstrap):** deterministic fixed-point cardinal movement crosses the immediate positive and negative chunk boundaries, and the external headless walker crosses 64 positive boundaries without a finite global grid or preloaded route. Long-distance traversal across both signs, chunk residency, and general navigation remain incomplete.
+**Advanced bootstrap:** deterministic fixed-point cardinal movement crosses the immediate positive and negative chunk boundaries, and the external headless walker crosses 64 positive boundaries without a finite global grid or preloaded route. Character-centered radius-one chunk residency now remains bounded during that route (21 resident chunks at the end and a maximum of 21 with five characters). Long-distance traversal across both signs and general navigation remain incomplete.
 
 ### P01-WORLD-04 — Sparse residency
 
@@ -57,13 +57,13 @@ The implementation must not require all generated or visited chunks to remain lo
 
 A simple unload policy is sufficient.
 
-**Incomplete:** no resident caching or unload policy exists yet.
+**Implemented bootstrap:** raw deterministic `GeneratedChunk` values are a derived cache centered on authoritative character chunks. Each distinct character chunk requests a 3×3 radius-one neighborhood; overlaps deduplicate, camera/read-only queries outside the set are ephemeral, and chunks leaving the union are discarded. Sparse authoritative modifications remain outside the cache and survive unload/reload. Save v1 does not serialize residency and reconstructs it from restored character positions. See [`ADR-0015`](../adr/0015-character-centered-derived-chunk-residency.md).
 
 ### P01-WORLD-05 — Modified world state
 
 Changes to terrain or placed objects in a chunk persist independently of deterministic base generation.
 
-**Partially advanced (bootstrap):** deterministic base terrain remains immutable while `Simulation` holds sparse, in-memory effective-terrain overrides. Movement and terrain snapshots observe the effective terrain. Save/load, chunk residency, placed objects, and terrain gameplay commands remain incomplete.
+**Advanced bootstrap:** deterministic base terrain remains immutable while `Simulation` holds sparse effective-terrain overrides. Movement and terrain snapshots observe the effective terrain; save v1 round-trips distant overrides, and the residency regression explicitly moves between two far-apart modified chunks, unloads each raw chunk, and verifies the modifications after regeneration. Placed objects are persistent authoritative entities, while a terrain gameplay editing command remains incomplete.
 
 ## 4. Required simulation systems
 
@@ -213,7 +213,7 @@ Generate a set of neighboring chunks in two different orders. Results must match
 
 Move an entity across multiple chunk boundaries and verify final position and identity.
 
-**Partially advanced:** simulation tests cover manual and routed `x=31 -> x=32` and manual `x=0 -> x=-1` with the same `EntityId` at fixed-point resolution; the headless application-boundary scenario drives ID 3 across 64 positive chunk boundaries for seed 0, under current worldgen v2 ending at coarse cell `(2048, 89)` after 2,239 chosen-cell steps (8,956 default-speed ticks). Long-distance negative traversal and residency/unload behavior remain future coverage.
+**Advanced bootstrap:** simulation tests cover manual and routed `x=31 -> x=32` and manual `x=0 -> x=-1` with the same `EntityId` at fixed-point resolution; the headless application-boundary scenario drives ID 3 across 64 positive chunk boundaries for seed 0, under current worldgen v2 ending at coarse cell `(2048, 89)` after 2,239 chosen-cell steps (8,956 default-speed ticks). The same run validates that every character remains in a resident chunk and that the resident count stays within the `9 × character_count` policy. Long-distance negative traversal remains future coverage.
 
 ### TEST-P01-04 — Item ownership invariant
 
@@ -227,6 +227,8 @@ Create a modified world state, save, load, and compare authoritative state.
 
 Modify at least two widely separated chunks, unload them, reload them, and verify both modifications.
 
+**Implemented:** a simulation regression modifies chunks `(800,-900)` and `(-1200,1400)`, moves the full character interest set between them, proves the previous raw chunk leaves residency, and verifies each sparse override before, during, and after regeneration.
+
 ### TEST-P01-07 — Long-run smoke test
 
 Run the simulation headlessly for a large number of ticks with basic activity and ensure:
@@ -236,13 +238,13 @@ Run the simulation headlessly for a large number of ticks with basic activity an
 - bounded loaded-chunk count under the chosen policy;
 - no obvious runaway job/resource duplication.
 
-The exact tick count should be chosen once simulation speed is measurable.
+The current headless smoke advances 100,000 ticks and validates the residency bound through `progressus-app`; travel64 additionally checks the bound during 8,956 movement ticks. A future activity-heavy long-run scenario should add sustained production/construction load.
 
 ## 9. UI requirements
 
 Only enough interface is required to operate and inspect the prototype.
 
-**Partially advanced (bootstrap):** the native Bevy client opens seed `0`, renders five snapshot-driven characters and the explored terrain intersecting its camera viewport plus a small margin, accepts Cora's arrow/Stop movement input plus left-click selection and right-click exact `MoveTo`, and provides presentation-only pan/zoom. The selected character is visibly bracketed and its route/destination are shown by default; F3 adds only the technical authoritative-position overlay. A bottom toolbar provides Select, Stockpile add/remove, Harvest, Stone wall, Workbench, and Cancel-jobs tools. Stockpile/harvest/wall/cancel designations operate over a dragged rectangular cell area with a live grid preview; Workbench is a point placement tool, and right-click or Escape returns to Select. In Select mode, clicking a workbench opens the reusable modal workstation inspector. That modal lists recipes and authoritative production orders, supports finite quantity adjustment plus an explicit infinite `∞` target, deletion and workstation removal, and shows a logistics schematic. A Workbench owns exactly two red-marked cardinal Input ports and two yellow-marked diagonal Output ports. Separate localized rotate actions cycle each pair independently through its six canonical layouts; Workbench logistics cells are no longer painted individually. The modal can be closed with Escape. The localization layer ships Russian and English UI strings with Russian as the default and a toolbar language toggle; the client resolves a system font with Cyrillic coverage because Bevy's embedded subset is ASCII-only. Shift+left-click harvest and Ctrl+left-click single-cell stockpile editing remain temporary shortcuts. The camera itself does not discover terrain; unknown cells remain background and snapshots do not expose their terrain type. Every character sprite interpolates from its detached last-tick motion-trace polyline without restarting for repeat snapshots of the same simulation tick; selecting a character is required only for publishing its route/destination, not for smooth movement. Terrain/item presentation refreshes on authoritative revisions rather than every render frame. The client renders physical Wood/Stone/PrimitiveTool ground stacks with procedural pixel quantity labels, natural resources, workbenches, construction blueprints/finished stone walls, harvest/construction designations, stockpile-cell outlines, and carried stacks parented to worker visuals during hauling or construction delivery. The remaining interface, richer navigation, generalized jobs/AI controls, speed/collision, residency, demolition/doors, stockpile policies, containers, autosaves, and richer save-management criteria are incomplete.
+**Partially advanced (bootstrap):** the native Bevy client opens seed `0`, renders five snapshot-driven characters and the explored terrain intersecting its camera viewport plus a small margin, accepts Cora's arrow/Stop movement input plus left-click selection and right-click exact `MoveTo`, and provides presentation-only pan/zoom. The selected character is visibly bracketed and its route/destination are shown by default; F3 adds only the technical authoritative-position overlay. A bottom toolbar provides Select, Stockpile add/remove, Harvest, Stone wall, Workbench, and Cancel-jobs tools. Stockpile/harvest/wall/cancel designations operate over a dragged rectangular cell area with a live grid preview; Workbench is a point placement tool, and right-click or Escape returns to Select. In Select mode, clicking a workbench opens the reusable modal workstation inspector. That modal lists recipes and authoritative production orders, supports finite quantity adjustment plus an explicit infinite `∞` target, deletion and workstation removal, and shows a logistics schematic. A Workbench owns exactly two red-marked cardinal Input ports and two yellow-marked diagonal Output ports. Separate localized rotate actions cycle each pair independently through its six canonical layouts; Workbench logistics cells are no longer painted individually. The modal can be closed with Escape. The localization layer ships Russian and English UI strings with Russian as the default and a toolbar language toggle; the client resolves a system font with Cyrillic coverage because Bevy's embedded subset is ASCII-only. Shift+left-click harvest and Ctrl+left-click single-cell stockpile editing remain temporary shortcuts. The camera itself does not discover terrain; unknown cells remain background and snapshots do not expose their terrain type. Every character sprite interpolates from its detached last-tick motion-trace polyline without restarting for repeat snapshots of the same simulation tick; selecting a character is required only for publishing its route/destination, not for smooth movement. Terrain/item presentation refreshes on authoritative revisions rather than every render frame. The client renders physical Wood/Stone/PrimitiveTool ground stacks with procedural pixel quantity labels, natural resources, workbenches, construction blueprints/finished stone walls, harvest/construction designations, stockpile-cell outlines, and carried stacks parented to worker visuals during hauling or construction delivery. F3 now also outlines the current resident chunk set while keeping the selected character's authoritative-position cross. The remaining interface, richer navigation, generalized jobs/AI controls, speed/collision, demolition/doors, stockpile policies, containers, autosaves, and richer save-management criteria are incomplete.
 
 Minimum capabilities:
 
@@ -320,10 +322,10 @@ Prototype 01 is complete when all of the following are true:
 - [ ] physical stockpiling works;
 - [x] construction consumes delivered physical inputs;
 - [ ] crafting consumes inputs and creates an output;
-- [ ] characters can traverse far enough to prove chunk streaming;
-- [ ] distant chunks can unload and reload;
+- [x] characters can traverse far enough to prove chunk streaming;
+- [x] distant chunks can unload and reload;
 - [x] save/load round trip preserves authoritative state;
-- [ ] worldgen determinism/order-independence tests pass;
+- [x] worldgen determinism/order-independence tests pass;
 - [ ] no known item duplication bug exists;
 - [ ] long-run headless smoke test passes;
 - [ ] baseline performance measurements are documented;

@@ -122,3 +122,18 @@ fn identical_mutations_and_unrelated_visitation_preserve_effective_state() {
     }
     assert_eq!(effective_cells(&first, ChunkCoord::new(64, 0)), before);
 }
+
+#[test]
+fn distant_queries_are_ephemeral_and_do_not_expand_residency() {
+    let simulation = Simulation::new(WorldSeed::new(73)).unwrap();
+    let before = simulation.resident_chunks().collect::<Vec<_>>();
+    let revision = simulation.residency_revision();
+    let distant = ChunkCoord::new(12_345, -23_456);
+
+    simulation.generated_chunk(distant).unwrap();
+    simulation.effective_chunk(distant).unwrap();
+    simulation.natural_resources_in_chunk(distant).unwrap();
+
+    assert_eq!(simulation.resident_chunks().collect::<Vec<_>>(), before);
+    assert_eq!(simulation.residency_revision(), revision);
+}

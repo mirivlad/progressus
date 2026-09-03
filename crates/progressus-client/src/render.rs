@@ -1083,7 +1083,26 @@ pub(crate) fn draw_navigation_debug(
     if !debug.0 {
         return;
     }
-    let (Some(id), Some(origin_cell)) = (selected.0, cache.render_origin) else {
+    let Some(origin_cell) = cache.render_origin else {
+        return;
+    };
+
+    let resident_color = Color::srgba(0.35, 0.80, 1.0, 0.55);
+    let chunk_size = f32::from(CHUNK_SIDE) * CELL_SIZE;
+    for coordinate in &authoritative.snapshot().resident_chunks {
+        let Some(first_cell) = coordinate.world_cell(LocalCell::new(0, 0)) else {
+            continue;
+        };
+        let first_center = world_translation(first_cell, origin_cell, CHARACTER_Z + 1.0).truncate();
+        let minimum = first_center - Vec2::splat(CELL_SIZE * 0.5);
+        let maximum = minimum + Vec2::splat(chunk_size);
+        gizmos.line_2d(minimum, Vec2::new(maximum.x, minimum.y), resident_color);
+        gizmos.line_2d(Vec2::new(maximum.x, minimum.y), maximum, resident_color);
+        gizmos.line_2d(maximum, Vec2::new(minimum.x, maximum.y), resident_color);
+        gizmos.line_2d(Vec2::new(minimum.x, maximum.y), minimum, resident_color);
+    }
+
+    let Some(id) = selected.0 else {
         return;
     };
     let Some(character) = authoritative

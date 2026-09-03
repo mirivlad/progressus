@@ -9,6 +9,7 @@ mod position;
 mod production;
 mod production_logistics;
 mod recipe;
+mod residency;
 mod simulation;
 mod stockpile;
 mod workstation;
@@ -37,6 +38,7 @@ pub use progressus_worldgen::{
     NaturalResourceKind, Terrain, WorldCell, WorldSeed, WorldgenVersion,
 };
 pub use recipe::{CRAFT_WORK_TICKS, RecipeDefinition, RecipeId, RecipeInput, recipe_definition};
+pub use residency::{RESIDENT_CHUNK_RADIUS, RESIDENT_CHUNKS_PER_CENTER};
 pub use simulation::{SAVE_FORMAT_VERSION, SaveError, SaveMetadata, Simulation, SimulationError};
 pub use stockpile::Stockpile;
 pub use workstation::{Workstation, WorkstationKind};
