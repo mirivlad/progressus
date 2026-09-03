@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
+use bevy::sprite::Text2dShadow;
 use progressus_app::{
     CHUNK_SIDE, CharacterSnapshot, ChunkCoord, EntityId, GroundItemSnapshot, JobKind, JobState,
     LocalCell, NaturalResourceKind, NaturalResourceSnapshot, SUBUNITS_PER_CELL, WorldCell,
@@ -18,6 +19,7 @@ use crate::procedural_assets::{
     terrain_asset,
 };
 use crate::runtime::AuthoritativeClient;
+use crate::ui::{ToolMode, ToolState};
 
 const CELL_SIZE: f32 = 12.0;
 const TERRAIN_Z: f32 = 0.0;
@@ -58,6 +60,7 @@ pub(crate) struct PresentationCache {
     pub(crate) resource_revision: Option<u64>,
     pub(crate) characters: BTreeMap<EntityId, Entity>,
     pub(crate) ground_items: BTreeMap<EntityId, Entity>,
+    pub(crate) ground_item_labels: BTreeMap<EntityId, Entity>,
     pub(crate) carried_items: BTreeMap<EntityId, Entity>,
     pub(crate) natural_resources: BTreeMap<WorldCell, Entity>,
 }
@@ -374,7 +377,24 @@ fn sync_ground_items(
                         GroundItemVisual,
                     ))
                     .id();
+                let label = commands
+                    .spawn((
+                        Text2d::new(item.quantity.to_string()),
+                        TextFont {
+                            font_size: 6.0,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        Text2dShadow {
+                            offset: Vec2::new(1.0, 1.0),
+                            color: Color::BLACK,
+                        },
+                        Transform::from_xyz(CELL_SIZE * 0.28, -CELL_SIZE * 0.3, 1.0),
+                        ChildOf(entity),
+                    ))
+                    .id();
                 cache.ground_items.insert(id, entity);
+                cache.ground_item_labels.insert(id, label);
             }
             GroundItemSyncAction::Update(item) => {
                 if let Some(entity) = cache.ground_items.get(&item.id) {
@@ -386,9 +406,15 @@ fn sync_ground_items(
                         ),
                         Transform::from_translation(item_translation(&item, origin)),
                     ));
+                    if let Some(label) = cache.ground_item_labels.get(&item.id) {
+                        commands
+                            .entity(*label)
+                            .insert(Text2d::new(item.quantity.to_string()));
+                    }
                 }
             }
             GroundItemSyncAction::Despawn(id) => {
+                cache.ground_item_labels.remove(&id);
                 if let Some(entity) = cache.ground_items.remove(&id) {
                     commands.entity(entity).despawn();
                 }
@@ -575,6 +601,50 @@ pub(crate) fn interpolate_selected_visual(
     }
 }
 
+pub(crate) fn draw_tool_drag(
+    tool: Res<ToolState>,
+    cache: Res<PresentationCache>,
+    mut gizmos: Gizmos,
+) {
+    if tool.mode == ToolMode::Select {
+        return;
+    }
+    let (Some(first), Some(last), Some(origin)) =
+        (tool.drag_start, tool.drag_current, cache.render_origin)
+    else {
+        return;
+    };
+    let min_x = first.x().min(last.x());
+    let max_x = first.x().max(last.x());
+    let min_y = first.y().min(last.y());
+    let max_y = first.y().max(last.y());
+    let width = i128::from(max_x) - i128::from(min_x) + 1;
+    let height = i128::from(max_y) - i128::from(min_y) + 1;
+    if width.saturating_mul(height) > 4096 {
+        return;
+    }
+    let color = match tool.mode {
+        ToolMode::Select => return,
+        ToolMode::StockpileAdd => Color::srgba(0.25, 1.0, 0.72, 0.9),
+        ToolMode::StockpileRemove => Color::srgba(1.0, 0.35, 0.32, 0.9),
+        ToolMode::Harvest => Color::srgba(1.0, 0.72, 0.18, 0.9),
+        ToolMode::CancelHarvest => Color::srgba(1.0, 0.25, 0.25, 0.9),
+    };
+    let half = CELL_SIZE * 0.48;
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let center =
+                world_translation(WorldCell::new(x, y), origin, CHARACTER_Z + 3.0).truncate();
+            let min = center - Vec2::splat(half);
+            let max = center + Vec2::splat(half);
+            gizmos.line_2d(Vec2::new(min.x, min.y), Vec2::new(max.x, min.y), color);
+            gizmos.line_2d(Vec2::new(max.x, min.y), Vec2::new(max.x, max.y), color);
+            gizmos.line_2d(Vec2::new(max.x, max.y), Vec2::new(min.x, max.y), color);
+            gizmos.line_2d(Vec2::new(min.x, max.y), Vec2::new(min.x, min.y), color);
+        }
+    }
+}
+
 pub(crate) fn draw_stockpiles(
     authoritative: Res<AuthoritativeClient>,
     cache: Res<PresentationCache>,
@@ -640,6 +710,84 @@ pub(crate) fn draw_job_designations(
     }
 }
 
+pub(crate) fn draw_selected_character(
+    selected: Res<SelectedCharacter>,
+    visuals: Query<(&CharacterVisual, &Transform)>,
+    mut gizmos: Gizmos,
+) {
+    let Some(selected_id) = selected.0 else {
+        return;
+    };
+    let Some((_, transform)) = visuals.iter().find(|(visual, _)| visual.id == selected_id) else {
+        return;
+    };
+    let center = transform.translation.truncate();
+    let half = CELL_SIZE * 0.58;
+    let arm = CELL_SIZE * 0.22;
+    let min = center - Vec2::splat(half);
+    let max = center + Vec2::splat(half);
+    let color = Color::srgb(0.25, 0.95, 1.0);
+    for (from, to) in [
+        (min, min + Vec2::new(arm, 0.0)),
+        (min, min + Vec2::new(0.0, arm)),
+        (Vec2::new(max.x, min.y), Vec2::new(max.x - arm, min.y)),
+        (Vec2::new(max.x, min.y), Vec2::new(max.x, min.y + arm)),
+        (Vec2::new(min.x, max.y), Vec2::new(min.x + arm, max.y)),
+        (Vec2::new(min.x, max.y), Vec2::new(min.x, max.y - arm)),
+        (max, max - Vec2::new(arm, 0.0)),
+        (max, max - Vec2::new(0.0, arm)),
+    ] {
+        gizmos.line_2d(from, to, color);
+    }
+}
+
+pub(crate) fn draw_selected_navigation(
+    selected: Res<SelectedCharacter>,
+    authoritative: Res<AuthoritativeClient>,
+    cache: Res<PresentationCache>,
+    visuals: Query<(&CharacterVisual, &Transform)>,
+    mut gizmos: Gizmos,
+) {
+    let (Some(id), Some(origin_cell)) = (selected.0, cache.render_origin) else {
+        return;
+    };
+    let Some(navigation) = authoritative.snapshot().navigation.as_ref() else {
+        return;
+    };
+    if navigation.character_id != id {
+        return;
+    }
+    let Ok(origin) = WorldPosition::from_cell_center(origin_cell) else {
+        return;
+    };
+    let Some((_, transform)) = visuals.iter().find(|(visual, _)| visual.id == id) else {
+        return;
+    };
+    let to_visual = |position| world_position_translation(position, origin, CHARACTER_Z + 1.0);
+    let mut previous = transform.translation.truncate();
+    let route_color = Color::srgba(0.25, 0.9, 1.0, 0.72);
+    for waypoint in &navigation.remaining_waypoints {
+        let next = to_visual(*waypoint).truncate();
+        gizmos.line_2d(previous, next, route_color);
+        previous = next;
+    }
+    if let Some(destination) = navigation.destination {
+        let destination = to_visual(destination).truncate();
+        gizmos.line_2d(previous, destination, route_color);
+        let marker = 3.0;
+        gizmos.line_2d(
+            destination + Vec2::new(-marker, -marker),
+            destination + Vec2::new(marker, marker),
+            Color::srgb(0.2, 1.0, 1.0),
+        );
+        gizmos.line_2d(
+            destination + Vec2::new(-marker, marker),
+            destination + Vec2::new(marker, -marker),
+            Color::srgb(0.2, 1.0, 1.0),
+        );
+    }
+}
+
 pub(crate) fn draw_navigation_debug(
     keys: Res<ButtonInput<KeyCode>>,
     mut debug: ResMut<NavigationDebug>,
@@ -657,53 +805,29 @@ pub(crate) fn draw_navigation_debug(
     let (Some(id), Some(origin_cell)) = (selected.0, cache.render_origin) else {
         return;
     };
-    let Some(navigation) = authoritative.snapshot().navigation.as_ref() else {
-        return;
-    };
-    if navigation.character_id != id {
-        return;
-    }
-    let Ok(origin) = WorldPosition::from_cell_center(origin_cell) else {
-        return;
-    };
-    let to_visual = |position| world_position_translation(position, origin, CHARACTER_Z + 1.0);
-    if let Some(character) = authoritative
+    let Some(character) = authoritative
         .snapshot()
         .characters
         .iter()
         .find(|character| character.id == id)
-    {
-        let authority = to_visual(character.position).truncate();
-        gizmos.line_2d(
-            authority + Vec2::new(-4.0, 0.0),
-            authority + Vec2::new(4.0, 0.0),
-            Color::WHITE,
-        );
-        gizmos.line_2d(
-            authority + Vec2::new(0.0, -4.0),
-            authority + Vec2::new(0.0, 4.0),
-            Color::WHITE,
-        );
-        let mut previous = authority;
-        for waypoint in &navigation.remaining_waypoints {
-            let next = to_visual(*waypoint).truncate();
-            gizmos.line_2d(previous, next, Color::srgb(0.95, 0.2, 0.8));
-            previous = next;
-        }
-    }
-    if let Some(destination) = navigation.destination {
-        let destination = to_visual(destination).truncate();
-        gizmos.line_2d(
-            destination + Vec2::new(-3.0, -3.0),
-            destination + Vec2::new(3.0, 3.0),
-            Color::srgb(0.2, 1.0, 1.0),
-        );
-        gizmos.line_2d(
-            destination + Vec2::new(-3.0, 3.0),
-            destination + Vec2::new(3.0, -3.0),
-            Color::srgb(0.2, 1.0, 1.0),
-        );
-    }
+    else {
+        return;
+    };
+    let Ok(origin) = WorldPosition::from_cell_center(origin_cell) else {
+        return;
+    };
+    let authority =
+        world_position_translation(character.position, origin, CHARACTER_Z + 2.0).truncate();
+    gizmos.line_2d(
+        authority + Vec2::new(-4.0, 0.0),
+        authority + Vec2::new(4.0, 0.0),
+        Color::WHITE,
+    );
+    gizmos.line_2d(
+        authority + Vec2::new(0.0, -4.0),
+        authority + Vec2::new(0.0, 4.0),
+        Color::WHITE,
+    );
 }
 
 fn world_translation(world_cell: WorldCell, origin: WorldCell, z: f32) -> Vec3 {

@@ -129,6 +129,7 @@ pub const VISIBLE_CHUNK_RADIUS: i64 = 1;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PresentationError {
     VisibleWindowOutOfRange { center: ChunkCoord },
+    DesignationAreaTooLarge,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

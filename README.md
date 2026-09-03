@@ -50,7 +50,7 @@ See [`docs/gameplay/production.md`](docs/gameplay/production.md) for the normati
 
 The first executable headless foundation is implemented:
 
-- deterministic versioned 32×32 chunk generation;
+- deterministic versioned 32×32 chunk generation; current worldgen v2 forms coherent water/rock regions and clustered forests while worldgen v1 remains reproducible;
 - signed positive/negative world coordinates;
 - a checked simulation clock and stable Progressus entity IDs;
 - a deterministic five-character new-game scenario;
@@ -58,11 +58,11 @@ The first executable headless foundation is implemented:
 - bootstrap cardinal movement at `256` subunits per tick, with sequential effective-terrain checks, exact blocked-boundary stops, and multi-cell traversal for higher speeds;
 - bounded deterministic cardinal A* and exact `MoveTo` routes through `progressus-app`, with detached selected navigation snapshots and live effective-terrain transition checks;
 - immutable deterministic base terrain plus deterministic grass-only natural resource sources (`Tree` / `StoneOutcrop`) generated from the same seed/version/absolute-cell identity; sparse, in-memory terrain overrides still affect authoritative movement and terrain snapshots;
-- a physical-item/logistics bootstrap: deterministic Wood/Stone stacks use global stable Progressus IDs, exact fixed-point ground positions, explicit Ground/Carried location state, chunk-aware lookup, atomic reach-checked pickup/drop transitions, and deterministic haul jobs into physical stockpile ground cells;
+- a physical-item/logistics bootstrap: deterministic Wood/Stone stacks use global stable Progressus IDs, exact fixed-point ground positions, explicit Ground/Carried location state, chunk-aware lookup, atomic reach-checked pickup/drop transitions, a hard 1,024-unit stack capacity, deterministic same-kind stack merging, and haul jobs into physical stockpile ground cells;
 - a headless consumer that runs without Bevy, a window, or a graphics context, including a bounded external least-visited walker that crosses generated chunk boundaries through the public application API.
-- a native Bevy bootstrap client for seed `0`: snapshot-driven characters, left-click selection, right-click exact `MoveTo`, trace-based interpolation, F3 route diagnostics, presentation-only camera pan/zoom, and deterministic procedural sprites for terrain, people, ground items, trees, and stone outcrops.
+- a native Bevy bootstrap client for seed `0`: snapshot-driven characters, left-click selection, right-click exact `MoveTo`, always-visible selected-character route/selection markers, trace-based interpolation, a rectangle-designation toolbar, presentation-only camera pan/zoom, and deterministic procedural sprites for terrain, people, ground items, trees, and stone outcrops.
 
-The sparse terrain state is not yet save/load data, a residency or unload policy, or a terrain gameplay command. Discovery is likewise an in-memory authoritative bootstrap: every character monotonically reveals a radius-five Euclidean disk of cells, while snapshots publish only `KnownTerrain` and player `MoveTo` cannot target or traverse unknown terrain. Continuous positions and bounded exact click-to-move are now an authoritative bootstrap, not complete navigation: there is no diagonal or hierarchical search, auto-repath, pawn collision, physical footprints, speed modifiers, save/load, or residency. Prototype harvest and haul jobs now provide deterministic worker assignment, exclusive reservations, travel/work lifecycle, cancellation/manual-interruption cleanup, natural-source depletion, physical Wood/Stone outputs, and delivery into designated stockpile ground cells. Stockpiles remain physical floor areas rather than abstract containers. Containers, construction, crafting, stack splitting/merging, stockpile filters/priorities, and persistence remain incomplete. The current boundary keeps the visual client dependent on `progressus-app` without giving it ownership of simulation truth; Bevy converts exact snapshots to local presentation floats only after subtracting a nearby cell-center origin.
+The sparse terrain state is not yet save/load data, a residency or unload policy, or a terrain gameplay command. Discovery is likewise an in-memory authoritative bootstrap: every character monotonically reveals a radius-five Euclidean disk of cells, while snapshots publish only `KnownTerrain` and player `MoveTo` cannot target or traverse unknown terrain. Continuous positions and bounded exact click-to-move are now an authoritative bootstrap, not complete navigation: there is no diagonal or hierarchical search, auto-repath, pawn collision, physical footprints, speed modifiers, save/load, or residency. Prototype harvest and haul jobs now provide deterministic worker assignment, exclusive reservations, travel/work lifecycle, cancellation/manual-interruption cleanup, natural-source depletion, physical Wood/Stone outputs, and delivery into designated stockpile ground cells. Stockpiles remain physical floor areas rather than abstract containers. Containers, construction, crafting, stack splitting, stockpile filters/priorities, and persistence remain incomplete. The current boundary keeps the visual client dependent on `progressus-app` without giving it ownership of simulation truth; Bevy converts exact snapshots to local presentation floats only after subtracting a nearby cell-center origin.
 
 The immediate goal is not to build the entire game. The first prototype exists to prove the dangerous fundamentals:
 
@@ -92,7 +92,7 @@ Run a deterministic headless scenario:
 cargo run -p progressus-headless -- --seed 42 --ticks 100000
 ```
 
-Run the bounded external traversal proof (seed 0 crosses 64 positive chunk boundaries in 5,050 chosen-cell steps; each default step takes four simulation ticks):
+Run the bounded external traversal proof (seed 0 under worldgen v2 crosses 64 positive chunk boundaries in 2,239 chosen-cell steps; each default step takes four simulation ticks):
 
 ```bash
 cargo run -p progressus-headless -- --seed 0 --travel-chunks 64
@@ -104,7 +104,7 @@ Run the native visual bootstrap (requires a local display and GPU for the manual
 cargo run -p progressus-client
 ```
 
-It opens seed `0` as a 2D visual bootstrap with five snapshot-driven characters, physical Wood/Stone stacks, and procedural natural resources. Left-click selects a character, right-click issues exact `MoveTo`, **Shift+left-click on a tree or stone outcrop toggles a harvest designation**, and **Ctrl+left-click adds/removes a cell from the primary stockpile**. Assigned workers harvest sources and automatically haul eligible ground stacks into free stockpile cells; carried stacks are rendered on the worker while in transit. Arrow-key movement and Space still manually control Cora, while pan/zoom remain presentation-only. Terrain is queried for the camera viewport plus a small margin only when that window, the authoritative exploration revision, or the authoritative item/resource revisions change; undiscovered terrain remains an unknown background and camera movement never discovers it.
+It opens seed `0` as a 2D visual bootstrap with five snapshot-driven characters, physical Wood/Stone stacks, and procedural natural resources. Left-click selects a character, right-click issues exact `MoveTo`, and the selected character is visibly bracketed with its current route shown by default. The bottom toolbar provides persistent `Select`, `Stockpile +`, `Stockpile -`, `Harvest`, and `Cancel harvest` tools; designation tools apply to a dragged rectangular cell area with a live grid preview. Right-click or Escape leaves a tool and returns to Select. Shift+left-click harvest and Ctrl+left-click single-cell stockpile editing remain temporary shortcuts. Assigned workers harvest sources and automatically haul eligible ground stacks into stockpile cells; compatible stacks merge up to 1,024 units and their quantity is rendered on the ground. Carried stacks remain visible on the worker while in transit. F3 is now reserved for the technical authoritative-position overlay. Arrow-key movement and Space still manually control Cora, while pan/zoom remain presentation-only. Terrain is queried for the camera viewport plus a small margin only when that window, the authoritative exploration revision, or the authoritative item/resource revisions change; undiscovered terrain remains an unknown background and camera movement never discovers it.
 
 Verify that Bevy has not entered the complete headless/application/simulation/worldgen dependency chain:
 
@@ -124,6 +124,7 @@ The application API and its external-consumer contract test live in `crates/prog
 - [`docs/adr/0002-rust-core-bevy-client.md`](docs/adr/0002-rust-core-bevy-client.md) — accepted Rust simulation / Bevy client decision.
 - [`docs/adr/0005-procedural-visual-assets-as-code.md`](docs/adr/0005-procedural-visual-assets-as-code.md) — procedural visual assets as deterministic source code.
 - [`docs/adr/0006-stockpiles-remain-physical-ground.md`](docs/adr/0006-stockpiles-remain-physical-ground.md) — stockpile floor areas keep items physically on the ground.
+- [`docs/adr/0007-coherent-worldgen-v2.md`](docs/adr/0007-coherent-worldgen-v2.md) — coherent terrain/resource regions replace per-cell noise without rewriting worldgen v1.
 - [`AGENTS.md`](AGENTS.md) — rules for Codex, Claude, and other coding agents.
 
 ## Development principle

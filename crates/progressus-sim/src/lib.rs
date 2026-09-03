@@ -15,7 +15,7 @@ pub use entity::{
     MovementSpeed, MovementState,
 };
 pub use exploration::CHARACTER_VISION_RADIUS_CELLS;
-pub use item::{ItemKind, ItemLocation, ItemQuantity, ItemStack};
+pub use item::{ItemKind, ItemLocation, ItemQuantity, ItemStack, MAX_STACK_QUANTITY};
 pub use job::{HARVEST_WORK_TICKS, Job, JobKind, JobState};
 pub use position::{
     InteractionRadius, SUBUNITS_PER_CELL, WorldPosition, WorldPositionError,

@@ -13,12 +13,12 @@ A stockpile is an authoritative designated set of `WorldCell` ground cells. It i
 
 A stack delivered to a stockpile remains `ItemLocation::Ground { position }` at an exact fixed-point position inside a stockpile cell. During hauling it temporarily becomes `ItemLocation::Carried { character_id }`, then returns to `Ground` at the reserved destination cell.
 
-Each stockpile cell has at most one stockpile owner. Prototype 01 reserves at most one haul job per item and per destination cell, and treats a cell containing a ground stack as occupied for new haul destinations. Stockpile cells must be discovered, walkable, and free of a live natural-resource source when designated.
+Each stockpile cell has at most one stockpile owner. Prototype 01 reserves at most one haul job per item and per destination cell. An occupied destination accepts another stack only when it is the same item kind and the combined quantity does not exceed the hard per-stack capacity of 1,024; otherwise it remains unavailable. Stockpile cells must be discovered, walkable, and free of a live natural-resource source when designated.
 
 Future real containers such as crates, chests, shelves, vehicles, or building inventories may introduce an explicit stored/container location if their gameplay requires it. Such storage must not retroactively redefine ordinary stockpile floor areas as abstract containers.
 
 ## Consequences
 
-Hauling remains a visible physical transition: ground stack → carried stack → ground stack. Stable item identity and quantity are preserved, stockpile contents remain spatially queryable, and later systems can reason about the exact positions of stored resources.
+Hauling remains a visible physical transition: ground stack → carried stack → ground stack. Stable item identity and quantity are preserved while hauling. When compatible stacks merge, the destination stack keeps its stable ID, receives the summed quantity, and the now-empty source stack is explicitly removed. Stockpile contents remain spatially queryable, and later systems can reason about the exact positions of stored resources.
 
-The bootstrap may use one stack per stockpile cell and simple deterministic destination selection. Stack merging, capacity, filters, priorities, container inventories, and large-scale logistics remain later work.
+The bootstrap keeps at most one ground stack per stockpile cell, uses a hard capacity of 1,024 units per stack, and performs deterministic same-kind merging during Haul delivery. Stack splitting, filters, priorities, container inventories, and large-scale logistics remain later work.

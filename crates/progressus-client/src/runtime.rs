@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
@@ -13,9 +14,11 @@ use crate::navigation::{SelectedCharacter, VisualMotion, quantize_local_click, s
 use crate::presentation::PresentationError;
 use crate::procedural_assets::ProceduralAssetRegistry;
 use crate::render::{
-    NavigationDebug, PresentationCache, camera_controls, draw_job_designations, draw_stockpiles,
+    NavigationDebug, PresentationCache, camera_controls, draw_job_designations,
+    draw_selected_character, draw_selected_navigation, draw_stockpiles, draw_tool_drag,
     setup_camera, sync_presentation,
 };
+use crate::ui::{ToolMode, ToolState, setup_toolbar, toolbar_interaction, update_ui_capture};
 
 impl Resource for TickScheduler {}
 
@@ -108,15 +111,34 @@ pub(crate) fn pointer_navigation(
     input: (Res<ButtonInput<MouseButton>>, Res<ButtonInput<KeyCode>>),
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
-    mut selected: ResMut<SelectedCharacter>,
-    mut motion: ResMut<VisualMotion>,
+    interaction_state: (
+        ResMut<SelectedCharacter>,
+        ResMut<VisualMotion>,
+        ResMut<ToolState>,
+    ),
     mut authoritative: ResMut<AuthoritativeClient>,
     cache: Res<PresentationCache>,
 ) {
     let (buttons, keys) = input;
-    if !buttons.just_pressed(MouseButton::Left) && !buttons.just_pressed(MouseButton::Right) {
+    let (mut selected, mut motion, mut tool) = interaction_state;
+    let tool_active = tool.mode != ToolMode::Select;
+
+    if tool_active && buttons.just_pressed(MouseButton::Right) {
+        tool.mode = ToolMode::Select;
+        tool.cancel_drag();
         return;
     }
+    if tool.pointer_over_ui && tool.drag_start.is_none() {
+        return;
+    }
+    let needs_pointer = buttons.just_pressed(MouseButton::Left)
+        || buttons.just_pressed(MouseButton::Right)
+        || (tool_active
+            && (buttons.pressed(MouseButton::Left) || buttons.just_released(MouseButton::Left)));
+    if !needs_pointer {
+        return;
+    }
+
     let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), cameras.single()) else {
         return;
     };
@@ -136,6 +158,35 @@ pub(crate) fn pointer_navigation(
         warn!("pointer position cannot be represented as an authoritative world position");
         return;
     };
+
+    if tool_active {
+        let cell = target.containing_cell();
+        if buttons.just_pressed(MouseButton::Left) {
+            tool.drag_start = Some(cell);
+            tool.drag_current = Some(cell);
+            return;
+        }
+        if buttons.pressed(MouseButton::Left) && tool.drag_start.is_some() {
+            tool.drag_current = Some(cell);
+        }
+        if buttons.just_released(MouseButton::Left) {
+            let (Some(first), Some(last)) = (tool.drag_start, tool.drag_current) else {
+                tool.cancel_drag();
+                return;
+            };
+            let mode = tool.mode;
+            tool.cancel_drag();
+            match apply_tool_area(&mut authoritative, mode, first, last) {
+                Ok(()) => {
+                    if let Err(error) = authoritative.refresh_lightweight_snapshot(selected.0) {
+                        error!("authoritative snapshot failed after area designation: {error}");
+                    }
+                }
+                Err(error) => warn!("area designation rejected: {error}"),
+            }
+        }
+        return;
+    }
 
     if buttons.just_pressed(MouseButton::Left)
         && keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
@@ -221,6 +272,164 @@ pub(crate) fn pointer_navigation(
     }
 }
 
+const MAX_DESIGNATION_CELLS: usize = 4096;
+
+fn apply_tool_area(
+    authoritative: &mut AuthoritativeClient,
+    mode: ToolMode,
+    first: WorldCell,
+    last: WorldCell,
+) -> Result<(), ClientError> {
+    let cells = rectangle_cells(first, last).ok_or(ClientError::Presentation(
+        PresentationError::DesignationAreaTooLarge,
+    ))?;
+    let chunks = cells
+        .iter()
+        .map(|cell| cell.split().0)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let area_snapshot = authoritative.application.snapshot(SnapshotQuery {
+        chunks,
+        ..SnapshotQuery::default()
+    })?;
+
+    match mode {
+        ToolMode::Select => {}
+        ToolMode::StockpileAdd => {
+            let resource_cells = area_snapshot
+                .natural_resources
+                .iter()
+                .map(|resource| resource.cell)
+                .collect::<BTreeSet<_>>();
+            let mut stockpile_id = area_snapshot
+                .stockpiles
+                .first()
+                .map(|stockpile| stockpile.id);
+            for cell in cells {
+                if known_terrain_at(&area_snapshot, cell) != Some(progressus_app::Terrain::Grass)
+                    || resource_cells.contains(&cell)
+                {
+                    continue;
+                }
+                if let Some(owner) = stockpile_at(&area_snapshot, cell) {
+                    if stockpile_id.is_none() {
+                        stockpile_id = Some(owner);
+                    }
+                    continue;
+                }
+                if let Some(id) = stockpile_id {
+                    authoritative
+                        .application
+                        .execute(Command::SetStockpileCell {
+                            stockpile_id: id,
+                            cell,
+                            enabled: true,
+                        })?;
+                } else {
+                    authoritative
+                        .application
+                        .execute(Command::CreateStockpile { cell })?;
+                    let refreshed = authoritative
+                        .application
+                        .snapshot(SnapshotQuery::default())?;
+                    stockpile_id = stockpile_at(&refreshed, cell);
+                }
+            }
+        }
+        ToolMode::StockpileRemove => {
+            let owners = area_snapshot
+                .stockpiles
+                .iter()
+                .flat_map(|stockpile| {
+                    stockpile
+                        .cells
+                        .iter()
+                        .copied()
+                        .map(move |cell| (cell, stockpile.id))
+                })
+                .collect::<BTreeMap<_, _>>();
+            for cell in cells {
+                if let Some(stockpile_id) = owners.get(&cell).copied() {
+                    authoritative
+                        .application
+                        .execute(Command::SetStockpileCell {
+                            stockpile_id,
+                            cell,
+                            enabled: false,
+                        })?;
+                }
+            }
+        }
+        ToolMode::Harvest => {
+            let existing = area_snapshot
+                .jobs
+                .iter()
+                .filter_map(|job| match job.kind {
+                    JobKind::Harvest { source } => Some(source),
+                    JobKind::Haul { .. } => None,
+                })
+                .collect::<BTreeSet<_>>();
+            let selected = cells.into_iter().collect::<BTreeSet<_>>();
+            for resource in area_snapshot.natural_resources {
+                if selected.contains(&resource.cell) && !existing.contains(&resource.cell) {
+                    authoritative
+                        .application
+                        .execute(Command::DesignateHarvest {
+                            source: resource.cell,
+                        })?;
+                }
+            }
+        }
+        ToolMode::CancelHarvest => {
+            let selected = cells.into_iter().collect::<BTreeSet<_>>();
+            let jobs = area_snapshot
+                .jobs
+                .iter()
+                .filter_map(|job| match job.kind {
+                    JobKind::Harvest { source } if selected.contains(&source) => Some(job.id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            for job_id in jobs {
+                authoritative
+                    .application
+                    .execute(Command::CancelJob { job_id })?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn rectangle_cells(first: WorldCell, last: WorldCell) -> Option<Vec<WorldCell>> {
+    let min_x = first.x().min(last.x());
+    let max_x = first.x().max(last.x());
+    let min_y = first.y().min(last.y());
+    let max_y = first.y().max(last.y());
+    let width = i128::from(max_x) - i128::from(min_x) + 1;
+    let height = i128::from(max_y) - i128::from(min_y) + 1;
+    let count = width.checked_mul(height)?;
+    if count > MAX_DESIGNATION_CELLS as i128 {
+        return None;
+    }
+    let mut cells = Vec::with_capacity(count as usize);
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            cells.push(WorldCell::new(x, y));
+        }
+    }
+    Some(cells)
+}
+
+fn known_terrain_at(snapshot: &ClientSnapshot, cell: WorldCell) -> Option<progressus_app::Terrain> {
+    let (coordinate, local) = cell.split();
+    snapshot
+        .chunks
+        .iter()
+        .find(|chunk| chunk.coordinate == coordinate)?
+        .known_terrain_at(local)
+}
+
 fn harvest_job_at(snapshot: &ClientSnapshot, source: WorldCell) -> Option<EntityId> {
     snapshot.jobs.iter().find_map(|job| match job.kind {
         JobKind::Harvest { source: job_source } if job_source == source => Some(job.id),
@@ -275,6 +484,9 @@ impl From<PresentationError> for ClientError {
 impl Display for PresentationError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DesignationAreaTooLarge => {
+                formatter.write_str("designation area exceeds 4096 cells")
+            }
             Self::VisibleWindowOutOfRange { center } => write!(
                 formatter,
                 "a complete visible chunk window cannot be formed around ({}, {})",
@@ -296,6 +508,7 @@ pub fn run() -> Result<(), ClientError> {
         .insert_resource(NavigationDebug::default())
         .insert_resource(SelectedCharacter::default())
         .insert_resource(VisualMotion::default())
+        .insert_resource(ToolState::default())
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Progressus — Prototype 01".to_owned(),
@@ -303,15 +516,20 @@ pub fn run() -> Result<(), ClientError> {
             }),
             ..default()
         }))
-        .add_systems(Startup, setup_camera)
+        .add_systems(Startup, (setup_camera, setup_toolbar))
         .add_systems(
             Update,
             (
+                toolbar_interaction,
+                update_ui_capture,
                 pointer_navigation,
                 advance_authority,
                 sync_presentation,
                 crate::render::interpolate_selected_visual,
+                draw_selected_character,
+                draw_selected_navigation,
                 crate::render::draw_navigation_debug,
+                draw_tool_drag,
                 draw_job_designations,
                 draw_stockpiles,
                 camera_controls,
@@ -336,7 +554,7 @@ mod tests {
         WorldPosition,
     };
 
-    use super::{AuthoritativeClient, advance_authority};
+    use super::{AuthoritativeClient, advance_authority, rectangle_cells};
     use crate::interaction::TickScheduler;
     use crate::navigation::{SelectedCharacter, VisualMotion};
     use crate::procedural_assets::ProceduralAssetRegistry;
@@ -998,6 +1216,23 @@ mod tests {
                 &transforms_before[id]
             );
         }
+    }
+
+    #[test]
+    fn designation_rectangle_is_inclusive_ordered_and_bounded() {
+        assert_eq!(
+            rectangle_cells(WorldCell::new(2, 1), WorldCell::new(0, 0)).unwrap(),
+            vec![
+                WorldCell::new(0, 0),
+                WorldCell::new(1, 0),
+                WorldCell::new(2, 0),
+                WorldCell::new(0, 1),
+                WorldCell::new(1, 1),
+                WorldCell::new(2, 1),
+            ]
+        );
+        assert!(rectangle_cells(WorldCell::new(0, 0), WorldCell::new(63, 63)).is_some());
+        assert!(rectangle_cells(WorldCell::new(0, 0), WorldCell::new(64, 63)).is_none());
     }
 
     fn blocked_step_from_public_snapshots(

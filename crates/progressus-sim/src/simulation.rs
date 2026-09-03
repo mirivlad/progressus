@@ -17,9 +17,9 @@ use crate::world_state::ModifiedWorld;
 use crate::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, Direction, EffectiveChunk,
     EntityId, GeneratedChunk, HARVEST_WORK_TICKS, InteractionRadius, ItemKind, ItemLocation,
-    ItemQuantity, ItemStack, Job, JobKind, JobState, LocalCell, MovementState, NaturalResource,
-    NaturalResourceKind, SimulationTick, Stockpile, Terrain, WorldCell, WorldPosition,
-    WorldPositionError, WorldSeed, WorldgenVersion, within_interaction_range,
+    ItemQuantity, ItemStack, Job, JobKind, JobState, LocalCell, MAX_STACK_QUANTITY, MovementState,
+    NaturalResource, NaturalResourceKind, SimulationTick, Stockpile, Terrain, WorldCell,
+    WorldPosition, WorldPositionError, WorldSeed, WorldgenVersion, within_interaction_range,
 };
 
 const INITIAL_CHARACTERS: [(&str, i64); 5] = [
@@ -222,8 +222,7 @@ impl Simulation {
         if self.depleted_resources.contains(&position) {
             return Ok(None);
         }
-        let (coordinate, local) = position.split();
-        Ok(self.generated_chunk(coordinate)?.natural_resource_at(local))
+        Ok(self.generator.natural_resource_at(position))
     }
 
     pub fn natural_resources_in_chunk(
@@ -588,6 +587,54 @@ impl Simulation {
         Ok(())
     }
 
+    fn stockpile_destination_accepts_item(
+        &self,
+        item_id: EntityId,
+        destination: WorldCell,
+    ) -> bool {
+        let Some(item) = self.item_world.get(item_id) else {
+            return false;
+        };
+        let mut occupants = self.item_world.iter().filter(|other| {
+            other.id() != item_id
+                && other
+                    .ground_position()
+                    .is_some_and(|position| position.containing_cell() == destination)
+        });
+        let Some(existing) = occupants.next() else {
+            return true;
+        };
+        if occupants.next().is_some() || existing.kind() != item.kind() {
+            return false;
+        }
+        existing
+            .quantity()
+            .get()
+            .checked_add(item.quantity().get())
+            .is_some_and(|combined| combined <= MAX_STACK_QUANTITY)
+    }
+
+    fn stockpile_merge_target(
+        &self,
+        item_id: EntityId,
+        destination: WorldCell,
+    ) -> Option<EntityId> {
+        let item = self.item_world.get(item_id)?;
+        self.item_world.iter().find_map(|other| {
+            (other.id() != item_id
+                && other.kind() == item.kind()
+                && other
+                    .ground_position()
+                    .is_some_and(|position| position.containing_cell() == destination)
+                && other
+                    .quantity()
+                    .get()
+                    .checked_add(item.quantity().get())
+                    .is_some_and(|combined| combined <= MAX_STACK_QUANTITY))
+            .then_some(other.id())
+        })
+    }
+
     fn maintain_haul_jobs(&mut self) -> Result<(), SimulationError> {
         let existing_haul_jobs = self
             .job_world
@@ -611,7 +658,8 @@ impl Simulation {
             };
             let destination_valid = self.stockpile_world.stockpile_at(destination)
                 == Some(stockpile_id)
-                && self.is_walkable(destination)?;
+                && self.is_walkable(destination)?
+                && self.stockpile_destination_accepts_item(item_id, destination);
             let item_valid = match job.state() {
                 JobState::Transporting { worker_id } => self
                     .item_world
@@ -625,33 +673,11 @@ impl Simulation {
                     })
                 }),
             };
-            let destination_occupied = self.item_world.iter().any(|item| {
-                item.id() != item_id
-                    && item
-                        .ground_position()
-                        .is_some_and(|position| position.containing_cell() == destination)
-            });
-            if !destination_valid || !item_valid || destination_occupied {
+            if !destination_valid || !item_valid {
                 self.cancel_job(job_id)?;
             }
         }
 
-        let mut destinations = Vec::new();
-        for stockpile in self.stockpile_world.iter() {
-            for cell in stockpile.cells() {
-                if self.job_world.haul_job_for_destination(cell).is_some()
-                    || !self.is_walkable(cell)?
-                    || self.item_world.iter().any(|item| {
-                        item.ground_position()
-                            .is_some_and(|position| position.containing_cell() == cell)
-                    })
-                {
-                    continue;
-                }
-                destinations.push((stockpile.id(), cell));
-            }
-        }
-        let mut destinations = destinations.into_iter();
         let candidate_items = self
             .item_world
             .iter()
@@ -665,8 +691,21 @@ impl Simulation {
             })
             .collect::<Vec<_>>();
         for item_id in candidate_items {
-            let Some((stockpile_id, destination)) = destinations.next() else {
-                break;
+            let mut destination = None;
+            'stockpiles: for stockpile in self.stockpile_world.iter() {
+                for cell in stockpile.cells() {
+                    if self.job_world.haul_job_for_destination(cell).is_some()
+                        || !self.is_walkable(cell)?
+                        || !self.stockpile_destination_accepts_item(item_id, cell)
+                    {
+                        continue;
+                    }
+                    destination = Some((stockpile.id(), cell));
+                    break 'stockpiles;
+                }
+            }
+            let Some((stockpile_id, destination)) = destination else {
+                continue;
             };
             let job_id = self.id_allocator.allocate()?;
             self.job_world
@@ -948,7 +987,13 @@ impl Simulation {
             target,
             InteractionRadius::zero(),
         ) {
+            let merge_target = self.stockpile_merge_target(item_id, destination);
             self.drop_item(worker_id, item_id, target)?;
+            if let Some(target_id) = merge_target {
+                self.item_world
+                    .merge_ground_stacks(target_id, item_id)
+                    .expect("haul destination capacity was validated before delivery");
+            }
             self.job_world
                 .remove(job_id)
                 .map_err(SimulationError::from_job_world)?;
@@ -1038,12 +1083,7 @@ impl Simulation {
         self.base_terrain_query_count
             .set(self.base_terrain_query_count.get() + 1);
 
-        let (coordinate, local) = position.split();
-        self.generated_chunk(coordinate)?
-            .terrain_at(local)
-            .ok_or(SimulationError::Worldgen(
-                WorldgenError::CoordinateOutOfRange(coordinate),
-            ))
+        Ok(self.generator.terrain_at(position))
     }
 
     fn resolve_terrain(&self, coordinate: ChunkCoord, local: LocalCell, base: Terrain) -> Terrain {
@@ -2720,7 +2760,43 @@ mod tests {
                 .containing_cell(),
             WorldCell::new(-2, 0)
         );
-        assert!(simulation.jobs().next().is_none());
+        assert!(!simulation.jobs().any(|job| matches!(
+            job.kind(),
+            JobKind::Haul { item_id, .. } if item_id == EntityId::new(6).unwrap()
+        )));
+    }
+
+    #[test]
+    fn haul_merges_same_kind_stacks_into_one_physical_stockpile_stack() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let target_id = EntityId::new(6).unwrap();
+        let source_id = EntityId::new(8).unwrap();
+        let destination = simulation
+            .item_world
+            .get(target_id)
+            .unwrap()
+            .ground_position()
+            .unwrap()
+            .containing_cell();
+        simulation.create_stockpile(destination).unwrap();
+
+        for _ in 0..512 {
+            simulation.advance_ticks(1).unwrap();
+            if simulation.item_world.get(source_id).is_none() {
+                break;
+            }
+        }
+
+        let merged = simulation.item_world.get(target_id).unwrap();
+        assert_eq!(merged.kind(), ItemKind::Wood);
+        assert_eq!(merged.quantity().get(), 18);
+        assert_eq!(
+            merged.ground_position().unwrap().containing_cell(),
+            destination
+        );
+        assert!(simulation.item_world.get(source_id).is_none());
+        assert!(simulation.item_world.indexes_are_consistent());
+        assert!(simulation.job_world.indexes_are_consistent());
     }
 
     #[test]
@@ -2824,46 +2900,64 @@ mod tests {
                 .unwrap();
         }
         let (source, resource) = harvest_fixture(&simulation);
+        let output_kind = match resource.kind() {
+            NaturalResourceKind::Tree => ItemKind::Wood,
+            NaturalResourceKind::StoneOutcrop => ItemKind::Stone,
+        };
+        let initial_stockpile_quantity = simulation
+            .items()
+            .filter(|item| {
+                item.kind() == output_kind
+                    && item.ground_position().is_some_and(|position| {
+                        simulation.stockpile_at(position.containing_cell()) == Some(stockpile_id)
+                    })
+            })
+            .map(|item| item.quantity().get())
+            .sum::<u32>();
         simulation.designate_harvest(source).unwrap();
 
-        let mut harvested_id = None;
-        let mut saw_carried = false;
+        let mut saw_new_carried = false;
         for _ in 0..768 {
             simulation.advance_ticks(1).unwrap();
-            if harvested_id.is_none() {
-                harvested_id = simulation
-                    .items()
-                    .find(|item| !initial_item_ids.contains(&item.id()))
-                    .map(ItemStack::id);
-            }
-            if let Some(item_id) = harvested_id {
-                let item = simulation.item_world.get(item_id).unwrap();
-                saw_carried |= item.carrier().is_some();
-                if item.ground_position().is_some_and(|position| {
-                    simulation.stockpile_at(position.containing_cell()) == Some(stockpile_id)
-                }) {
-                    break;
-                }
+            saw_new_carried |= simulation
+                .items()
+                .any(|item| !initial_item_ids.contains(&item.id()) && item.carrier().is_some());
+            let stockpile_quantity = simulation
+                .items()
+                .filter(|item| {
+                    item.kind() == output_kind
+                        && item.ground_position().is_some_and(|position| {
+                            simulation.stockpile_at(position.containing_cell())
+                                == Some(stockpile_id)
+                        })
+                })
+                .map(|item| item.quantity().get())
+                .sum::<u32>();
+            if simulation.natural_resource_at(source).unwrap().is_none()
+                && stockpile_quantity == initial_stockpile_quantity + resource.yield_quantity()
+            {
+                break;
             }
         }
 
-        let harvested_id = harvested_id.expect("harvest must create a physical item stack");
-        let harvested = simulation.item_world.get(harvested_id).unwrap();
+        let final_stockpile_quantity = simulation
+            .items()
+            .filter(|item| {
+                item.kind() == output_kind
+                    && item.ground_position().is_some_and(|position| {
+                        simulation.stockpile_at(position.containing_cell()) == Some(stockpile_id)
+                    })
+            })
+            .map(|item| item.quantity().get())
+            .sum::<u32>();
         assert!(
-            saw_carried,
-            "harvested output must pass through Carried during haul"
+            saw_new_carried,
+            "harvested output must pass through Carried during haul before merge/delivery"
         );
         assert_eq!(
-            harvested.kind(),
-            match resource.kind() {
-                NaturalResourceKind::Tree => ItemKind::Wood,
-                NaturalResourceKind::StoneOutcrop => ItemKind::Stone,
-            }
+            final_stockpile_quantity,
+            initial_stockpile_quantity + resource.yield_quantity()
         );
-        assert_eq!(harvested.quantity().get(), resource.yield_quantity());
-        assert!(harvested.ground_position().is_some_and(|position| {
-            simulation.stockpile_at(position.containing_cell()) == Some(stockpile_id)
-        }));
         assert_eq!(simulation.natural_resource_at(source).unwrap(), None);
         assert!(simulation.item_world.indexes_are_consistent());
         assert!(simulation.job_world.indexes_are_consistent());

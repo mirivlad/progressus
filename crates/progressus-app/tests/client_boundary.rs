@@ -1,7 +1,8 @@
 use progressus_app::{
-    Application, CHUNK_SIDE, CharacterSnapshot, ChunkCoord, Command, Direction, EntityId, ItemKind,
-    JobKind, JobState, KnownTerrain, LocalCell, MovementState, NaturalResourceKind, NewGameOptions,
-    SimulationTick, SnapshotQuery, Terrain, WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
+    Application, CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, CharacterSnapshot, ChunkCoord, Command,
+    Direction, EntityId, ItemKind, JobKind, JobState, KnownTerrain, LocalCell, MovementState,
+    NaturalResourceKind, NewGameOptions, SimulationTick, SnapshotQuery, Terrain, WorldCell,
+    WorldPosition, WorldSeed,
 };
 
 fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
@@ -30,7 +31,7 @@ fn snapshot_is_bounded_ordered_and_renderable() {
     let snapshot = snapshot_after_long_run(42);
 
     assert_eq!(snapshot.tick, SimulationTick::new(100_000));
-    assert_eq!(snapshot.worldgen_version, WorldgenVersion::new(1));
+    assert_eq!(snapshot.worldgen_version, CURRENT_WORLDGEN_VERSION);
     assert_eq!(
         snapshot
             .chunks
@@ -147,6 +148,25 @@ fn chunk_snapshots_map_local_coordinates_without_simulation_access() {
         Some(Terrain::Grass)
     );
     assert_eq!(chunk.terrain_at(LocalCell::new(CHUNK_SIDE, 0)), None);
+}
+
+#[test]
+fn point_terrain_query_respects_exploration_without_materializing_a_chunk() {
+    let application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(42),
+    })
+    .unwrap();
+
+    assert_eq!(
+        application.known_terrain_at(WorldCell::new(0, 0)).unwrap(),
+        Some(Terrain::Grass)
+    );
+    assert_eq!(
+        application
+            .known_terrain_at(WorldCell::new(10_000, -10_000))
+            .unwrap(),
+        None
+    );
 }
 
 #[test]

@@ -6,11 +6,11 @@ mod read_model;
 use progressus_sim::{Simulation, SimulationError};
 
 pub use progressus_sim::{
-    CHUNK_SIDE, ChunkCoord, DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED,
-    Direction, EntityId, InteractionRadius, ItemKind, ItemLocation, ItemQuantity, JobKind,
-    JobState, LocalCell, MovementSpeed, MovementState, NaturalResource, NaturalResourceKind,
-    SUBUNITS_PER_CELL, SimulationTick, Stockpile, Terrain, WorldCell, WorldPosition, WorldSeed,
-    WorldgenVersion,
+    CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, DEFAULT_CHARACTER_INTERACTION_RADIUS,
+    DEFAULT_CHARACTER_SPEED, Direction, EntityId, InteractionRadius, ItemKind, ItemLocation,
+    ItemQuantity, JobKind, JobState, LocalCell, MovementSpeed, MovementState, NaturalResource,
+    NaturalResourceKind, SUBUNITS_PER_CELL, SimulationTick, Stockpile, Terrain, WorldCell,
+    WorldPosition, WorldSeed, WorldgenVersion,
 };
 pub use read_model::{
     CarriedItemSnapshot, CharacterSnapshot, ChunkSnapshot, ClientSnapshot, GroundItemSnapshot,
@@ -104,6 +104,15 @@ impl Application {
                 .set_stockpile_cell(stockpile_id, cell, enabled)?,
         }
         Ok(())
+    }
+
+    /// Returns effective terrain only when the player has already explored the cell.
+    /// This is a bounded point read and must not reveal undiscovered worldgen state.
+    pub fn known_terrain_at(&self, cell: WorldCell) -> Result<Option<Terrain>, ApplicationError> {
+        if !self.simulation.is_explored(cell) {
+            return Ok(None);
+        }
+        Ok(Some(self.simulation.effective_terrain_at(cell)?))
     }
 
     pub fn snapshot(&self, mut query: SnapshotQuery) -> Result<ClientSnapshot, ApplicationError> {

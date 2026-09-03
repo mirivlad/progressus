@@ -39,6 +39,28 @@ fn resource_digest(chunk: &GeneratedChunk) -> u64 {
 }
 
 #[test]
+fn point_queries_match_materialized_chunks_for_supported_versions() {
+    for version in [WorldgenVersion::new(1), WorldgenVersion::new(2)] {
+        let generator = WorldGenerator::new(WorldSeed::new(42), version).unwrap();
+        for cell in [
+            WorldCell::new(-33, -1),
+            WorldCell::new(-2, 0),
+            WorldCell::new(0, 0),
+            WorldCell::new(31, 31),
+            WorldCell::new(32, 32),
+        ] {
+            let (coordinate, local) = cell.split();
+            let chunk = generator.generate(coordinate).unwrap();
+            assert_eq!(generator.terrain_at(cell), chunk.terrain_at(local).unwrap());
+            assert_eq!(
+                generator.natural_resource_at(cell),
+                chunk.natural_resource_at(local)
+            );
+        }
+    }
+}
+
+#[test]
 fn identical_inputs_generate_identical_chunks() {
     let first = WorldGenerator::new(WorldSeed::new(42), CURRENT_WORLDGEN_VERSION).unwrap();
     let second = WorldGenerator::new(WorldSeed::new(42), CURRENT_WORLDGEN_VERSION).unwrap();
@@ -120,7 +142,7 @@ fn worldgen_v1_golden_fixtures_do_not_drift() {
         .into_iter()
         .flat_map(|seed| {
             let generator =
-                WorldGenerator::new(WorldSeed::new(seed), CURRENT_WORLDGEN_VERSION).unwrap();
+                WorldGenerator::new(WorldSeed::new(seed), WorldgenVersion::new(1)).unwrap();
             coordinates
                 .into_iter()
                 .map(move |coordinate| terrain_digest(&generator.generate(coordinate).unwrap()))
@@ -185,7 +207,7 @@ fn worldgen_v1_natural_resource_golden_fixtures_do_not_drift() {
         .into_iter()
         .flat_map(|seed| {
             let generator =
-                WorldGenerator::new(WorldSeed::new(seed), CURRENT_WORLDGEN_VERSION).unwrap();
+                WorldGenerator::new(WorldSeed::new(seed), WorldgenVersion::new(1)).unwrap();
             coordinates
                 .into_iter()
                 .map(move |coordinate| resource_digest(&generator.generate(coordinate).unwrap()))
@@ -202,4 +224,52 @@ fn worldgen_v1_natural_resource_golden_fixtures_do_not_drift() {
             5_345_185_340_990_405_334,
         ]
     );
+}
+
+#[test]
+fn worldgen_v2_creates_coherent_terrain_and_clustered_resources() {
+    assert_eq!(CURRENT_WORLDGEN_VERSION, WorldgenVersion::new(2));
+    let generator = WorldGenerator::new(WorldSeed::new(0), CURRENT_WORLDGEN_VERSION).unwrap();
+    let chunks = (-2..=1)
+        .flat_map(|y| (-2..=1).map(move |x| ChunkCoord::new(x, y)))
+        .map(|coordinate| (coordinate, generator.generate(coordinate).unwrap()))
+        .collect::<BTreeMap<_, _>>();
+    let terrain_at = |cell: WorldCell| {
+        let (coordinate, local) = cell.split();
+        chunks.get(&coordinate).unwrap().terrain_at(local).unwrap()
+    };
+    let resource_at = |cell: WorldCell| {
+        let (coordinate, local) = cell.split();
+        chunks.get(&coordinate).unwrap().natural_resource_at(local)
+    };
+
+    let mut same_terrain_neighbors = 0_u32;
+    let mut neighbor_pairs = 0_u32;
+    let mut resource_neighbor_pairs = 0_u32;
+    let mut resource_cells = 0_u32;
+    for y in -31..31 {
+        for x in -31..31 {
+            let cell = WorldCell::new(x, y);
+            let terrain = terrain_at(cell);
+            for neighbor in [WorldCell::new(x + 1, y), WorldCell::new(x, y + 1)] {
+                neighbor_pairs += 1;
+                same_terrain_neighbors += u32::from(terrain == terrain_at(neighbor));
+            }
+            if resource_at(cell).is_some() {
+                resource_cells += 1;
+                let has_neighbor = [
+                    WorldCell::new(x + 1, y),
+                    WorldCell::new(x - 1, y),
+                    WorldCell::new(x, y + 1),
+                    WorldCell::new(x, y - 1),
+                ]
+                .into_iter()
+                .any(|neighbor| resource_at(neighbor).is_some());
+                resource_neighbor_pairs += u32::from(has_neighbor);
+            }
+        }
+    }
+    assert!(same_terrain_neighbors * 100 / neighbor_pairs >= 85);
+    assert!(resource_cells > 40);
+    assert!(resource_neighbor_pairs * 100 / resource_cells >= 45);
 }

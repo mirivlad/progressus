@@ -3,6 +3,8 @@ use std::num::NonZeroU32;
 
 use crate::{ChunkCoord, EntityId, WorldPosition};
 
+pub const MAX_STACK_QUANTITY: u32 = 1024;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ItemKind {
     Wood,
@@ -15,8 +17,8 @@ pub struct ItemQuantity(NonZeroU32);
 impl ItemQuantity {
     pub const fn new(value: u32) -> Option<Self> {
         match NonZeroU32::new(value) {
-            Some(value) => Some(Self(value)),
-            None => None,
+            Some(value) if value.get() <= MAX_STACK_QUANTITY => Some(Self(value)),
+            _ => None,
         }
     }
 
@@ -138,6 +140,12 @@ impl ItemWorld {
     }
 
     pub(crate) fn insert_ground(&mut self, item: ItemStack) -> Result<(), ItemWorldError> {
+        if item.quantity().get() > MAX_STACK_QUANTITY {
+            return Err(ItemWorldError::StackQuantityExceedsMaximum {
+                item_id: item.id(),
+                quantity: item.quantity().get(),
+            });
+        }
         let id = item.id();
         let position = item
             .ground_position()
@@ -208,6 +216,63 @@ impl ItemWorld {
             .entry(position.containing_cell().split().0)
             .or_default()
             .insert(item_id);
+        self.bump_revision();
+        Ok(())
+    }
+
+    pub(crate) fn merge_ground_stacks(
+        &mut self,
+        target_id: EntityId,
+        source_id: EntityId,
+    ) -> Result<(), ItemWorldError> {
+        if target_id == source_id {
+            return Err(ItemWorldError::CannotMergeStackWithItself(target_id));
+        }
+        let target = self
+            .items
+            .get(&target_id)
+            .ok_or(ItemWorldError::UnknownItem(target_id))?;
+        let source = self
+            .items
+            .get(&source_id)
+            .ok_or(ItemWorldError::UnknownItem(source_id))?;
+        let target_position = target
+            .ground_position()
+            .ok_or(ItemWorldError::ExpectedGroundItem(target_id))?;
+        let source_position = source
+            .ground_position()
+            .ok_or(ItemWorldError::ExpectedGroundItem(source_id))?;
+        if target_position.containing_cell() != source_position.containing_cell() {
+            return Err(ItemWorldError::MergeDifferentCells {
+                target_id,
+                source_id,
+            });
+        }
+        if target.kind() != source.kind() {
+            return Err(ItemWorldError::MergeDifferentKinds {
+                target_id,
+                source_id,
+            });
+        }
+        let target_quantity = target.quantity().get();
+        let source_quantity = source.quantity().get();
+        let combined = target_quantity
+            .checked_add(source_quantity)
+            .ok_or(ItemWorldError::StackQuantityOverflow)?;
+        if combined > MAX_STACK_QUANTITY {
+            return Err(ItemWorldError::StackCapacityExceeded {
+                target_id,
+                source_id,
+                combined,
+            });
+        }
+
+        self.remove_ground_index(source_id, source_position);
+        self.items.remove(&source_id);
+        self.items
+            .get_mut(&target_id)
+            .expect("target stack was checked above")
+            .quantity = ItemQuantity::new(combined).expect("combined stack quantity is positive");
         self.bump_revision();
         Ok(())
     }
@@ -308,13 +373,32 @@ pub(crate) enum ItemWorldError {
         expected: EntityId,
         actual: EntityId,
     },
+    StackQuantityExceedsMaximum {
+        item_id: EntityId,
+        quantity: u32,
+    },
+    CannotMergeStackWithItself(EntityId),
+    MergeDifferentCells {
+        target_id: EntityId,
+        source_id: EntityId,
+    },
+    MergeDifferentKinds {
+        target_id: EntityId,
+        source_id: EntityId,
+    },
+    StackCapacityExceeded {
+        target_id: EntityId,
+        source_id: EntityId,
+        combined: u32,
+    },
+    StackQuantityOverflow,
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{EntityId, WorldCell, WorldPosition};
 
-    use super::{ItemKind, ItemQuantity, ItemStack, ItemWorld};
+    use super::{ItemKind, ItemQuantity, ItemStack, ItemWorld, MAX_STACK_QUANTITY};
 
     fn id(value: u64) -> EntityId {
         EntityId::new(value).unwrap()
@@ -324,6 +408,40 @@ mod tests {
     fn zero_quantity_is_not_a_valid_stack() {
         assert_eq!(ItemQuantity::new(0), None);
         assert_eq!(ItemQuantity::new(1).unwrap().get(), 1);
+        assert_eq!(
+            ItemQuantity::new(MAX_STACK_QUANTITY).unwrap().get(),
+            MAX_STACK_QUANTITY
+        );
+        assert_eq!(ItemQuantity::new(MAX_STACK_QUANTITY + 1), None);
+    }
+
+    #[test]
+    fn ground_stacks_merge_up_to_the_physical_stack_limit() {
+        let position = WorldPosition::from_cell_center(WorldCell::new(3, 4)).unwrap();
+        let mut world = ItemWorld::default();
+        world
+            .insert_ground(ItemStack::new_ground(
+                id(20),
+                ItemKind::Wood,
+                ItemQuantity::new(1000).unwrap(),
+                position,
+            ))
+            .unwrap();
+        world
+            .insert_ground(ItemStack::new_ground(
+                id(21),
+                ItemKind::Wood,
+                ItemQuantity::new(24).unwrap(),
+                position.checked_translate(100, 100).unwrap(),
+            ))
+            .unwrap();
+        world.merge_ground_stacks(id(20), id(21)).unwrap();
+        assert_eq!(
+            world.get(id(20)).unwrap().quantity().get(),
+            MAX_STACK_QUANTITY
+        );
+        assert!(world.get(id(21)).is_none());
+        assert!(world.indexes_are_consistent());
     }
 
     #[test]

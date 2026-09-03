@@ -275,22 +275,13 @@ fn select_direction(
         return Err("no adjacent world cell is representable");
     }
 
-    let mut chunks = candidates
-        .iter()
-        .map(|(_, cell)| cell.split().0)
-        .collect::<Vec<_>>();
-    chunks.sort_unstable();
-    chunks.dedup();
-    let snapshot = application
-        .snapshot(SnapshotQuery {
-            chunks,
-            ..SnapshotQuery::default()
-        })
-        .map_err(|_| "terrain snapshot query failed")?;
-
     candidates
         .into_iter()
-        .filter(|(_, cell)| terrain_at(&snapshot, *cell) == Some(Terrain::Grass))
+        .filter(|(_, cell)| {
+            application
+                .known_terrain_at(*cell)
+                .is_ok_and(|terrain| terrain == Some(Terrain::Grass))
+        })
         .min_by(|(_, first), (_, second)| {
             visit_counts
                 .get(first)
@@ -301,15 +292,6 @@ fn select_direction(
         })
         .map(|(direction, _)| direction)
         .ok_or("no adjacent grass cell is available")
-}
-
-fn terrain_at(snapshot: &ClientSnapshot, cell: WorldCell) -> Option<Terrain> {
-    let (coordinate, local) = cell.split();
-    snapshot
-        .chunks
-        .iter()
-        .find(|chunk| chunk.coordinate == coordinate)
-        .and_then(|chunk| chunk.known_terrain_at(local))
 }
 
 fn character_exact_position(
