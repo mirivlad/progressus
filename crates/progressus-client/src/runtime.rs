@@ -145,7 +145,6 @@ pub(crate) fn pointer_navigation(
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     interaction_state: (
         ResMut<SelectedCharacter>,
-        ResMut<VisualMotion>,
         ResMut<ToolState>,
         ResMut<ModalState>,
     ),
@@ -153,7 +152,7 @@ pub(crate) fn pointer_navigation(
     cache: Res<PresentationCache>,
 ) {
     let (buttons, keys) = input;
-    let (mut selected, mut motion, mut tool, mut modal) = interaction_state;
+    let (mut selected, mut tool, mut modal) = interaction_state;
     if modal.is_open() {
         return;
     }
@@ -296,7 +295,6 @@ pub(crate) fn pointer_navigation(
             workstation_at(authoritative.snapshot(), target.containing_cell())
         {
             selected.0 = None;
-            motion.clear();
             modal.open_workstation(workstation_id);
         } else if let Some(character_id) = select_nearest(
             authoritative
@@ -310,7 +308,6 @@ pub(crate) fn pointer_navigation(
             selected.0 = Some(character_id);
         } else {
             selected.0 = None;
-            motion.clear();
         }
         if let Err(error) = authoritative.refresh_lightweight_snapshot(selected.0) {
             error!("authoritative snapshot failed after selection: {error}");
@@ -867,7 +864,7 @@ pub fn run() -> Result<(), ClientError> {
                 (
                     advance_authority,
                     sync_presentation,
-                    crate::render::interpolate_selected_visual,
+                    crate::render::interpolate_character_visuals,
                     draw_selected_character,
                     draw_selected_navigation,
                     crate::render::draw_navigation_debug,

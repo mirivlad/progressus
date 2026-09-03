@@ -275,6 +275,7 @@ pub struct CharacterSnapshot {
     pub position: WorldPosition,
     pub containing_cell: WorldCell,
     pub movement: MovementState,
+    pub last_tick_motion_trace: Vec<WorldPosition>,
 }
 
 impl From<&Character> for CharacterSnapshot {
@@ -285,6 +286,7 @@ impl From<&Character> for CharacterSnapshot {
             position: character.position(),
             containing_cell: character.position().containing_cell(),
             movement: character.movement(),
+            last_tick_motion_trace: character.last_tick_motion_trace().to_vec(),
         }
     }
 }

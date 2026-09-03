@@ -68,6 +68,9 @@ fn snapshot_is_bounded_ordered_and_renderable() {
                 position: WorldPosition::from_cell_center(WorldCell::new(-2, 0)).unwrap(),
                 containing_cell: WorldCell::new(-2, 0),
                 movement: MovementState::Idle,
+                last_tick_motion_trace: vec![
+                    WorldPosition::from_cell_center(WorldCell::new(-2, 0)).unwrap()
+                ],
             },
             CharacterSnapshot {
                 id: EntityId::new(2).unwrap(),
@@ -75,6 +78,9 @@ fn snapshot_is_bounded_ordered_and_renderable() {
                 position: WorldPosition::from_cell_center(WorldCell::new(-1, 0)).unwrap(),
                 containing_cell: WorldCell::new(-1, 0),
                 movement: MovementState::Idle,
+                last_tick_motion_trace: vec![
+                    WorldPosition::from_cell_center(WorldCell::new(-1, 0)).unwrap()
+                ],
             },
             CharacterSnapshot {
                 id: EntityId::new(3).unwrap(),
@@ -82,6 +88,9 @@ fn snapshot_is_bounded_ordered_and_renderable() {
                 position: WorldPosition::from_cell_center(WorldCell::new(0, 0)).unwrap(),
                 containing_cell: WorldCell::new(0, 0),
                 movement: MovementState::Idle,
+                last_tick_motion_trace: vec![
+                    WorldPosition::from_cell_center(WorldCell::new(0, 0)).unwrap()
+                ],
             },
             CharacterSnapshot {
                 id: EntityId::new(4).unwrap(),
@@ -89,6 +98,9 @@ fn snapshot_is_bounded_ordered_and_renderable() {
                 position: WorldPosition::from_cell_center(WorldCell::new(1, 0)).unwrap(),
                 containing_cell: WorldCell::new(1, 0),
                 movement: MovementState::Idle,
+                last_tick_motion_trace: vec![
+                    WorldPosition::from_cell_center(WorldCell::new(1, 0)).unwrap()
+                ],
             },
             CharacterSnapshot {
                 id: EntityId::new(5).unwrap(),
@@ -96,6 +108,9 @@ fn snapshot_is_bounded_ordered_and_renderable() {
                 position: WorldPosition::from_cell_center(WorldCell::new(2, 0)).unwrap(),
                 containing_cell: WorldCell::new(2, 0),
                 movement: MovementState::Idle,
+                last_tick_motion_trace: vec![
+                    WorldPosition::from_cell_center(WorldCell::new(2, 0)).unwrap()
+                ],
             },
         ]
     );
@@ -706,6 +721,18 @@ fn movement_commands_are_applied_and_published_through_snapshots() {
             direction: Direction::East
         }
     );
+    assert_eq!(
+        cora.last_tick_motion_trace,
+        vec![
+            WorldPosition::from_cell_center(WorldCell::new(0, 0)).unwrap(),
+            cora.position,
+        ]
+    );
+    assert!(snapshot.navigation.is_none());
+    assert!(snapshot.characters.iter().all(|character| {
+        !character.last_tick_motion_trace.is_empty()
+            && character.last_tick_motion_trace.last() == Some(&character.position)
+    }));
 
     application
         .execute(Command::StopMovement {

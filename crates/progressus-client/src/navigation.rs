@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use bevy::prelude::Resource;
 use progressus_app::{EntityId, SUBUNITS_PER_CELL, SimulationTick, WorldPosition};
 
@@ -6,12 +8,16 @@ pub(crate) const CELL_SIZE: f32 = 12.0;
 #[derive(Resource, Default)]
 pub(crate) struct SelectedCharacter(pub(crate) Option<EntityId>);
 
-#[derive(Resource, Default)]
-pub(crate) struct VisualMotion {
-    pub(crate) character_id: Option<EntityId>,
-    pub(crate) source_tick: Option<SimulationTick>,
+#[derive(Clone, Debug)]
+pub(crate) struct CharacterVisualMotion {
+    pub(crate) source_tick: SimulationTick,
     pub(crate) trace: Vec<WorldPosition>,
     pub(crate) elapsed_seconds: f32,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct VisualMotion {
+    pub(crate) characters: BTreeMap<EntityId, CharacterVisualMotion>,
 }
 
 impl VisualMotion {
@@ -21,20 +27,30 @@ impl VisualMotion {
         source_tick: SimulationTick,
         trace: Vec<WorldPosition>,
     ) {
-        if self.character_id == Some(character_id) && self.source_tick == Some(source_tick) {
+        if self
+            .characters
+            .get(&character_id)
+            .is_some_and(|motion| motion.source_tick == source_tick)
+        {
             return;
         }
-        self.character_id = Some(character_id);
-        self.source_tick = Some(source_tick);
-        self.trace = trace;
-        self.elapsed_seconds = 0.0;
+        self.characters.insert(
+            character_id,
+            CharacterVisualMotion {
+                source_tick,
+                trace,
+                elapsed_seconds: 0.0,
+            },
+        );
+    }
+
+    pub(crate) fn retain(&mut self, character_ids: impl IntoIterator<Item = EntityId>) {
+        let retained = character_ids.into_iter().collect::<BTreeSet<_>>();
+        self.characters.retain(|id, _| retained.contains(id));
     }
 
     pub(crate) fn clear(&mut self) {
-        self.character_id = None;
-        self.source_tick = None;
-        self.trace.clear();
-        self.elapsed_seconds = 0.0;
+        self.characters.clear();
     }
 }
 
@@ -160,11 +176,38 @@ mod tests {
         ];
         let mut motion = VisualMotion::default();
         motion.replace(id, SimulationTick::new(8), trace.clone());
-        motion.elapsed_seconds = 0.125;
+        motion.characters.get_mut(&id).unwrap().elapsed_seconds = 0.125;
 
         motion.replace(id, SimulationTick::new(8), trace);
 
-        assert_eq!(motion.elapsed_seconds, 0.125);
-        assert_eq!(motion.source_tick, Some(SimulationTick::new(8)));
+        let character = &motion.characters[&id];
+        assert_eq!(character.elapsed_seconds, 0.125);
+        assert_eq!(character.source_tick, SimulationTick::new(8));
+    }
+
+    #[test]
+    fn visual_motion_tracks_multiple_characters_independently() {
+        let first = EntityId::new(1).unwrap();
+        let second = EntityId::new(2).unwrap();
+        let mut motion = VisualMotion::default();
+        motion.replace(
+            first,
+            SimulationTick::new(9),
+            vec![WorldPosition::from_subunits(0, 0).unwrap()],
+        );
+        motion.replace(
+            second,
+            SimulationTick::new(9),
+            vec![WorldPosition::from_subunits(100, 0).unwrap()],
+        );
+
+        assert_eq!(motion.characters.len(), 2);
+        motion.characters.get_mut(&first).unwrap().elapsed_seconds = 0.1;
+        assert_eq!(motion.characters[&first].elapsed_seconds, 0.1);
+        assert_eq!(motion.characters[&second].elapsed_seconds, 0.0);
+
+        motion.retain([second]);
+        assert!(!motion.characters.contains_key(&first));
+        assert!(motion.characters.contains_key(&second));
     }
 }

@@ -158,24 +158,26 @@ pub(crate) fn sync_presentation(
             );
         }
 
-        if let Some(id) = selected.0 {
-            if !authoritative
+        let tick = authoritative.snapshot().tick;
+        motion.retain(
+            authoritative
+                .snapshot()
+                .characters
+                .iter()
+                .map(|character| character.id),
+        );
+        for character in &authoritative.snapshot().characters {
+            motion.replace(character.id, tick, character.last_tick_motion_trace.clone());
+        }
+
+        if let Some(id) = selected.0
+            && !authoritative
                 .snapshot()
                 .characters
                 .iter()
                 .any(|character| character.id == id)
-            {
-                selected.0 = None;
-                motion.clear();
-            } else if let Some(navigation) = authoritative.snapshot().navigation.as_ref()
-                && navigation.character_id == id
-            {
-                motion.replace(
-                    id,
-                    authoritative.snapshot().tick,
-                    navigation.last_tick_motion_trace.clone(),
-                );
-            }
+        {
+            selected.0 = None;
         }
     }
 
@@ -735,43 +737,36 @@ pub(crate) fn world_position_translation(
     Vec3::new(relative_x * CELL_SIZE, relative_y * CELL_SIZE, z)
 }
 
-pub(crate) fn interpolate_selected_visual(
+pub(crate) fn interpolate_character_visuals(
     time: Res<Time>,
     mut motion: ResMut<VisualMotion>,
-    selected: Res<SelectedCharacter>,
-    authoritative: Res<AuthoritativeClient>,
     cache: Res<PresentationCache>,
     mut transforms: Query<&mut Transform, With<CharacterVisual>>,
 ) {
-    let Some(id) = selected.0 else {
-        return;
-    };
-    if motion.character_id != Some(id) || motion.trace.is_empty() {
-        return;
-    }
     let Some(origin_cell) = cache.render_origin else {
         return;
     };
     let Ok(origin) = WorldPosition::from_cell_center(origin_cell) else {
         return;
     };
-    let Some(entity) = cache.characters.get(&id) else {
-        return;
-    };
-    let Ok(mut transform) = transforms.get_mut(*entity) else {
-        return;
-    };
-    motion.elapsed_seconds += time.delta_secs();
-    let position = interpolate_trace(
-        &motion.trace,
-        motion.elapsed_seconds / crate::interaction::TICK_INTERVAL.as_secs_f32(),
-    );
-    transform.translation = world_position_translation(position, origin, CHARACTER_Z);
+    let tick_seconds = crate::interaction::TICK_INTERVAL.as_secs_f32();
 
-    if motion.elapsed_seconds >= crate::interaction::TICK_INTERVAL.as_secs_f32()
-        && authoritative.snapshot().navigation.is_none()
-    {
-        motion.clear();
+    for (id, visual_motion) in &mut motion.characters {
+        if visual_motion.trace.is_empty() {
+            continue;
+        }
+        let Some(entity) = cache.characters.get(id) else {
+            continue;
+        };
+        let Ok(mut transform) = transforms.get_mut(*entity) else {
+            continue;
+        };
+        visual_motion.elapsed_seconds += time.delta_secs();
+        let position = interpolate_trace(
+            &visual_motion.trace,
+            visual_motion.elapsed_seconds / tick_seconds,
+        );
+        transform.translation = world_position_translation(position, origin, CHARACTER_Z);
     }
 }
 
