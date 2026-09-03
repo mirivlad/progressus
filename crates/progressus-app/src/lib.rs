@@ -6,15 +6,17 @@ mod read_model;
 use progressus_sim::{Simulation, SimulationError};
 
 pub use progressus_sim::{
-    CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, DEFAULT_CHARACTER_INTERACTION_RADIUS,
-    DEFAULT_CHARACTER_SPEED, Direction, EntityId, InteractionRadius, ItemKind, ItemLocation,
-    ItemQuantity, JobKind, JobState, LocalCell, MovementSpeed, MovementState, NaturalResource,
-    NaturalResourceKind, RecipeId, SUBUNITS_PER_CELL, SimulationTick, Stockpile, Terrain,
-    Workstation, WorkstationKind, WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
+    CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, ConstructionMaterialState, ConstructionSite,
+    DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED, Direction, EntityId,
+    InteractionRadius, ItemKind, ItemLocation, ItemQuantity, JobKind, JobState, LocalCell,
+    MovementSpeed, MovementState, NaturalResource, NaturalResourceKind, RecipeId,
+    SUBUNITS_PER_CELL, SimulationTick, Stockpile, Structure, StructureKind, Terrain, Workstation,
+    WorkstationKind, WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
 };
 pub use read_model::{
-    CarriedItemSnapshot, CharacterSnapshot, ChunkSnapshot, ClientSnapshot, GroundItemSnapshot,
-    JobSnapshot, KnownTerrain, NaturalResourceSnapshot, NavigationSnapshot, StockpileSnapshot,
+    CarriedItemSnapshot, CharacterSnapshot, ChunkSnapshot, ClientSnapshot,
+    ConstructionSiteSnapshot, GroundItemSnapshot, JobSnapshot, KnownTerrain,
+    NaturalResourceSnapshot, NavigationSnapshot, StockpileSnapshot, StructureSnapshot,
     WorkstationSnapshot,
 };
 
@@ -63,6 +65,13 @@ pub enum Command {
     DesignateCraft {
         workstation_id: EntityId,
         recipe_id: RecipeId,
+    },
+    DesignateConstruction {
+        kind: StructureKind,
+        cell: WorldCell,
+    },
+    CancelConstruction {
+        site_id: EntityId,
     },
 }
 
@@ -125,6 +134,12 @@ impl Application {
                 recipe_id,
             } => {
                 self.simulation.designate_craft(workstation_id, recipe_id)?;
+            }
+            Command::DesignateConstruction { kind, cell } => {
+                self.simulation.designate_construction(kind, cell)?;
+            }
+            Command::CancelConstruction { site_id } => {
+                self.simulation.cancel_construction(site_id)?;
             }
         }
         Ok(())
@@ -228,6 +243,16 @@ impl Application {
             .workstations()
             .map(WorkstationSnapshot::from)
             .collect();
+        let construction_sites = self
+            .simulation
+            .construction_sites()
+            .map(ConstructionSiteSnapshot::from)
+            .collect();
+        let structures = self
+            .simulation
+            .structures()
+            .map(StructureSnapshot::from)
+            .collect();
 
         Ok(ClientSnapshot {
             tick: self.simulation.tick(),
@@ -238,6 +263,7 @@ impl Application {
             job_revision: self.simulation.job_revision(),
             stockpile_revision: self.simulation.stockpile_revision(),
             workstation_revision: self.simulation.workstation_revision(),
+            construction_revision: self.simulation.construction_revision(),
             chunks,
             ground_items,
             carried_items,
@@ -245,6 +271,8 @@ impl Application {
             jobs,
             stockpiles,
             workstations,
+            construction_sites,
+            structures,
             characters,
             navigation: query.navigation_for.and_then(|id| {
                 self.simulation

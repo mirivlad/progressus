@@ -1,8 +1,8 @@
 use progressus_app::{
     Application, CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, CharacterSnapshot, ChunkCoord, Command,
     Direction, EntityId, ItemKind, JobKind, JobState, KnownTerrain, LocalCell, MovementState,
-    NaturalResourceKind, NewGameOptions, RecipeId, SimulationTick, SnapshotQuery, Terrain,
-    WorkstationKind, WorldCell, WorldPosition, WorldSeed,
+    NaturalResourceKind, NewGameOptions, RecipeId, SimulationTick, SnapshotQuery, StructureKind,
+    Terrain, WorkstationKind, WorldCell, WorldPosition, WorldSeed,
 };
 
 fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
@@ -417,6 +417,61 @@ fn workbench_and_craft_cycle_cross_the_public_application_boundary() {
             .unwrap()
             .workstations
             .is_empty()
+    );
+}
+
+#[test]
+fn physical_wall_construction_crosses_the_public_application_boundary() {
+    let mut application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(0),
+    })
+    .unwrap();
+    let cell = WorldCell::new(0, 1);
+    application
+        .execute(Command::DesignateConstruction {
+            kind: StructureKind::StoneWall,
+            cell,
+        })
+        .unwrap();
+    let designated = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert_eq!(designated.construction_sites.len(), 1);
+    let site_id = designated.construction_sites[0].id;
+    assert_eq!(designated.construction_sites[0].cell, cell);
+    assert!(designated.construction_revision > 0);
+
+    let mut saw_carried = false;
+    for _ in 0..768 {
+        application
+            .execute(Command::AdvanceTicks { count: 1 })
+            .unwrap();
+        let snapshot = application.snapshot(SnapshotQuery::default()).unwrap();
+        saw_carried |= !snapshot.carried_items.is_empty();
+        if snapshot
+            .structures
+            .iter()
+            .any(|structure| structure.id == site_id)
+        {
+            assert!(snapshot.construction_sites.is_empty());
+            assert_eq!(snapshot.structures[0].kind, StructureKind::StoneWall);
+            assert_eq!(snapshot.structures[0].cell, cell);
+            break;
+        }
+    }
+    let completed = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert!(saw_carried);
+    assert!(
+        completed
+            .structures
+            .iter()
+            .any(|structure| structure.id == site_id)
+    );
+    assert!(
+        application
+            .execute(Command::MoveTo {
+                character_id: EntityId::new(3).unwrap(),
+                destination: WorldPosition::from_cell_center(cell).unwrap(),
+            })
+            .is_err()
     );
 }
 

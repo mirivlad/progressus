@@ -1,4 +1,5 @@
 mod clock;
+mod construction;
 mod entity;
 mod exploration;
 mod item;
@@ -12,6 +13,10 @@ mod workstation;
 mod world_state;
 
 pub use clock::SimulationTick;
+pub use construction::{
+    CONSTRUCT_WORK_TICKS, ConstructionMaterialState, ConstructionSite, STONE_WALL_COST, Structure,
+    StructureKind,
+};
 pub use entity::{
     Character, DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED, Direction, EntityId,
     MovementSpeed, MovementState,

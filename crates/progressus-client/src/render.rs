@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use progressus_app::{
-    CHUNK_SIDE, CharacterSnapshot, ChunkCoord, EntityId, GroundItemSnapshot, JobKind, JobState,
-    LocalCell, NaturalResourceKind, NaturalResourceSnapshot, SUBUNITS_PER_CELL,
-    WorkstationSnapshot, WorldCell, WorldPosition,
+    CHUNK_SIDE, CharacterSnapshot, ChunkCoord, ConstructionSiteSnapshot, EntityId,
+    GroundItemSnapshot, JobKind, JobState, LocalCell, NaturalResourceKind, NaturalResourceSnapshot,
+    SUBUNITS_PER_CELL, StructureSnapshot, WorkstationSnapshot, WorldCell, WorldPosition,
 };
 
 use crate::navigation::{SelectedCharacter, VisualMotion, interpolate_trace};
@@ -14,8 +14,8 @@ use crate::presentation::{
     character_sync_actions, ground_item_sync_actions, natural_resource_sync_actions,
 };
 use crate::procedural_assets::{
-    ProceduralAssetParams, ProceduralAssetRegistry, character_asset, item_asset, resource_asset,
-    terrain_asset, workstation_asset,
+    ProceduralAssetParams, ProceduralAssetRegistry, character_asset, construction_site_asset,
+    item_asset, resource_asset, structure_asset, terrain_asset, workstation_asset,
 };
 use crate::runtime::AuthoritativeClient;
 use crate::ui::{ToolMode, ToolState};
@@ -25,6 +25,7 @@ const TERRAIN_Z: f32 = 0.0;
 const NATURAL_RESOURCE_Z: f32 = 3.0;
 const GROUND_ITEM_Z: f32 = 5.0;
 const WORKSTATION_Z: f32 = 7.0;
+const CONSTRUCTION_Z: f32 = 8.0;
 const CHARACTER_Z: f32 = 10.0;
 const CARRIED_ITEM_LOCAL_Z: f32 = 1.0;
 const CAMERA_PAN_SPEED: f32 = 500.0;
@@ -52,6 +53,12 @@ pub(crate) struct CarriedItemVisual;
 #[derive(Component)]
 pub(crate) struct WorkstationVisual;
 
+#[derive(Component)]
+pub(crate) struct ConstructionSiteVisual;
+
+#[derive(Component)]
+pub(crate) struct StructureVisual;
+
 #[derive(Resource, Default)]
 pub(crate) struct PresentationCache {
     pub(crate) render_origin: Option<WorldCell>,
@@ -67,6 +74,8 @@ pub(crate) struct PresentationCache {
     pub(crate) carried_items: BTreeMap<EntityId, Entity>,
     pub(crate) natural_resources: BTreeMap<WorldCell, Entity>,
     pub(crate) workstations: BTreeMap<EntityId, Entity>,
+    pub(crate) construction_sites: BTreeMap<EntityId, Entity>,
+    pub(crate) structures: BTreeMap<EntityId, Entity>,
 }
 
 #[derive(Resource, Default)]
@@ -120,6 +129,15 @@ pub(crate) fn sync_presentation(
                 &mut commands,
                 &mut cache,
                 &authoritative.snapshot().workstations,
+                origin,
+                images,
+                registry,
+            );
+            sync_construction(
+                &mut commands,
+                &mut cache,
+                &authoritative.snapshot().construction_sites,
+                &authoritative.snapshot().structures,
                 origin,
                 images,
                 registry,
@@ -398,6 +416,80 @@ fn sync_workstations(
     }
 }
 
+fn sync_construction(
+    commands: &mut Commands,
+    cache: &mut PresentationCache,
+    sites: &[ConstructionSiteSnapshot],
+    structures: &[StructureSnapshot],
+    origin: WorldCell,
+    images: &mut Assets<Image>,
+    procedural_assets: &mut ProceduralAssetRegistry,
+) {
+    let authoritative_sites = sites
+        .iter()
+        .map(|site| (site.id, *site))
+        .collect::<BTreeMap<_, _>>();
+    for (id, site) in &authoritative_sites {
+        let sprite = procedural_assets.sprite(
+            images,
+            construction_site_asset(site.kind, site.id),
+            Vec2::splat(CELL_SIZE * 0.96),
+        );
+        let transform =
+            Transform::from_translation(world_translation(site.cell, origin, CONSTRUCTION_Z));
+        if let Some(entity) = cache.construction_sites.get(id) {
+            commands.entity(*entity).insert((sprite, transform));
+        } else {
+            let entity = commands
+                .spawn((sprite, transform, ConstructionSiteVisual))
+                .id();
+            cache.construction_sites.insert(*id, entity);
+        }
+    }
+    let stale_sites = cache
+        .construction_sites
+        .keys()
+        .copied()
+        .filter(|id| !authoritative_sites.contains_key(id))
+        .collect::<Vec<_>>();
+    for id in stale_sites {
+        if let Some(entity) = cache.construction_sites.remove(&id) {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    let authoritative_structures = structures
+        .iter()
+        .map(|structure| (structure.id, *structure))
+        .collect::<BTreeMap<_, _>>();
+    for (id, structure) in &authoritative_structures {
+        let sprite = procedural_assets.sprite(
+            images,
+            structure_asset(structure.kind, structure.id),
+            Vec2::splat(CELL_SIZE),
+        );
+        let transform =
+            Transform::from_translation(world_translation(structure.cell, origin, CONSTRUCTION_Z));
+        if let Some(entity) = cache.structures.get(id) {
+            commands.entity(*entity).insert((sprite, transform));
+        } else {
+            let entity = commands.spawn((sprite, transform, StructureVisual)).id();
+            cache.structures.insert(*id, entity);
+        }
+    }
+    let stale_structures = cache
+        .structures
+        .keys()
+        .copied()
+        .filter(|id| !authoritative_structures.contains_key(id))
+        .collect::<Vec<_>>();
+    for id in stale_structures {
+        if let Some(entity) = cache.structures.remove(&id) {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
 fn natural_resource_size(kind: NaturalResourceKind) -> Vec2 {
     match kind {
         NaturalResourceKind::Tree => Vec2::splat(CELL_SIZE * 1.25),
@@ -671,6 +763,7 @@ pub(crate) fn draw_tool_drag(
         ToolMode::StockpileAdd => Color::srgba(0.25, 1.0, 0.72, 0.9),
         ToolMode::StockpileRemove => Color::srgba(1.0, 0.35, 0.32, 0.9),
         ToolMode::Harvest => Color::srgba(1.0, 0.72, 0.18, 0.9),
+        ToolMode::Wall => Color::srgba(0.35, 0.88, 1.0, 0.9),
         ToolMode::CancelJobs => Color::srgba(1.0, 0.25, 0.25, 0.9),
     };
     let half = CELL_SIZE * 0.48;
@@ -736,6 +829,17 @@ pub(crate) fn draw_job_designations(
                     continue;
                 };
                 (workstation.cell, WORKSTATION_Z + 1.0)
+            }
+            JobKind::DeliverConstruction { site_id, .. } | JobKind::Construct { site_id } => {
+                let Some(site) = authoritative
+                    .snapshot()
+                    .construction_sites
+                    .iter()
+                    .find(|site| site.id == site_id)
+                else {
+                    continue;
+                };
+                (site.cell, CONSTRUCTION_Z + 1.0)
             }
             JobKind::Haul { .. } => continue,
         };

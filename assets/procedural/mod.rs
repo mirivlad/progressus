@@ -4,6 +4,7 @@ mod characters;
 mod items;
 mod labels;
 mod resources;
+mod structures;
 mod terrain;
 mod workstations;
 
@@ -53,4 +54,12 @@ pub(super) fn quantity_label(canvas: &mut Canvas, quantity: u32) {
 
 pub(super) fn workbench(canvas: &mut Canvas, variant: u8) {
     workstations::workbench(canvas, variant);
+}
+
+pub(super) fn stone_wall_blueprint(canvas: &mut Canvas, variant: u8) {
+    structures::stone_wall_blueprint(canvas, variant);
+}
+
+pub(super) fn stone_wall(canvas: &mut Canvas, variant: u8) {
+    structures::stone_wall(canvas, variant);
 }

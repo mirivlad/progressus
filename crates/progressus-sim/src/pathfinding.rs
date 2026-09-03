@@ -121,6 +121,9 @@ fn is_walkable(
     if require_explored && !simulation.is_explored(cell) {
         return Ok(false);
     }
+    if simulation.structure_at(cell).is_some() {
+        return Ok(false);
+    }
     let (coordinate, local) = cell.split();
     if let Entry::Vacant(entry) = chunks.entry(coordinate) {
         entry.insert(simulation.effective_chunk(coordinate)?);

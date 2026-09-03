@@ -6,7 +6,7 @@ use bevy::image::ImageSampler;
 use bevy::prelude::{Assets, Handle, Image, ResMut, Resource, Sprite, Vec2};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use progressus_app::{
-    EntityId, ItemKind, NaturalResourceKind, Terrain, WorkstationKind, WorldCell,
+    EntityId, ItemKind, NaturalResourceKind, StructureKind, Terrain, WorkstationKind, WorldCell,
 };
 
 const ART_PIXELS: u32 = 16;
@@ -26,6 +26,8 @@ pub(crate) enum ProceduralAssetKind {
     StoneStack,
     PrimitiveTool,
     Workbench,
+    StoneWallBlueprint,
+    StoneWall,
     Tree,
     StoneOutcrop,
 }
@@ -137,6 +139,20 @@ pub(crate) fn workstation_asset(kind: WorkstationKind, id: EntityId) -> Procedur
     ProceduralAssetKey::new(kind, variant_for_entity(id))
 }
 
+pub(crate) fn construction_site_asset(kind: StructureKind, id: EntityId) -> ProceduralAssetKey {
+    let kind = match kind {
+        StructureKind::StoneWall => ProceduralAssetKind::StoneWallBlueprint,
+    };
+    ProceduralAssetKey::new(kind, variant_for_entity(id))
+}
+
+pub(crate) fn structure_asset(kind: StructureKind, id: EntityId) -> ProceduralAssetKey {
+    let kind = match kind {
+        StructureKind::StoneWall => ProceduralAssetKind::StoneWall,
+    };
+    ProceduralAssetKey::new(kind, variant_for_entity(id))
+}
+
 pub(crate) fn resource_asset(kind: NaturalResourceKind, cell: WorldCell) -> ProceduralAssetKey {
     let kind = match kind {
         NaturalResourceKind::Tree => ProceduralAssetKind::Tree,
@@ -179,6 +195,10 @@ fn render_image(key: ProceduralAssetKey) -> Image {
         ProceduralAssetKind::StoneStack => asset_code::stone_stack(&mut canvas, key.variant),
         ProceduralAssetKind::PrimitiveTool => asset_code::primitive_tool(&mut canvas, key.variant),
         ProceduralAssetKind::Workbench => asset_code::workbench(&mut canvas, key.variant),
+        ProceduralAssetKind::StoneWallBlueprint => {
+            asset_code::stone_wall_blueprint(&mut canvas, key.variant)
+        }
+        ProceduralAssetKind::StoneWall => asset_code::stone_wall(&mut canvas, key.variant),
         ProceduralAssetKind::Tree => asset_code::tree(&mut canvas, key.variant),
         ProceduralAssetKind::StoneOutcrop => asset_code::stone_outcrop(&mut canvas, key.variant),
     }

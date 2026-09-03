@@ -1,6 +1,7 @@
 use progressus_sim::{
-    Character, ItemKind, ItemStack, Job, JobKind, JobState, MovementState, NaturalResource,
-    NaturalResourceKind, Stockpile, Workstation, WorkstationKind, WorldPosition,
+    Character, ConstructionMaterialState, ConstructionSite, ItemKind, ItemStack, Job, JobKind,
+    JobState, MovementState, NaturalResource, NaturalResourceKind, Stockpile, Structure,
+    StructureKind, Workstation, WorkstationKind, WorldPosition,
 };
 
 use crate::{ChunkCoord, EntityId, LocalCell, SimulationTick, Terrain, WorldCell, WorldgenVersion};
@@ -15,6 +16,7 @@ pub struct ClientSnapshot {
     pub job_revision: u64,
     pub stockpile_revision: u64,
     pub workstation_revision: u64,
+    pub construction_revision: u64,
     pub chunks: Vec<ChunkSnapshot>,
     pub ground_items: Vec<GroundItemSnapshot>,
     pub carried_items: Vec<CarriedItemSnapshot>,
@@ -22,6 +24,8 @@ pub struct ClientSnapshot {
     pub jobs: Vec<JobSnapshot>,
     pub stockpiles: Vec<StockpileSnapshot>,
     pub workstations: Vec<WorkstationSnapshot>,
+    pub construction_sites: Vec<ConstructionSiteSnapshot>,
+    pub structures: Vec<StructureSnapshot>,
     pub characters: Vec<CharacterSnapshot>,
     pub navigation: Option<NavigationSnapshot>,
 }
@@ -130,6 +134,44 @@ impl From<&Workstation> for WorkstationSnapshot {
             id: workstation.id(),
             kind: workstation.kind(),
             cell: workstation.cell(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConstructionSiteSnapshot {
+    pub id: EntityId,
+    pub kind: StructureKind,
+    pub cell: WorldCell,
+    pub material_item_id: Option<EntityId>,
+    pub material_state: Option<ConstructionMaterialState>,
+}
+
+impl From<&ConstructionSite> for ConstructionSiteSnapshot {
+    fn from(site: &ConstructionSite) -> Self {
+        Self {
+            id: site.id(),
+            kind: site.kind(),
+            cell: site.cell(),
+            material_item_id: site.material_item_id(),
+            material_state: site.material_state(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StructureSnapshot {
+    pub id: EntityId,
+    pub kind: StructureKind,
+    pub cell: WorldCell,
+}
+
+impl From<&Structure> for StructureSnapshot {
+    fn from(structure: &Structure) -> Self {
+        Self {
+            id: structure.id(),
+            kind: structure.kind(),
+            cell: structure.cell(),
         }
     }
 }

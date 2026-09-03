@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use progressus_app::{
     Application, ApplicationError, ChunkCoord, ClientSnapshot, Command, EntityId, JobKind,
-    NewGameOptions, RecipeId, SnapshotQuery, WorkstationKind, WorldCell, WorldSeed,
+    NewGameOptions, RecipeId, SnapshotQuery, StructureKind, WorkstationKind, WorldCell, WorldSeed,
 };
 
 use crate::interaction::{TickScheduler, movement_command};
@@ -325,6 +325,7 @@ fn apply_point_tool(
         | ToolMode::StockpileAdd
         | ToolMode::StockpileRemove
         | ToolMode::Harvest
+        | ToolMode::Wall
         | ToolMode::CancelJobs => {}
     }
     Ok(())
@@ -423,7 +424,10 @@ fn apply_tool_area(
                 .iter()
                 .filter_map(|job| match job.kind {
                     JobKind::Harvest { source } => Some(source),
-                    JobKind::Haul { .. } | JobKind::Craft { .. } => None,
+                    JobKind::Haul { .. }
+                    | JobKind::Craft { .. }
+                    | JobKind::DeliverConstruction { .. }
+                    | JobKind::Construct { .. } => None,
                 })
                 .collect::<BTreeSet<_>>();
             let selected = cells.into_iter().collect::<BTreeSet<_>>();
@@ -435,6 +439,62 @@ fn apply_tool_area(
                             source: resource.cell,
                         })?;
                 }
+            }
+        }
+        ToolMode::Wall => {
+            let resource_cells = area_snapshot
+                .natural_resources
+                .iter()
+                .map(|resource| resource.cell)
+                .collect::<BTreeSet<_>>();
+            let stockpile_cells = area_snapshot
+                .stockpiles
+                .iter()
+                .flat_map(|stockpile| stockpile.cells.iter().copied())
+                .collect::<BTreeSet<_>>();
+            let workstation_cells = area_snapshot
+                .workstations
+                .iter()
+                .map(|workstation| workstation.cell)
+                .collect::<BTreeSet<_>>();
+            let item_cells = area_snapshot
+                .ground_items
+                .iter()
+                .map(|item| item.position.containing_cell())
+                .collect::<BTreeSet<_>>();
+            let construction_cells = area_snapshot
+                .construction_sites
+                .iter()
+                .map(|site| site.cell)
+                .chain(
+                    area_snapshot
+                        .structures
+                        .iter()
+                        .map(|structure| structure.cell),
+                )
+                .collect::<BTreeSet<_>>();
+            let character_cells = area_snapshot
+                .characters
+                .iter()
+                .map(|character| character.containing_cell)
+                .collect::<BTreeSet<_>>();
+            for cell in cells {
+                if known_terrain_at(&area_snapshot, cell) != Some(progressus_app::Terrain::Grass)
+                    || resource_cells.contains(&cell)
+                    || stockpile_cells.contains(&cell)
+                    || workstation_cells.contains(&cell)
+                    || item_cells.contains(&cell)
+                    || construction_cells.contains(&cell)
+                    || character_cells.contains(&cell)
+                {
+                    continue;
+                }
+                authoritative
+                    .application
+                    .execute(Command::DesignateConstruction {
+                        kind: StructureKind::StoneWall,
+                        cell,
+                    })?;
             }
         }
         ToolMode::Workbench | ToolMode::Craft => {}
@@ -457,13 +517,28 @@ fn apply_tool_area(
                     {
                         Some(job.id)
                     }
-                    _ => None,
+                    JobKind::Harvest { .. }
+                    | JobKind::Haul { .. }
+                    | JobKind::Craft { .. }
+                    | JobKind::DeliverConstruction { .. }
+                    | JobKind::Construct { .. } => None,
                 })
                 .collect::<Vec<_>>();
             for job_id in jobs {
                 authoritative
                     .application
                     .execute(Command::CancelJob { job_id })?;
+            }
+            let sites = area_snapshot
+                .construction_sites
+                .iter()
+                .filter(|site| selected.contains(&site.cell))
+                .map(|site| site.id)
+                .collect::<Vec<_>>();
+            for site_id in sites {
+                authoritative
+                    .application
+                    .execute(Command::CancelConstruction { site_id })?;
             }
         }
     }

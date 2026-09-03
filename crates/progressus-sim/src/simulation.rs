@@ -7,6 +7,7 @@ use std::fmt::{self, Display, Formatter};
 use progressus_worldgen::{WorldGenerator, WorldgenError};
 
 use crate::clock::SimulationClock;
+use crate::construction::{ConstructionWorld, ConstructionWorldError};
 use crate::entity::{EntityIdAllocator, NavigationRoute};
 use crate::exploration::ExploredWorld;
 use crate::item::ItemWorld;
@@ -16,12 +17,13 @@ use crate::stockpile::{StockpileWorld, StockpileWorldError};
 use crate::workstation::{WorkstationWorld, WorkstationWorldError};
 use crate::world_state::ModifiedWorld;
 use crate::{
-    CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, Direction, EffectiveChunk,
-    EntityId, GeneratedChunk, HARVEST_WORK_TICKS, InteractionRadius, ItemKind, ItemLocation,
-    ItemQuantity, ItemStack, Job, JobKind, JobState, LocalCell, MAX_STACK_QUANTITY, MovementState,
-    NaturalResource, NaturalResourceKind, RecipeId, SimulationTick, Stockpile, Terrain,
-    Workstation, WorkstationKind, WorldCell, WorldPosition, WorldPositionError, WorldSeed,
-    WorldgenVersion, recipe_definition, within_interaction_range,
+    CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, ConstructionMaterialState,
+    ConstructionSite, Direction, EffectiveChunk, EntityId, GeneratedChunk, HARVEST_WORK_TICKS,
+    InteractionRadius, ItemKind, ItemLocation, ItemQuantity, ItemStack, Job, JobKind, JobState,
+    LocalCell, MAX_STACK_QUANTITY, MovementState, NaturalResource, NaturalResourceKind, RecipeId,
+    SimulationTick, Stockpile, Structure, StructureKind, Terrain, Workstation, WorkstationKind,
+    WorldCell, WorldPosition, WorldPositionError, WorldSeed, WorldgenVersion, recipe_definition,
+    within_interaction_range,
 };
 
 const INITIAL_CHARACTERS: [(&str, i64); 5] = [
@@ -43,6 +45,7 @@ pub struct Simulation {
     job_world: JobWorld,
     stockpile_world: StockpileWorld,
     workstation_world: WorkstationWorld,
+    construction_world: ConstructionWorld,
     depleted_resources: BTreeSet<WorldCell>,
     resource_revision: u64,
     explored_world: ExploredWorld,
@@ -111,6 +114,7 @@ impl Simulation {
             job_world: JobWorld::default(),
             stockpile_world: StockpileWorld::default(),
             workstation_world: WorkstationWorld::default(),
+            construction_world: ConstructionWorld::default(),
             depleted_resources: BTreeSet::new(),
             resource_revision: 0,
             explored_world,
@@ -150,6 +154,7 @@ impl Simulation {
         for _ in 0..count {
             self.clock.advance(1)?;
             self.advance_characters_one_tick()?;
+            self.maintain_construction_jobs()?;
             self.maintain_haul_jobs()?;
             self.advance_jobs_one_tick()?;
         }
@@ -369,15 +374,26 @@ impl Simulation {
             .get(job_id)
             .cloned()
             .ok_or(SimulationError::UnknownJob(job_id))?;
-        if let (JobKind::Haul { item_id, .. }, JobState::Transporting { worker_id }) =
-            (job.kind(), job.state())
-        {
-            let position = self
-                .characters
-                .get(&worker_id)
-                .ok_or(SimulationError::UnknownCharacter(worker_id))?
-                .position();
-            self.drop_item(worker_id, item_id, position)?;
+        if let JobState::Transporting { worker_id } = job.state() {
+            let item_id = match job.kind() {
+                JobKind::Haul { item_id, .. } | JobKind::DeliverConstruction { item_id, .. } => {
+                    Some(item_id)
+                }
+                JobKind::Harvest { .. } | JobKind::Craft { .. } | JobKind::Construct { .. } => None,
+            };
+            if let Some(item_id) = item_id {
+                let position = self
+                    .characters
+                    .get(&worker_id)
+                    .ok_or(SimulationError::UnknownCharacter(worker_id))?
+                    .position();
+                self.drop_item(worker_id, item_id, position)?;
+                if let JobKind::DeliverConstruction { site_id, .. } = job.kind() {
+                    self.construction_world
+                        .mark_material_reserved(site_id, item_id)
+                        .map_err(SimulationError::from_construction_world)?;
+                }
+            }
         }
         let worker = job.state().worker();
         self.job_world
@@ -460,6 +476,11 @@ impl Simulation {
         }
         if self.workstation_world.workstation_at(cell).is_some() {
             return Err(SimulationError::StockpileCellOccupiedByWorkstation(cell));
+        }
+        if self.construction_world.site_at(cell).is_some()
+            || self.construction_world.structure_at(cell).is_some()
+        {
+            return Err(SimulationError::StockpileCellBlocked(cell));
         }
         Ok(())
     }
@@ -562,6 +583,93 @@ impl Simulation {
                 .is_some_and(|position| position.containing_cell() == cell)
         }) {
             return Err(SimulationError::WorkstationCellOccupiedByItem(cell));
+        }
+        if self.construction_world.site_at(cell).is_some()
+            || self.construction_world.structure_at(cell).is_some()
+        {
+            return Err(SimulationError::WorkstationCellBlocked(cell));
+        }
+        Ok(())
+    }
+
+    pub fn construction_sites(&self) -> impl ExactSizeIterator<Item = &ConstructionSite> {
+        self.construction_world.sites()
+    }
+
+    pub fn structures(&self) -> impl ExactSizeIterator<Item = &Structure> {
+        self.construction_world.structures()
+    }
+
+    pub const fn construction_revision(&self) -> u64 {
+        self.construction_world.revision()
+    }
+
+    pub fn construction_site_at(&self, cell: WorldCell) -> Option<EntityId> {
+        self.construction_world.site_at(cell)
+    }
+
+    pub fn structure_at(&self, cell: WorldCell) -> Option<EntityId> {
+        self.construction_world.structure_at(cell)
+    }
+
+    pub fn designate_construction(
+        &mut self,
+        kind: StructureKind,
+        cell: WorldCell,
+    ) -> Result<EntityId, SimulationError> {
+        self.validate_construction_cell(cell)?;
+        if self.construction_world.site_at(cell).is_some()
+            || self.construction_world.structure_at(cell).is_some()
+        {
+            return Err(SimulationError::ConstructionCellOccupied(cell));
+        }
+        let id = self.id_allocator.allocate()?;
+        self.construction_world
+            .insert_site(ConstructionSite::new(id, kind, cell))
+            .map_err(SimulationError::from_construction_world)?;
+        self.ensure_construction_job(id)?;
+        Ok(id)
+    }
+
+    pub fn cancel_construction(&mut self, site_id: EntityId) -> Result<(), SimulationError> {
+        if self.construction_world.site(site_id).is_none() {
+            return Err(SimulationError::UnknownConstructionSite(site_id));
+        }
+        if let Some(job_id) = self.job_world.construction_delivery_job_for_site(site_id) {
+            self.cancel_job(job_id)?;
+        }
+        if let Some(job_id) = self.job_world.construct_job_for_site(site_id) {
+            self.cancel_job(job_id)?;
+        }
+        self.construction_world
+            .release_material(site_id)
+            .map_err(SimulationError::from_construction_world)?;
+        self.construction_world
+            .remove_site(site_id)
+            .map_err(SimulationError::from_construction_world)?;
+        Ok(())
+    }
+
+    fn validate_construction_cell(&self, cell: WorldCell) -> Result<(), SimulationError> {
+        if !self.is_explored(cell) {
+            return Err(SimulationError::ConstructionCellUndiscovered(cell));
+        }
+        if !self.is_walkable(cell)? {
+            return Err(SimulationError::ConstructionCellBlocked(cell));
+        }
+        if self.natural_resource_at(cell)?.is_some()
+            || self.stockpile_world.stockpile_at(cell).is_some()
+            || self.workstation_world.workstation_at(cell).is_some()
+            || self
+                .characters
+                .values()
+                .any(|character| character.position().containing_cell() == cell)
+            || self.item_world.iter().any(|item| {
+                item.ground_position()
+                    .is_some_and(|position| position.containing_cell() == cell)
+            })
+        {
+            return Err(SimulationError::ConstructionCellOccupied(cell));
         }
         Ok(())
     }
@@ -680,15 +788,26 @@ impl Simulation {
             .get(job_id)
             .cloned()
             .ok_or(SimulationError::UnknownJob(job_id))?;
-        if let (JobKind::Haul { item_id, .. }, JobState::Transporting { .. }) =
-            (job.kind(), job.state())
-        {
-            let position = self
-                .characters
-                .get(&worker_id)
-                .ok_or(SimulationError::UnknownCharacter(worker_id))?
-                .position();
-            self.drop_item(worker_id, item_id, position)?;
+        if let JobState::Transporting { .. } = job.state() {
+            let item_id = match job.kind() {
+                JobKind::Haul { item_id, .. } | JobKind::DeliverConstruction { item_id, .. } => {
+                    Some(item_id)
+                }
+                JobKind::Harvest { .. } | JobKind::Craft { .. } | JobKind::Construct { .. } => None,
+            };
+            if let Some(item_id) = item_id {
+                let position = self
+                    .characters
+                    .get(&worker_id)
+                    .ok_or(SimulationError::UnknownCharacter(worker_id))?
+                    .position();
+                self.drop_item(worker_id, item_id, position)?;
+                if let JobKind::DeliverConstruction { site_id, .. } = job.kind() {
+                    self.construction_world
+                        .mark_material_reserved(site_id, item_id)
+                        .map_err(SimulationError::from_construction_world)?;
+                }
+            }
         }
         self.job_world
             .release_worker(job_id)
@@ -744,13 +863,173 @@ impl Simulation {
         })
     }
 
+    fn maintain_construction_jobs(&mut self) -> Result<(), SimulationError> {
+        let site_ids = self
+            .construction_world
+            .sites()
+            .map(ConstructionSite::id)
+            .collect::<Vec<_>>();
+        for site_id in site_ids {
+            self.ensure_construction_job(site_id)?;
+        }
+        Ok(())
+    }
+
+    fn ensure_construction_job(&mut self, site_id: EntityId) -> Result<(), SimulationError> {
+        let Some(site) = self.construction_world.site(site_id).cloned() else {
+            return Ok(());
+        };
+        match site.material_state() {
+            None => {
+                let Some(item_id) = self.select_construction_material(&site) else {
+                    return Ok(());
+                };
+                self.construction_world
+                    .reserve_material(site_id, item_id)
+                    .map_err(SimulationError::from_construction_world)?;
+                self.create_construction_delivery_job(site_id, item_id)?;
+            }
+            Some(ConstructionMaterialState::Reserved) => {
+                let Some(item_id) = site.material_item_id() else {
+                    return Err(SimulationError::ConstructionInvariantViolation);
+                };
+                let valid = self.item_world.get(item_id).is_some_and(|item| {
+                    item.kind() == site.kind().material_kind()
+                        && item.quantity().get() >= site.kind().material_quantity()
+                });
+                if !valid {
+                    self.construction_world
+                        .release_material(site_id)
+                        .map_err(SimulationError::from_construction_world)?;
+                    return Ok(());
+                }
+                if self
+                    .job_world
+                    .construction_delivery_job_for_site(site_id)
+                    .is_none()
+                {
+                    self.create_construction_delivery_job(site_id, item_id)?;
+                }
+            }
+            Some(ConstructionMaterialState::Delivered) => {
+                let Some(item_id) = site.material_item_id() else {
+                    return Err(SimulationError::ConstructionInvariantViolation);
+                };
+                let delivered = self.item_world.get(item_id).is_some_and(|item| {
+                    item.kind() == site.kind().material_kind()
+                        && item.quantity().get() >= site.kind().material_quantity()
+                        && item.ground_position().is_some_and(|position| {
+                            cell_manhattan_distance(position.containing_cell(), site.cell()) <= 1
+                        })
+                });
+                if !delivered {
+                    self.construction_world
+                        .mark_material_reserved(site_id, item_id)
+                        .map_err(SimulationError::from_construction_world)?;
+                    return Ok(());
+                }
+                if self.job_world.construct_job_for_site(site_id).is_none() {
+                    let job_id = self.id_allocator.allocate()?;
+                    self.job_world
+                        .insert(Job::new(job_id, JobKind::Construct { site_id }))
+                        .map_err(SimulationError::from_job_world)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn create_construction_delivery_job(
+        &mut self,
+        site_id: EntityId,
+        item_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        let job_id = self.id_allocator.allocate()?;
+        self.job_world
+            .insert(Job::new(
+                job_id,
+                JobKind::DeliverConstruction { site_id, item_id },
+            ))
+            .map_err(SimulationError::from_job_world)?;
+        Ok(())
+    }
+
+    fn select_construction_material(&self, site: &ConstructionSite) -> Option<EntityId> {
+        let mut candidates = self
+            .item_world
+            .iter()
+            .filter_map(|item| {
+                let position = item.ground_position()?;
+                (item.kind() == site.kind().material_kind()
+                    && item.quantity().get() >= site.kind().material_quantity()
+                    && self.is_explored(position.containing_cell())
+                    && self.job_world.haul_job_for_item(item.id()).is_none()
+                    && self.job_world.craft_job_for_item(item.id()).is_none()
+                    && self
+                        .construction_world
+                        .site_for_material(item.id())
+                        .is_none())
+                .then_some((
+                    cell_manhattan_distance(position.containing_cell(), site.cell()),
+                    item.id(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_unstable();
+        candidates.first().map(|(_, id)| *id)
+    }
+
+    fn construction_access_cell(
+        &self,
+        site_cell: WorldCell,
+    ) -> Result<Option<WorldCell>, SimulationError> {
+        for direction in [
+            Direction::East,
+            Direction::North,
+            Direction::South,
+            Direction::West,
+        ] {
+            let Some(cell) = direction.adjacent(site_cell) else {
+                continue;
+            };
+            if self.is_explored(cell)
+                && self.is_walkable(cell)?
+                && self.construction_world.site_at(cell).is_none()
+                && self.workstation_world.workstation_at(cell).is_none()
+            {
+                return Ok(Some(cell));
+            }
+        }
+        Ok(None)
+    }
+
+    fn construction_access_position(
+        &self,
+        site_cell: WorldCell,
+        access_cell: WorldCell,
+    ) -> Result<WorldPosition, SimulationError> {
+        let center = WorldPosition::from_cell_center(access_cell)?;
+        let dx = access_cell.x() - site_cell.x();
+        let dy = access_cell.y() - site_cell.y();
+        match (dx, dy) {
+            (1, 0) => Ok(center.checked_translate(-256, 0)?),
+            (-1, 0) => Ok(center.checked_translate(256, 0)?),
+            (0, 1) => Ok(center.checked_translate(0, -256)?),
+            (0, -1) => Ok(center.checked_translate(0, 256)?),
+            _ => Err(SimulationError::ConstructionInvariantViolation),
+        }
+    }
+
     fn maintain_haul_jobs(&mut self) -> Result<(), SimulationError> {
         let existing_haul_jobs = self
             .job_world
             .iter()
             .filter_map(|job| match job.kind() {
                 JobKind::Haul { .. } => Some(job.id()),
-                JobKind::Harvest { .. } | JobKind::Craft { .. } => None,
+                JobKind::Harvest { .. }
+                | JobKind::Craft { .. }
+                | JobKind::DeliverConstruction { .. }
+                | JobKind::Construct { .. } => None,
             })
             .collect::<Vec<_>>();
         for job_id in existing_haul_jobs {
@@ -796,7 +1075,11 @@ impl Simulation {
                 (self.is_explored(cell)
                     && self.stockpile_world.stockpile_at(cell).is_none()
                     && self.job_world.haul_job_for_item(item.id()).is_none()
-                    && self.job_world.craft_job_for_item(item.id()).is_none())
+                    && self.job_world.craft_job_for_item(item.id()).is_none()
+                    && self
+                        .construction_world
+                        .site_for_material(item.id())
+                        .is_none())
                 .then_some(item.id())
             })
             .collect::<Vec<_>>();
@@ -867,6 +1150,10 @@ impl Simulation {
                 workstation_id,
                 recipe_id,
             } => self.try_assign_craft(job_id, workstation_id, recipe_id),
+            JobKind::DeliverConstruction { site_id, item_id } => {
+                self.try_assign_construction_delivery(job_id, site_id, item_id)
+            }
+            JobKind::Construct { site_id } => self.try_assign_construct(job_id, site_id),
         }
     }
 
@@ -1018,6 +1305,110 @@ impl Simulation {
         Ok(())
     }
 
+    fn try_assign_construction_delivery(
+        &mut self,
+        job_id: EntityId,
+        site_id: EntityId,
+        item_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        let Some(site) = self.construction_world.site(site_id) else {
+            self.job_world
+                .remove(job_id)
+                .map_err(SimulationError::from_job_world)?;
+            return Ok(());
+        };
+        if site.material_item_id() != Some(item_id)
+            || site.material_state() != Some(ConstructionMaterialState::Reserved)
+        {
+            self.job_world
+                .remove(job_id)
+                .map_err(SimulationError::from_job_world)?;
+            return Ok(());
+        }
+        let Some(item) = self.item_world.get(item_id) else {
+            self.construction_world
+                .release_material(site_id)
+                .map_err(SimulationError::from_construction_world)?;
+            self.job_world
+                .remove(job_id)
+                .map_err(SimulationError::from_job_world)?;
+            return Ok(());
+        };
+        let Some(item_position) = item.ground_position() else {
+            return Ok(());
+        };
+        if item.kind() != site.kind().material_kind()
+            || item.quantity().get() < site.kind().material_quantity()
+        {
+            self.construction_world
+                .release_material(site_id)
+                .map_err(SimulationError::from_construction_world)?;
+            self.job_world
+                .remove(job_id)
+                .map_err(SimulationError::from_job_world)?;
+            return Ok(());
+        }
+        for worker_id in self.available_workers_by_distance(item_position.containing_cell()) {
+            let route = match self.plan_navigation_route(worker_id, item_position) {
+                Ok(route) => route,
+                Err(
+                    SimulationError::MoveToDestinationBlocked(_)
+                    | SimulationError::MoveToDestinationUndiscovered(_)
+                    | SimulationError::MoveToPathNotFound
+                    | SimulationError::MoveToSearchBudgetExceeded,
+                ) => continue,
+                Err(error) => return Err(error),
+            };
+            self.job_world
+                .reserve_worker(job_id, worker_id)
+                .map_err(SimulationError::from_job_world)?;
+            self.apply_navigation_route(worker_id, item_position, route);
+            return Ok(());
+        }
+        Ok(())
+    }
+
+    fn try_assign_construct(
+        &mut self,
+        job_id: EntityId,
+        site_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        let Some(site) = self.construction_world.site(site_id) else {
+            self.job_world
+                .remove(job_id)
+                .map_err(SimulationError::from_job_world)?;
+            return Ok(());
+        };
+        if site.material_state() != Some(ConstructionMaterialState::Delivered) {
+            self.job_world
+                .remove(job_id)
+                .map_err(SimulationError::from_job_world)?;
+            return Ok(());
+        }
+        let Some(access_cell) = self.construction_access_cell(site.cell())? else {
+            return Ok(());
+        };
+        let target = self.construction_access_position(site.cell(), access_cell)?;
+        for worker_id in self.available_workers_by_distance(access_cell) {
+            let route = match self.plan_navigation_route(worker_id, target) {
+                Ok(route) => route,
+                Err(
+                    SimulationError::MoveToDestinationBlocked(_)
+                    | SimulationError::MoveToDestinationUndiscovered(_)
+                    | SimulationError::MoveToPathNotFound
+                    | SimulationError::MoveToSearchBudgetExceeded,
+                ) => continue,
+                Err(error) => return Err(error),
+            };
+            self.job_world
+                .reserve_worker(job_id, worker_id)
+                .map_err(SimulationError::from_job_world)?;
+            self.apply_navigation_route(worker_id, target, route);
+            return Ok(());
+        }
+        Ok(())
+    }
+
     fn select_craft_inputs(
         &self,
         workstation_cell: WorldCell,
@@ -1032,6 +1423,10 @@ impl Simulation {
                     || item.kind() != requirement.kind
                     || self.job_world.haul_job_for_item(item.id()).is_some()
                     || self.job_world.craft_job_for_item(item.id()).is_some()
+                    || self
+                        .construction_world
+                        .site_for_material(item.id())
+                        .is_some()
                 {
                     continue;
                 }
@@ -1269,6 +1664,120 @@ impl Simulation {
                         .map_err(SimulationError::from_job_world)?;
                 }
             }
+            JobKind::DeliverConstruction { site_id, item_id } => {
+                let Some(site) = self.construction_world.site(site_id).cloned() else {
+                    self.job_world
+                        .remove(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                };
+                if site.material_item_id() != Some(item_id)
+                    || site.material_state() != Some(ConstructionMaterialState::Reserved)
+                {
+                    self.job_world
+                        .remove(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                }
+                let Some(item_position) = self
+                    .item_world
+                    .get(item_id)
+                    .and_then(ItemStack::ground_position)
+                else {
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                };
+                let Some(character) = self.characters.get(&worker_id) else {
+                    self.job_world
+                        .remove(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                };
+                if within_interaction_range(
+                    character.position(),
+                    character.interaction_radius(),
+                    item_position,
+                    InteractionRadius::zero(),
+                ) {
+                    let Some(access_cell) = self.construction_access_cell(site.cell())? else {
+                        self.job_world
+                            .release_worker(job_id)
+                            .map_err(SimulationError::from_job_world)?;
+                        return Ok(());
+                    };
+                    let target = self.construction_access_position(site.cell(), access_cell)?;
+                    let route = match self.plan_navigation_route(worker_id, target) {
+                        Ok(route) => route,
+                        Err(
+                            SimulationError::MoveToDestinationBlocked(_)
+                            | SimulationError::MoveToDestinationUndiscovered(_)
+                            | SimulationError::MoveToPathNotFound
+                            | SimulationError::MoveToSearchBudgetExceeded,
+                        ) => {
+                            self.job_world
+                                .release_worker(job_id)
+                                .map_err(SimulationError::from_job_world)?;
+                            return Ok(());
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    self.pick_up_item(worker_id, item_id)?;
+                    self.job_world
+                        .start_transporting(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    self.apply_navigation_route(worker_id, target, route);
+                } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                }
+            }
+            JobKind::Construct { site_id } => {
+                let Some(site) = self.construction_world.site(site_id).cloned() else {
+                    self.job_world
+                        .remove(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                };
+                if site.material_state() != Some(ConstructionMaterialState::Delivered) {
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                }
+                let Some(access_cell) = self.construction_access_cell(site.cell())? else {
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                };
+                let target = self.construction_access_position(site.cell(), access_cell)?;
+                let Some(character) = self.characters.get(&worker_id) else {
+                    self.job_world
+                        .remove(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                };
+                if within_interaction_range(
+                    character.position(),
+                    character.interaction_radius(),
+                    WorldPosition::from_cell_center(site.cell())?,
+                    InteractionRadius::zero(),
+                ) {
+                    self.characters
+                        .get_mut(&worker_id)
+                        .expect("worker was checked above")
+                        .set_movement(MovementState::Idle);
+                    self.job_world
+                        .start_working(job_id, site.kind().work_ticks())
+                        .map_err(SimulationError::from_job_world)?;
+                } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
+                    let route = self.plan_navigation_route(worker_id, target)?;
+                    self.apply_navigation_route(worker_id, target, route);
+                }
+            }
         }
         Ok(())
     }
@@ -1279,51 +1788,106 @@ impl Simulation {
         kind: JobKind,
         worker_id: EntityId,
     ) -> Result<(), SimulationError> {
-        let JobKind::Haul {
-            item_id,
-            stockpile_id,
-            destination,
-        } = kind
-        else {
-            return Err(SimulationError::JobInvariantViolation);
-        };
-        if self.stockpile_world.stockpile_at(destination) != Some(stockpile_id) {
-            self.cancel_job(job_id)?;
-            return Ok(());
-        }
-        let Some(character) = self.characters.get(&worker_id) else {
-            return Err(SimulationError::JobInvariantViolation);
-        };
-        if self.item_world.get(item_id).and_then(ItemStack::carrier) != Some(worker_id) {
-            return Err(SimulationError::JobInvariantViolation);
-        }
-        let target = WorldPosition::from_cell_center(destination)?;
-        if within_interaction_range(
-            character.position(),
-            character.interaction_radius(),
-            target,
-            InteractionRadius::zero(),
-        ) {
-            let merge_target = self.stockpile_merge_target(item_id, destination);
-            self.drop_item(worker_id, item_id, target)?;
-            if let Some(target_id) = merge_target {
-                self.item_world
-                    .merge_ground_stacks(target_id, item_id)
-                    .expect("haul destination capacity was validated before delivery");
+        match kind {
+            JobKind::Haul {
+                item_id,
+                stockpile_id,
+                destination,
+            } => {
+                if self.stockpile_world.stockpile_at(destination) != Some(stockpile_id) {
+                    self.cancel_job(job_id)?;
+                    return Ok(());
+                }
+                let Some(character) = self.characters.get(&worker_id) else {
+                    return Err(SimulationError::JobInvariantViolation);
+                };
+                if self.item_world.get(item_id).and_then(ItemStack::carrier) != Some(worker_id) {
+                    return Err(SimulationError::JobInvariantViolation);
+                }
+                let target = WorldPosition::from_cell_center(destination)?;
+                if within_interaction_range(
+                    character.position(),
+                    character.interaction_radius(),
+                    target,
+                    InteractionRadius::zero(),
+                ) {
+                    let merge_target = self.stockpile_merge_target(item_id, destination);
+                    self.drop_item(worker_id, item_id, target)?;
+                    if let Some(target_id) = merge_target {
+                        self.item_world
+                            .merge_ground_stacks(target_id, item_id)
+                            .expect("haul destination capacity was validated before delivery");
+                    }
+                    self.job_world
+                        .remove(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    self.characters
+                        .get_mut(&worker_id)
+                        .expect("worker was checked above")
+                        .set_movement(MovementState::Idle);
+                } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
+                    let position = character.position();
+                    self.drop_item(worker_id, item_id, position)?;
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                }
             }
-            self.job_world
-                .remove(job_id)
-                .map_err(SimulationError::from_job_world)?;
-            self.characters
-                .get_mut(&worker_id)
-                .expect("worker was checked above")
-                .set_movement(MovementState::Idle);
-        } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
-            let position = character.position();
-            self.drop_item(worker_id, item_id, position)?;
-            self.job_world
-                .release_worker(job_id)
-                .map_err(SimulationError::from_job_world)?;
+            JobKind::DeliverConstruction { site_id, item_id } => {
+                let Some(site) = self.construction_world.site(site_id).cloned() else {
+                    self.cancel_job(job_id)?;
+                    return Ok(());
+                };
+                if self.item_world.get(item_id).and_then(ItemStack::carrier) != Some(worker_id) {
+                    return Err(SimulationError::ConstructionInvariantViolation);
+                }
+                let Some(character) = self.characters.get(&worker_id) else {
+                    return Err(SimulationError::ConstructionInvariantViolation);
+                };
+                let Some(access_cell) = self.construction_access_cell(site.cell())? else {
+                    let position = character.position();
+                    self.drop_item(worker_id, item_id, position)?;
+                    self.construction_world
+                        .mark_material_reserved(site_id, item_id)
+                        .map_err(SimulationError::from_construction_world)?;
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                };
+                let target = self.construction_access_position(site.cell(), access_cell)?;
+                if within_interaction_range(
+                    character.position(),
+                    character.interaction_radius(),
+                    target,
+                    InteractionRadius::zero(),
+                ) {
+                    self.drop_item(worker_id, item_id, target)?;
+                    self.construction_world
+                        .mark_material_delivered(site_id, item_id)
+                        .map_err(SimulationError::from_construction_world)?;
+                    self.job_world
+                        .remove(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    self.characters
+                        .get_mut(&worker_id)
+                        .expect("worker was checked above")
+                        .set_movement(MovementState::Idle);
+                    self.ensure_construction_job(site_id)?;
+                } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
+                    let position = character.position();
+                    self.drop_item(worker_id, item_id, position)?;
+                    self.construction_world
+                        .mark_material_reserved(site_id, item_id)
+                        .map_err(SimulationError::from_construction_world)?;
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                }
+            }
+            JobKind::Harvest { .. } | JobKind::Craft { .. } | JobKind::Construct { .. } => {
+                return Err(SimulationError::JobInvariantViolation);
+            }
         }
         Ok(())
     }
@@ -1380,6 +1944,81 @@ impl Simulation {
                 }
                 self.complete_craft(job_id, worker_id, workstation_id, recipe_id)?;
             }
+            JobKind::DeliverConstruction { .. } => {
+                return Err(SimulationError::ConstructionInvariantViolation);
+            }
+            JobKind::Construct { site_id } => {
+                if !self.construction_site_ready(site_id) {
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                }
+                if !self.characters.contains_key(&worker_id) {
+                    self.job_world
+                        .remove(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                }
+                if remaining_ticks > 1 {
+                    self.job_world
+                        .set_remaining_work(job_id, remaining_ticks - 1)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                }
+                self.complete_construction(job_id, worker_id, site_id)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn construction_site_ready(&self, site_id: EntityId) -> bool {
+        let Some(site) = self.construction_world.site(site_id) else {
+            return false;
+        };
+        if site.material_state() != Some(ConstructionMaterialState::Delivered) {
+            return false;
+        }
+        let Some(item_id) = site.material_item_id() else {
+            return false;
+        };
+        self.item_world.get(item_id).is_some_and(|item| {
+            item.kind() == site.kind().material_kind()
+                && item.quantity().get() >= site.kind().material_quantity()
+                && item.ground_position().is_some_and(|position| {
+                    cell_manhattan_distance(position.containing_cell(), site.cell()) <= 1
+                })
+        })
+    }
+
+    fn complete_construction(
+        &mut self,
+        job_id: EntityId,
+        worker_id: EntityId,
+        site_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        if !self.construction_site_ready(site_id) {
+            return Err(SimulationError::ConstructionInvariantViolation);
+        }
+        let site = self
+            .construction_world
+            .site(site_id)
+            .cloned()
+            .ok_or(SimulationError::UnknownConstructionSite(site_id))?;
+        let item_id = site
+            .material_item_id()
+            .ok_or(SimulationError::ConstructionInvariantViolation)?;
+        self.item_world
+            .consume(item_id, site.kind().material_quantity())
+            .map_err(|_| SimulationError::ConstructionInvariantViolation)?;
+        self.job_world
+            .remove(job_id)
+            .map_err(SimulationError::from_job_world)?;
+        self.construction_world
+            .complete_site(site_id)
+            .map_err(SimulationError::from_construction_world)?;
+        if let Some(character) = self.characters.get_mut(&worker_id) {
+            character.set_movement(MovementState::Idle);
         }
         Ok(())
     }
@@ -1648,7 +2287,8 @@ impl Simulation {
     }
 
     fn is_walkable(&self, position: WorldCell) -> Result<bool, SimulationError> {
-        Ok(self.effective_terrain_at(position)? == Terrain::Grass)
+        Ok(self.effective_terrain_at(position)? == Terrain::Grass
+            && self.construction_world.structure_at(position).is_none())
     }
 }
 
@@ -1836,6 +2476,12 @@ pub enum SimulationError {
         recipe_id: RecipeId,
     },
     CraftAlreadyDesignated(EntityId),
+    UnknownConstructionSite(EntityId),
+    ConstructionCellUndiscovered(WorldCell),
+    ConstructionCellBlocked(WorldCell),
+    ConstructionCellOccupied(WorldCell),
+    ConstructionRevisionOverflow,
+    ConstructionInvariantViolation,
     HarvestSourceUndiscovered(WorldCell),
     NaturalResourceMissing(WorldCell),
     HarvestAlreadyDesignated(WorldCell),
@@ -1878,6 +2524,8 @@ impl SimulationError {
             | JobWorldError::HaulDestinationAlreadyReserved(_)
             | JobWorldError::CraftItemAlreadyReserved(_)
             | JobWorldError::CraftInputsAlreadyReserved(_)
+            | JobWorldError::ConstructionDeliveryAlreadyDesignated(_)
+            | JobWorldError::ConstructionAlreadyDesignated(_)
             | JobWorldError::JobNotCraft(_)
             | JobWorldError::WorkerAlreadyReserved(_)
             | JobWorldError::JobNotAvailable(_)
@@ -1911,6 +2559,21 @@ impl SimulationError {
             WorkstationWorldError::RevisionOverflow => Self::WorkstationRevisionOverflow,
             WorkstationWorldError::DuplicateWorkstation(_)
             | WorkstationWorldError::IndexCorruption => Self::WorkstationInvariantViolation,
+        }
+    }
+
+    fn from_construction_world(error: ConstructionWorldError) -> Self {
+        match error {
+            ConstructionWorldError::UnknownSite(id) => Self::UnknownConstructionSite(id),
+            ConstructionWorldError::CellAlreadyOccupied(cell) => {
+                Self::ConstructionCellOccupied(cell)
+            }
+            ConstructionWorldError::RevisionOverflow => Self::ConstructionRevisionOverflow,
+            ConstructionWorldError::DuplicateConstructionId(_)
+            | ConstructionWorldError::SiteAlreadyHasMaterial(_)
+            | ConstructionWorldError::MaterialAlreadyReserved { .. }
+            | ConstructionWorldError::MaterialReservationMismatch { .. }
+            | ConstructionWorldError::IndexCorruption => Self::ConstructionInvariantViolation,
         }
     }
 }
@@ -2033,6 +2696,33 @@ impl Display for SimulationError {
                 "workstation ID {} already has a craft designation",
                 workstation_id.value()
             ),
+            Self::UnknownConstructionSite(id) => {
+                write!(formatter, "unknown construction site ID {}", id.value())
+            }
+            Self::ConstructionCellUndiscovered(cell) => write!(
+                formatter,
+                "construction cell ({}, {}) is undiscovered",
+                cell.x(),
+                cell.y()
+            ),
+            Self::ConstructionCellBlocked(cell) => write!(
+                formatter,
+                "construction cell ({}, {}) is not walkable",
+                cell.x(),
+                cell.y()
+            ),
+            Self::ConstructionCellOccupied(cell) => write!(
+                formatter,
+                "construction cell ({}, {}) is occupied",
+                cell.x(),
+                cell.y()
+            ),
+            Self::ConstructionRevisionOverflow => {
+                formatter.write_str("construction revision overflow")
+            }
+            Self::ConstructionInvariantViolation => {
+                formatter.write_str("construction material/site invariant violated")
+            }
             Self::HarvestSourceUndiscovered(source) => write!(
                 formatter,
                 "harvest source ({}, {}) is undiscovered",
@@ -3532,7 +4222,10 @@ mod tests {
                     destination,
                     ..
                 } => Some((item_id, destination)),
-                JobKind::Harvest { .. } | JobKind::Craft { .. } => None,
+                JobKind::Harvest { .. }
+                | JobKind::Craft { .. }
+                | JobKind::DeliverConstruction { .. }
+                | JobKind::Construct { .. } => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(hauls.len(), 2);
@@ -3618,6 +4311,135 @@ mod tests {
         assert_eq!(simulation.natural_resource_at(source).unwrap(), None);
         assert!(simulation.item_world.indexes_are_consistent());
         assert!(simulation.job_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn cancelling_construction_during_delivery_drops_material_and_cleans_reservations() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let wall_cell = empty_stockpile_cells(&simulation, 1)[0];
+        let site_id = simulation
+            .designate_construction(StructureKind::StoneWall, wall_cell)
+            .unwrap();
+
+        let mut carried = None;
+        for _ in 0..128 {
+            simulation.advance_ticks(1).unwrap();
+            if let Some(item) = simulation.items().find(|item| {
+                simulation.construction_world.site_for_material(item.id()) == Some(site_id)
+                    && item.carrier().is_some()
+            }) {
+                carried = Some(item.id());
+                break;
+            }
+        }
+        let item_id =
+            carried.expect("construction material must enter Carried before cancellation");
+        simulation.cancel_construction(site_id).unwrap();
+
+        assert!(simulation.construction_world.site(site_id).is_none());
+        assert_eq!(
+            simulation.construction_world.site_for_material(item_id),
+            None
+        );
+        assert!(
+            simulation
+                .item_world
+                .get(item_id)
+                .unwrap()
+                .ground_position()
+                .is_some()
+        );
+        assert!(simulation.structure_at(wall_cell).is_none());
+        assert!(simulation.job_world.indexes_are_consistent());
+        assert!(simulation.construction_world.indexes_are_consistent());
+        assert!(simulation.item_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn stone_wall_construction_delivers_physical_material_consumes_two_and_blocks_navigation() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let wall_cell = empty_stockpile_cells(&simulation, 1)[0];
+        let stone_before = simulation
+            .items()
+            .filter(|item| item.kind() == ItemKind::Stone)
+            .map(|item| item.quantity().get())
+            .sum::<u32>();
+
+        let site_id = simulation
+            .designate_construction(StructureKind::StoneWall, wall_cell)
+            .unwrap();
+        let mut saw_carried_material = false;
+        let mut saw_delivered_material = false;
+        for _ in 0..768 {
+            simulation.advance_ticks(1).unwrap();
+            saw_carried_material |= simulation.items().any(|item| {
+                simulation.construction_world.site_for_material(item.id()) == Some(site_id)
+                    && item.carrier().is_some()
+            });
+            saw_delivered_material |=
+                simulation
+                    .construction_world
+                    .site(site_id)
+                    .is_some_and(|site| {
+                        site.material_state() == Some(ConstructionMaterialState::Delivered)
+                    });
+            if simulation.structure_at(wall_cell) == Some(site_id) {
+                break;
+            }
+        }
+
+        assert!(
+            saw_carried_material,
+            "construction material must pass through Carried"
+        );
+        assert!(
+            saw_delivered_material,
+            "material must be delivered before construction work"
+        );
+        assert_eq!(simulation.structure_at(wall_cell), Some(site_id));
+        assert!(simulation.construction_site_at(wall_cell).is_none());
+        assert_eq!(
+            simulation
+                .items()
+                .filter(|item| item.kind() == ItemKind::Stone)
+                .map(|item| item.quantity().get())
+                .sum::<u32>(),
+            stone_before - StructureKind::StoneWall.material_quantity()
+        );
+        assert!(!simulation.is_walkable(wall_cell).unwrap());
+        let cora = EntityId::new(3).unwrap();
+        assert_eq!(
+            simulation.move_to(cora, WorldPosition::from_cell_center(wall_cell).unwrap()),
+            Err(SimulationError::MoveToDestinationBlocked(wall_cell))
+        );
+
+        for y in 0..=2 {
+            for x in -1..=1 {
+                simulation
+                    .set_terrain_override(WorldCell::new(x, y), Terrain::Grass)
+                    .unwrap();
+            }
+        }
+        let start = WorldCell::new(0, 0);
+        let goal = WorldCell::new(0, 2);
+        let cora_state = simulation.characters.get_mut(&cora).unwrap();
+        cora_state.set_position(WorldPosition::from_cell_center(start).unwrap());
+        cora_state.set_movement(MovementState::Idle);
+        simulation
+            .move_to(cora, WorldPosition::from_cell_center(goal).unwrap())
+            .unwrap();
+        assert!(
+            simulation
+                .characters
+                .get(&cora)
+                .unwrap()
+                .navigation_waypoints()
+                .all(|position| position.containing_cell() != wall_cell),
+            "A* route must go around the completed wall rather than through it"
+        );
+        assert!(simulation.construction_world.indexes_are_consistent());
+        assert!(simulation.job_world.indexes_are_consistent());
+        assert!(simulation.item_world.indexes_are_consistent());
     }
 
     fn empty_stockpile_cells(simulation: &Simulation, count: usize) -> Vec<WorldCell> {

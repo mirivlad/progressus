@@ -18,6 +18,13 @@ pub enum JobKind {
         workstation_id: EntityId,
         recipe_id: RecipeId,
     },
+    DeliverConstruction {
+        site_id: EntityId,
+        item_id: EntityId,
+    },
+    Construct {
+        site_id: EntityId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -84,6 +91,8 @@ pub(crate) struct JobWorld {
     craft_by_workstation: BTreeMap<EntityId, EntityId>,
     craft_item_reservations: BTreeMap<EntityId, EntityId>,
     craft_items_by_job: BTreeMap<EntityId, BTreeSet<EntityId>>,
+    construction_delivery_by_site: BTreeMap<EntityId, EntityId>,
+    construct_by_site: BTreeMap<EntityId, EntityId>,
     worker_jobs: BTreeMap<EntityId, EntityId>,
     revision: u64,
 }
@@ -129,6 +138,14 @@ impl JobWorld {
         self.craft_items_by_job.get(&job_id)
     }
 
+    pub(crate) fn construction_delivery_job_for_site(&self, site_id: EntityId) -> Option<EntityId> {
+        self.construction_delivery_by_site.get(&site_id).copied()
+    }
+
+    pub(crate) fn construct_job_for_site(&self, site_id: EntityId) -> Option<EntityId> {
+        self.construct_by_site.get(&site_id).copied()
+    }
+
     pub(crate) fn insert(&mut self, job: Job) -> Result<(), JobWorldError> {
         let id = job.id();
         if self.jobs.contains_key(&id) {
@@ -162,6 +179,20 @@ impl JobWorld {
                     ));
                 }
                 self.craft_by_workstation.insert(workstation_id, id);
+            }
+            JobKind::DeliverConstruction { site_id, .. } => {
+                if self.construction_delivery_by_site.contains_key(&site_id) {
+                    return Err(JobWorldError::ConstructionDeliveryAlreadyDesignated(
+                        site_id,
+                    ));
+                }
+                self.construction_delivery_by_site.insert(site_id, id);
+            }
+            JobKind::Construct { site_id } => {
+                if self.construct_by_site.contains_key(&site_id) {
+                    return Err(JobWorldError::ConstructionAlreadyDesignated(site_id));
+                }
+                self.construct_by_site.insert(site_id, id);
             }
         }
         self.jobs.insert(id, job);
@@ -319,6 +350,16 @@ impl JobWorld {
                 }
                 self.release_craft_items_inner(job_id)?;
             }
+            JobKind::DeliverConstruction { site_id, .. } => {
+                if self.construction_delivery_by_site.remove(&site_id) != Some(job_id) {
+                    return Err(JobWorldError::IndexCorruption);
+                }
+            }
+            JobKind::Construct { site_id } => {
+                if self.construct_by_site.remove(&site_id) != Some(job_id) {
+                    return Err(JobWorldError::IndexCorruption);
+                }
+            }
         }
         self.bump_revision()?;
         Ok(job)
@@ -376,6 +417,16 @@ impl JobWorld {
                         return false;
                     }
                 }
+                JobKind::DeliverConstruction { site_id, .. } => {
+                    if self.construction_delivery_by_site.get(&site_id) != Some(id) {
+                        return false;
+                    }
+                }
+                JobKind::Construct { site_id } => {
+                    if self.construct_by_site.get(&site_id) != Some(id) {
+                        return false;
+                    }
+                }
             }
             if let Some(worker_id) = job.state().worker()
                 && self.worker_jobs.get(&worker_id) != Some(id)
@@ -422,6 +473,18 @@ impl JobWorld {
                         .iter()
                         .all(|item_id| self.craft_item_reservations.get(item_id) == Some(job_id))
             })
+            && self.construction_delivery_by_site.len()
+                == self
+                    .jobs
+                    .values()
+                    .filter(|job| matches!(job.kind(), JobKind::DeliverConstruction { .. }))
+                    .count()
+            && self.construct_by_site.len()
+                == self
+                    .jobs
+                    .values()
+                    .filter(|job| matches!(job.kind(), JobKind::Construct { .. }))
+                    .count()
     }
 }
 
@@ -435,6 +498,8 @@ pub(crate) enum JobWorldError {
     CraftWorkstationAlreadyDesignated(EntityId),
     CraftItemAlreadyReserved(EntityId),
     CraftInputsAlreadyReserved(EntityId),
+    ConstructionDeliveryAlreadyDesignated(EntityId),
+    ConstructionAlreadyDesignated(EntityId),
     JobNotCraft(EntityId),
     WorkerAlreadyReserved(EntityId),
     JobNotAvailable(EntityId),
@@ -507,6 +572,34 @@ mod tests {
         jobs.remove(id(30)).unwrap();
         assert_eq!(jobs.craft_job_for_workstation(id(20)), None);
         assert_eq!(jobs.craft_job_for_item(id(8)), None);
+        assert!(jobs.indexes_are_consistent());
+    }
+
+    #[test]
+    fn construction_jobs_reserve_each_site_once_and_cleanup_indexes() {
+        let mut jobs = JobWorld::default();
+        jobs.insert(Job::new(
+            id(40),
+            JobKind::DeliverConstruction {
+                site_id: id(30),
+                item_id: id(6),
+            },
+        ))
+        .unwrap();
+        assert_eq!(
+            jobs.construction_delivery_job_for_site(id(30)),
+            Some(id(40))
+        );
+        assert!(jobs.indexes_are_consistent());
+        jobs.remove(id(40)).unwrap();
+        assert_eq!(jobs.construction_delivery_job_for_site(id(30)), None);
+
+        jobs.insert(Job::new(id(41), JobKind::Construct { site_id: id(30) }))
+            .unwrap();
+        assert_eq!(jobs.construct_job_for_site(id(30)), Some(id(41)));
+        assert!(jobs.indexes_are_consistent());
+        jobs.remove(id(41)).unwrap();
+        assert_eq!(jobs.construct_job_for_site(id(30)), None);
         assert!(jobs.indexes_are_consistent());
     }
 
