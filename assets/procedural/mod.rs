@@ -5,6 +5,7 @@ mod items;
 mod labels;
 mod resources;
 mod terrain;
+mod workstations;
 
 pub(super) fn grass(canvas: &mut Canvas, variant: u8) {
     terrain::grass(canvas, variant);
@@ -30,6 +31,10 @@ pub(super) fn stone_stack(canvas: &mut Canvas, variant: u8) {
     items::stone_stack(canvas, variant);
 }
 
+pub(super) fn primitive_tool(canvas: &mut Canvas, variant: u8) {
+    items::primitive_tool(canvas, variant);
+}
+
 pub(super) fn tree(canvas: &mut Canvas, variant: u8) {
     resources::tree(canvas, variant);
 }
@@ -44,4 +49,8 @@ pub(super) fn quantity_dimensions(quantity: u32) -> (u32, u32) {
 
 pub(super) fn quantity_label(canvas: &mut Canvas, quantity: u32) {
     labels::quantity_label(canvas, quantity);
+}
+
+pub(super) fn workbench(canvas: &mut Canvas, variant: u8) {
+    workstations::workbench(canvas, variant);
 }

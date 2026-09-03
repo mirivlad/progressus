@@ -9,6 +9,7 @@ pub const MAX_STACK_QUANTITY: u32 = 1024;
 pub enum ItemKind {
     Wood,
     Stone,
+    PrimitiveTool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -183,6 +184,46 @@ impl ItemWorld {
             .entry(character_id)
             .or_default()
             .insert(item_id);
+        self.bump_revision();
+        Ok(())
+    }
+
+    pub(crate) fn consume(&mut self, item_id: EntityId, amount: u32) -> Result<(), ItemWorldError> {
+        if amount == 0 {
+            return Err(ItemWorldError::ZeroConsumption);
+        }
+        let item = self
+            .items
+            .get(&item_id)
+            .ok_or(ItemWorldError::UnknownItem(item_id))?;
+        let available = item.quantity().get();
+        if amount > available {
+            return Err(ItemWorldError::InsufficientQuantity {
+                item_id,
+                requested: amount,
+                available,
+            });
+        }
+        if amount < available {
+            self.items
+                .get_mut(&item_id)
+                .expect("item was checked above")
+                .quantity = ItemQuantity::new(available - amount)
+                .expect("partial consumption leaves a positive quantity");
+            self.bump_revision();
+            return Ok(());
+        }
+
+        let location = item.location();
+        match location {
+            ItemLocation::Ground { position } => self.remove_ground_index(item_id, position),
+            ItemLocation::Carried { character_id } => {
+                self.remove_carried_index(item_id, character_id)
+            }
+        }
+        self.items
+            .remove(&item_id)
+            .expect("item was checked above and its location index was removed");
         self.bump_revision();
         Ok(())
     }
@@ -366,6 +407,12 @@ impl ItemWorld {
 pub(crate) enum ItemWorldError {
     DuplicateItem(EntityId),
     UnknownItem(EntityId),
+    ZeroConsumption,
+    InsufficientQuantity {
+        item_id: EntityId,
+        requested: u32,
+        available: u32,
+    },
     ExpectedGroundItem(EntityId),
     ExpectedCarriedItem(EntityId),
     WrongCarrier {
@@ -398,7 +445,7 @@ pub(crate) enum ItemWorldError {
 mod tests {
     use crate::{EntityId, WorldCell, WorldPosition};
 
-    use super::{ItemKind, ItemQuantity, ItemStack, ItemWorld, MAX_STACK_QUANTITY};
+    use super::{ItemKind, ItemQuantity, ItemStack, ItemWorld, ItemWorldError, MAX_STACK_QUANTITY};
 
     fn id(value: u64) -> EntityId {
         EntityId::new(value).unwrap()
@@ -441,6 +488,50 @@ mod tests {
             MAX_STACK_QUANTITY
         );
         assert!(world.get(id(21)).is_none());
+        assert!(world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn consumption_preserves_remainder_and_removes_fully_consumed_stack_from_indexes() {
+        let position = WorldPosition::from_cell_center(WorldCell::new(1, 2)).unwrap();
+        let mut world = ItemWorld::default();
+        world
+            .insert_ground(ItemStack::new_ground(
+                id(11),
+                ItemKind::Wood,
+                ItemQuantity::new(5).unwrap(),
+                position,
+            ))
+            .unwrap();
+        let revision = world.revision();
+
+        world.consume(id(11), 2).unwrap();
+        assert_eq!(world.get(id(11)).unwrap().quantity().get(), 3);
+        assert_eq!(world.revision(), revision + 1);
+        assert!(world.indexes_are_consistent());
+
+        assert_eq!(
+            world.consume(id(11), 4),
+            Err(ItemWorldError::InsufficientQuantity {
+                item_id: id(11),
+                requested: 4,
+                available: 3,
+            })
+        );
+        assert_eq!(
+            world.consume(id(11), 0),
+            Err(ItemWorldError::ZeroConsumption)
+        );
+        assert_eq!(world.get(id(11)).unwrap().quantity().get(), 3);
+
+        world.consume(id(11), 3).unwrap();
+        assert!(world.get(id(11)).is_none());
+        assert_eq!(
+            world
+                .ground_items_in_chunk(position.containing_cell().split().0)
+                .count(),
+            0
+        );
         assert!(world.indexes_are_consistent());
     }
 

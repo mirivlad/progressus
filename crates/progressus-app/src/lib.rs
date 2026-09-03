@@ -9,12 +9,13 @@ pub use progressus_sim::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, DEFAULT_CHARACTER_INTERACTION_RADIUS,
     DEFAULT_CHARACTER_SPEED, Direction, EntityId, InteractionRadius, ItemKind, ItemLocation,
     ItemQuantity, JobKind, JobState, LocalCell, MovementSpeed, MovementState, NaturalResource,
-    NaturalResourceKind, SUBUNITS_PER_CELL, SimulationTick, Stockpile, Terrain, WorldCell,
-    WorldPosition, WorldSeed, WorldgenVersion,
+    NaturalResourceKind, RecipeId, SUBUNITS_PER_CELL, SimulationTick, Stockpile, Terrain,
+    Workstation, WorkstationKind, WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
 };
 pub use read_model::{
     CarriedItemSnapshot, CharacterSnapshot, ChunkSnapshot, ClientSnapshot, GroundItemSnapshot,
     JobSnapshot, KnownTerrain, NaturalResourceSnapshot, NavigationSnapshot, StockpileSnapshot,
+    WorkstationSnapshot,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,6 +52,17 @@ pub enum Command {
         stockpile_id: EntityId,
         cell: WorldCell,
         enabled: bool,
+    },
+    PlaceWorkstation {
+        kind: WorkstationKind,
+        cell: WorldCell,
+    },
+    RemoveWorkstation {
+        workstation_id: EntityId,
+    },
+    DesignateCraft {
+        workstation_id: EntityId,
+        recipe_id: RecipeId,
     },
 }
 
@@ -102,6 +114,18 @@ impl Application {
             } => self
                 .simulation
                 .set_stockpile_cell(stockpile_id, cell, enabled)?,
+            Command::PlaceWorkstation { kind, cell } => {
+                self.simulation.place_workstation(kind, cell)?;
+            }
+            Command::RemoveWorkstation { workstation_id } => {
+                self.simulation.remove_workstation(workstation_id)?;
+            }
+            Command::DesignateCraft {
+                workstation_id,
+                recipe_id,
+            } => {
+                self.simulation.designate_craft(workstation_id, recipe_id)?;
+            }
         }
         Ok(())
     }
@@ -199,6 +223,11 @@ impl Application {
             .stockpiles()
             .map(StockpileSnapshot::from)
             .collect();
+        let workstations = self
+            .simulation
+            .workstations()
+            .map(WorkstationSnapshot::from)
+            .collect();
 
         Ok(ClientSnapshot {
             tick: self.simulation.tick(),
@@ -208,12 +237,14 @@ impl Application {
             resource_revision: self.simulation.resource_revision(),
             job_revision: self.simulation.job_revision(),
             stockpile_revision: self.simulation.stockpile_revision(),
+            workstation_revision: self.simulation.workstation_revision(),
             chunks,
             ground_items,
             carried_items,
             natural_resources,
             jobs,
             stockpiles,
+            workstations,
             characters,
             navigation: query.navigation_for.and_then(|id| {
                 self.simulation

@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{EntityId, WorldCell};
+use crate::{EntityId, RecipeId, WorldCell};
 
 pub const HARVEST_WORK_TICKS: u32 = 4;
 
@@ -13,6 +13,10 @@ pub enum JobKind {
         item_id: EntityId,
         stockpile_id: EntityId,
         destination: WorldCell,
+    },
+    Craft {
+        workstation_id: EntityId,
+        recipe_id: RecipeId,
     },
 }
 
@@ -77,6 +81,9 @@ pub(crate) struct JobWorld {
     harvest_by_source: BTreeMap<WorldCell, EntityId>,
     haul_by_item: BTreeMap<EntityId, EntityId>,
     haul_by_destination: BTreeMap<WorldCell, EntityId>,
+    craft_by_workstation: BTreeMap<EntityId, EntityId>,
+    craft_item_reservations: BTreeMap<EntityId, EntityId>,
+    craft_items_by_job: BTreeMap<EntityId, BTreeSet<EntityId>>,
     worker_jobs: BTreeMap<EntityId, EntityId>,
     revision: u64,
 }
@@ -110,6 +117,18 @@ impl JobWorld {
         self.haul_by_destination.get(&destination).copied()
     }
 
+    pub(crate) fn craft_job_for_workstation(&self, workstation_id: EntityId) -> Option<EntityId> {
+        self.craft_by_workstation.get(&workstation_id).copied()
+    }
+
+    pub(crate) fn craft_job_for_item(&self, item_id: EntityId) -> Option<EntityId> {
+        self.craft_item_reservations.get(&item_id).copied()
+    }
+
+    pub(crate) fn craft_reserved_items(&self, job_id: EntityId) -> Option<&BTreeSet<EntityId>> {
+        self.craft_items_by_job.get(&job_id)
+    }
+
     pub(crate) fn insert(&mut self, job: Job) -> Result<(), JobWorldError> {
         let id = job.id();
         if self.jobs.contains_key(&id) {
@@ -136,8 +155,47 @@ impl JobWorld {
                 self.haul_by_item.insert(item_id, id);
                 self.haul_by_destination.insert(destination, id);
             }
+            JobKind::Craft { workstation_id, .. } => {
+                if self.craft_by_workstation.contains_key(&workstation_id) {
+                    return Err(JobWorldError::CraftWorkstationAlreadyDesignated(
+                        workstation_id,
+                    ));
+                }
+                self.craft_by_workstation.insert(workstation_id, id);
+            }
         }
         self.jobs.insert(id, job);
+        self.bump_revision()
+    }
+
+    pub(crate) fn reserve_craft_items(
+        &mut self,
+        job_id: EntityId,
+        item_ids: &[EntityId],
+    ) -> Result<(), JobWorldError> {
+        let job = self
+            .jobs
+            .get(&job_id)
+            .ok_or(JobWorldError::UnknownJob(job_id))?;
+        if !matches!(job.kind(), JobKind::Craft { .. }) {
+            return Err(JobWorldError::JobNotCraft(job_id));
+        }
+        if self.craft_items_by_job.contains_key(&job_id) {
+            return Err(JobWorldError::CraftInputsAlreadyReserved(job_id));
+        }
+        let unique = item_ids.iter().copied().collect::<BTreeSet<_>>();
+        if unique.len() != item_ids.len() {
+            return Err(JobWorldError::IndexCorruption);
+        }
+        for item_id in &unique {
+            if self.craft_item_reservations.contains_key(item_id) {
+                return Err(JobWorldError::CraftItemAlreadyReserved(*item_id));
+            }
+        }
+        for item_id in &unique {
+            self.craft_item_reservations.insert(*item_id, job_id);
+        }
+        self.craft_items_by_job.insert(job_id, unique);
         self.bump_revision()
     }
 
@@ -224,6 +282,7 @@ impl JobWorld {
             return Err(JobWorldError::IndexCorruption);
         }
         job.state = JobState::Available;
+        self.release_craft_items_inner(job_id)?;
         self.bump_revision()
     }
 
@@ -254,9 +313,27 @@ impl JobWorld {
                     return Err(JobWorldError::IndexCorruption);
                 }
             }
+            JobKind::Craft { workstation_id, .. } => {
+                if self.craft_by_workstation.remove(&workstation_id) != Some(job_id) {
+                    return Err(JobWorldError::IndexCorruption);
+                }
+                self.release_craft_items_inner(job_id)?;
+            }
         }
         self.bump_revision()?;
         Ok(job)
+    }
+
+    fn release_craft_items_inner(&mut self, job_id: EntityId) -> Result<bool, JobWorldError> {
+        let Some(items) = self.craft_items_by_job.remove(&job_id) else {
+            return Ok(false);
+        };
+        for item_id in items {
+            if self.craft_item_reservations.remove(&item_id) != Some(job_id) {
+                return Err(JobWorldError::IndexCorruption);
+            }
+        }
+        Ok(true)
     }
 
     fn bump_revision(&mut self) -> Result<(), JobWorldError> {
@@ -287,6 +364,18 @@ impl JobWorld {
                         return false;
                     }
                 }
+                JobKind::Craft { workstation_id, .. } => {
+                    if self.craft_by_workstation.get(&workstation_id) != Some(id) {
+                        return false;
+                    }
+                    if let Some(items) = self.craft_items_by_job.get(id)
+                        && items
+                            .iter()
+                            .any(|item_id| self.craft_item_reservations.get(item_id) != Some(id))
+                    {
+                        return false;
+                    }
+                }
             }
             if let Some(worker_id) = job.state().worker()
                 && self.worker_jobs.get(&worker_id) != Some(id)
@@ -311,6 +400,28 @@ impl JobWorld {
                     .filter(|job| matches!(job.kind(), JobKind::Haul { .. }))
                     .count()
             && self.haul_by_item.len() == self.haul_by_destination.len()
+            && self.craft_by_workstation.len()
+                == self
+                    .jobs
+                    .values()
+                    .filter(|job| matches!(job.kind(), JobKind::Craft { .. }))
+                    .count()
+            && self
+                .craft_item_reservations
+                .iter()
+                .all(|(item_id, job_id)| {
+                    self.craft_items_by_job
+                        .get(job_id)
+                        .is_some_and(|items| items.contains(item_id))
+                })
+            && self.craft_items_by_job.iter().all(|(job_id, items)| {
+                self.jobs
+                    .get(job_id)
+                    .is_some_and(|job| matches!(job.kind(), JobKind::Craft { .. }))
+                    && items
+                        .iter()
+                        .all(|item_id| self.craft_item_reservations.get(item_id) == Some(job_id))
+            })
     }
 }
 
@@ -321,6 +432,10 @@ pub(crate) enum JobWorldError {
     HarvestSourceAlreadyDesignated(WorldCell),
     HaulItemAlreadyReserved(EntityId),
     HaulDestinationAlreadyReserved(WorldCell),
+    CraftWorkstationAlreadyDesignated(EntityId),
+    CraftItemAlreadyReserved(EntityId),
+    CraftInputsAlreadyReserved(EntityId),
+    JobNotCraft(EntityId),
     WorkerAlreadyReserved(EntityId),
     JobNotAvailable(EntityId),
     JobNotReserved(EntityId),
@@ -331,7 +446,7 @@ pub(crate) enum JobWorldError {
 
 #[cfg(test)]
 mod tests {
-    use crate::{EntityId, WorldCell};
+    use crate::{EntityId, RecipeId, WorldCell};
 
     use super::{Job, JobKind, JobState, JobWorld};
 
@@ -361,6 +476,37 @@ mod tests {
 
         jobs.remove(id(10)).unwrap();
         assert_eq!(jobs.harvest_job_for_source(source), None);
+        assert!(jobs.indexes_are_consistent());
+    }
+
+    #[test]
+    fn craft_reservations_exclude_workstation_and_input_reuse_and_cleanup() {
+        let mut jobs = JobWorld::default();
+        jobs.insert(Job::new(
+            id(30),
+            JobKind::Craft {
+                workstation_id: id(20),
+                recipe_id: RecipeId::PrimitiveTool,
+            },
+        ))
+        .unwrap();
+        assert_eq!(jobs.craft_job_for_workstation(id(20)), Some(id(30)));
+        jobs.reserve_worker(id(30), id(3)).unwrap();
+        jobs.reserve_craft_items(id(30), &[id(6), id(7)]).unwrap();
+        assert_eq!(jobs.craft_job_for_item(id(6)), Some(id(30)));
+        assert_eq!(jobs.craft_reserved_items(id(30)).unwrap().len(), 2);
+        assert!(jobs.indexes_are_consistent());
+
+        jobs.release_worker(id(30)).unwrap();
+        assert!(jobs.craft_reserved_items(id(30)).is_none());
+        assert_eq!(jobs.craft_job_for_item(id(6)), None);
+        assert!(jobs.indexes_are_consistent());
+
+        jobs.reserve_worker(id(30), id(4)).unwrap();
+        jobs.reserve_craft_items(id(30), &[id(8), id(9)]).unwrap();
+        jobs.remove(id(30)).unwrap();
+        assert_eq!(jobs.craft_job_for_workstation(id(20)), None);
+        assert_eq!(jobs.craft_job_for_item(id(8)), None);
         assert!(jobs.indexes_are_consistent());
     }
 

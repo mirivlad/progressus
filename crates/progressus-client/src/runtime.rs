@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use progressus_app::{
     Application, ApplicationError, ChunkCoord, ClientSnapshot, Command, EntityId, JobKind,
-    NewGameOptions, SnapshotQuery, WorldCell, WorldSeed,
+    NewGameOptions, RecipeId, SnapshotQuery, WorkstationKind, WorldCell, WorldSeed,
 };
 
 use crate::interaction::{TickScheduler, movement_command};
@@ -122,6 +122,7 @@ pub(crate) fn pointer_navigation(
     let (buttons, keys) = input;
     let (mut selected, mut motion, mut tool) = interaction_state;
     let tool_active = tool.mode != ToolMode::Select;
+    let area_tool = tool.mode.uses_area_drag();
 
     if tool_active && buttons.just_pressed(MouseButton::Right) {
         tool.mode = ToolMode::Select;
@@ -133,7 +134,7 @@ pub(crate) fn pointer_navigation(
     }
     let needs_pointer = buttons.just_pressed(MouseButton::Left)
         || buttons.just_pressed(MouseButton::Right)
-        || (tool_active
+        || (area_tool
             && (buttons.pressed(MouseButton::Left) || buttons.just_released(MouseButton::Left)));
     if !needs_pointer {
         return;
@@ -161,6 +162,19 @@ pub(crate) fn pointer_navigation(
 
     if tool_active {
         let cell = target.containing_cell();
+        if !area_tool {
+            if buttons.just_pressed(MouseButton::Left) {
+                match apply_point_tool(&mut authoritative, tool.mode, cell) {
+                    Ok(()) => {
+                        if let Err(error) = authoritative.refresh_lightweight_snapshot(selected.0) {
+                            error!("authoritative snapshot failed after tool action: {error}");
+                        }
+                    }
+                    Err(error) => warn!("tool action rejected: {error}"),
+                }
+            }
+            return;
+        }
         if buttons.just_pressed(MouseButton::Left) {
             tool.drag_start = Some(cell);
             tool.drag_current = Some(cell);
@@ -274,6 +288,48 @@ pub(crate) fn pointer_navigation(
 
 const MAX_DESIGNATION_CELLS: usize = 4096;
 
+fn apply_point_tool(
+    authoritative: &mut AuthoritativeClient,
+    mode: ToolMode,
+    cell: WorldCell,
+) -> Result<(), ClientError> {
+    match mode {
+        ToolMode::Workbench => {
+            if let Some(workstation_id) = workstation_at(authoritative.snapshot(), cell) {
+                authoritative
+                    .application
+                    .execute(Command::RemoveWorkstation { workstation_id })?;
+            } else {
+                authoritative
+                    .application
+                    .execute(Command::PlaceWorkstation {
+                        kind: WorkstationKind::Workbench,
+                        cell,
+                    })?;
+            }
+        }
+        ToolMode::Craft => {
+            let Some(workstation_id) = workstation_at(authoritative.snapshot(), cell) else {
+                return Ok(());
+            };
+            let command = craft_job_at(authoritative.snapshot(), workstation_id).map_or(
+                Command::DesignateCraft {
+                    workstation_id,
+                    recipe_id: RecipeId::PrimitiveTool,
+                },
+                |job_id| Command::CancelJob { job_id },
+            );
+            authoritative.application.execute(command)?;
+        }
+        ToolMode::Select
+        | ToolMode::StockpileAdd
+        | ToolMode::StockpileRemove
+        | ToolMode::Harvest
+        | ToolMode::CancelJobs => {}
+    }
+    Ok(())
+}
+
 fn apply_tool_area(
     authoritative: &mut AuthoritativeClient,
     mode: ToolMode,
@@ -367,7 +423,7 @@ fn apply_tool_area(
                 .iter()
                 .filter_map(|job| match job.kind {
                     JobKind::Harvest { source } => Some(source),
-                    JobKind::Haul { .. } => None,
+                    JobKind::Haul { .. } | JobKind::Craft { .. } => None,
                 })
                 .collect::<BTreeSet<_>>();
             let selected = cells.into_iter().collect::<BTreeSet<_>>();
@@ -381,13 +437,26 @@ fn apply_tool_area(
                 }
             }
         }
-        ToolMode::CancelHarvest => {
+        ToolMode::Workbench | ToolMode::Craft => {}
+        ToolMode::CancelJobs => {
             let selected = cells.into_iter().collect::<BTreeSet<_>>();
+            let workstation_cells = area_snapshot
+                .workstations
+                .iter()
+                .map(|workstation| (workstation.id, workstation.cell))
+                .collect::<BTreeMap<_, _>>();
             let jobs = area_snapshot
                 .jobs
                 .iter()
                 .filter_map(|job| match job.kind {
                     JobKind::Harvest { source } if selected.contains(&source) => Some(job.id),
+                    JobKind::Craft { workstation_id, .. }
+                        if workstation_cells
+                            .get(&workstation_id)
+                            .is_some_and(|cell| selected.contains(cell)) =>
+                    {
+                        Some(job.id)
+                    }
                     _ => None,
                 })
                 .collect::<Vec<_>>();
@@ -433,6 +502,24 @@ fn known_terrain_at(snapshot: &ClientSnapshot, cell: WorldCell) -> Option<progre
 fn harvest_job_at(snapshot: &ClientSnapshot, source: WorldCell) -> Option<EntityId> {
     snapshot.jobs.iter().find_map(|job| match job.kind {
         JobKind::Harvest { source: job_source } if job_source == source => Some(job.id),
+        _ => None,
+    })
+}
+
+fn workstation_at(snapshot: &ClientSnapshot, cell: WorldCell) -> Option<EntityId> {
+    snapshot
+        .workstations
+        .iter()
+        .find(|workstation| workstation.cell == cell)
+        .map(|workstation| workstation.id)
+}
+
+fn craft_job_at(snapshot: &ClientSnapshot, workstation_id: EntityId) -> Option<EntityId> {
+    snapshot.jobs.iter().find_map(|job| match job.kind {
+        JobKind::Craft {
+            workstation_id: job_workstation_id,
+            ..
+        } if job_workstation_id == workstation_id => Some(job.id),
         _ => None,
     })
 }

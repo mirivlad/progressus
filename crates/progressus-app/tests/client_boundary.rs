@@ -1,8 +1,8 @@
 use progressus_app::{
     Application, CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, CharacterSnapshot, ChunkCoord, Command,
     Direction, EntityId, ItemKind, JobKind, JobState, KnownTerrain, LocalCell, MovementState,
-    NaturalResourceKind, NewGameOptions, SimulationTick, SnapshotQuery, Terrain, WorldCell,
-    WorldPosition, WorldSeed,
+    NaturalResourceKind, NewGameOptions, RecipeId, SimulationTick, SnapshotQuery, Terrain,
+    WorkstationKind, WorldCell, WorldPosition, WorldSeed,
 };
 
 fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
@@ -326,6 +326,98 @@ fn stockpile_and_haul_cycle_cross_the_public_application_boundary() {
             .any(|item| { item.id == item_id && item.position.containing_cell() == destination })
     );
     assert_eq!(after.stockpiles[0].id, stockpile_id);
+}
+
+#[test]
+fn workbench_and_craft_cycle_cross_the_public_application_boundary() {
+    let mut application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(0),
+    })
+    .unwrap();
+    let workbench_cell = WorldCell::new(0, 1);
+    application
+        .execute(Command::PlaceWorkstation {
+            kind: WorkstationKind::Workbench,
+            cell: workbench_cell,
+        })
+        .unwrap();
+    let placed = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert_eq!(placed.workstations.len(), 1);
+    assert_eq!(placed.workstations[0].cell, workbench_cell);
+    assert_eq!(placed.workstations[0].kind, WorkstationKind::Workbench);
+    let workstation_id = placed.workstations[0].id;
+
+    application
+        .execute(Command::CreateStockpile {
+            cell: WorldCell::new(-1, 1),
+        })
+        .unwrap();
+    let stockpile_id = application
+        .snapshot(SnapshotQuery::default())
+        .unwrap()
+        .stockpiles[0]
+        .id;
+    for cell in [
+        WorldCell::new(1, 1),
+        WorldCell::new(0, 0),
+        WorldCell::new(0, 2),
+    ] {
+        application
+            .execute(Command::SetStockpileCell {
+                stockpile_id,
+                cell,
+                enabled: true,
+            })
+            .unwrap();
+    }
+    application
+        .execute(Command::DesignateCraft {
+            workstation_id,
+            recipe_id: RecipeId::PrimitiveTool,
+        })
+        .unwrap();
+
+    let designated = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert!(designated.jobs.iter().any(|job| {
+        job.kind
+            == JobKind::Craft {
+                workstation_id,
+                recipe_id: RecipeId::PrimitiveTool,
+            }
+    }));
+
+    let mut produced = false;
+    for _ in 0..768 {
+        application
+            .execute(Command::AdvanceTicks { count: 1 })
+            .unwrap();
+        let snapshot = application
+            .snapshot(SnapshotQuery {
+                chunks: vec![ChunkCoord::new(-1, 0), ChunkCoord::new(0, 0)],
+                ..SnapshotQuery::default()
+            })
+            .unwrap();
+        if snapshot
+            .ground_items
+            .iter()
+            .any(|item| item.kind == ItemKind::PrimitiveTool)
+        {
+            produced = true;
+            break;
+        }
+    }
+    assert!(produced);
+
+    application
+        .execute(Command::RemoveWorkstation { workstation_id })
+        .unwrap();
+    assert!(
+        application
+            .snapshot(SnapshotQuery::default())
+            .unwrap()
+            .workstations
+            .is_empty()
+    );
 }
 
 #[test]

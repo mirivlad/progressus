@@ -7,7 +7,9 @@ pub(crate) enum ToolMode {
     StockpileAdd,
     StockpileRemove,
     Harvest,
-    CancelHarvest,
+    Workbench,
+    Craft,
+    CancelJobs,
 }
 
 impl ToolMode {
@@ -17,8 +19,17 @@ impl ToolMode {
             Self::StockpileAdd => "Stockpile +",
             Self::StockpileRemove => "Stockpile -",
             Self::Harvest => "Harvest",
-            Self::CancelHarvest => "Cancel harvest",
+            Self::Workbench => "Workbench",
+            Self::Craft => "Craft tool",
+            Self::CancelJobs => "Cancel jobs",
         }
+    }
+
+    pub(crate) const fn uses_area_drag(self) -> bool {
+        matches!(
+            self,
+            Self::StockpileAdd | Self::StockpileRemove | Self::Harvest | Self::CancelJobs
+        )
     }
 }
 
@@ -72,7 +83,9 @@ pub(crate) fn setup_toolbar(mut commands: Commands) {
             tool_button(ToolMode::StockpileAdd),
             tool_button(ToolMode::StockpileRemove),
             tool_button(ToolMode::Harvest),
-            tool_button(ToolMode::CancelHarvest),
+            tool_button(ToolMode::Workbench),
+            tool_button(ToolMode::Craft),
+            tool_button(ToolMode::CancelJobs),
             (
                 Text::new("Mode: Select"),
                 TextFont {

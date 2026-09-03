@@ -5,8 +5,10 @@ mod item;
 mod job;
 mod pathfinding;
 mod position;
+mod recipe;
 mod simulation;
 mod stockpile;
+mod workstation;
 mod world_state;
 
 pub use clock::SimulationTick;
@@ -25,6 +27,8 @@ pub use progressus_worldgen::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, GeneratedChunk, LocalCell, NaturalResource,
     NaturalResourceKind, Terrain, WorldCell, WorldSeed, WorldgenVersion,
 };
+pub use recipe::{CRAFT_WORK_TICKS, RecipeDefinition, RecipeId, RecipeInput, recipe_definition};
 pub use simulation::{Simulation, SimulationError};
 pub use stockpile::Stockpile;
+pub use workstation::{Workstation, WorkstationKind};
 pub use world_state::EffectiveChunk;

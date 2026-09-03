@@ -5,7 +5,9 @@ use bevy::ecs::system::SystemParam;
 use bevy::image::ImageSampler;
 use bevy::prelude::{Assets, Handle, Image, ResMut, Resource, Sprite, Vec2};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use progressus_app::{EntityId, ItemKind, NaturalResourceKind, Terrain, WorldCell};
+use progressus_app::{
+    EntityId, ItemKind, NaturalResourceKind, Terrain, WorkstationKind, WorldCell,
+};
 
 const ART_PIXELS: u32 = 16;
 const VARIANT_COUNT: u8 = 8;
@@ -22,6 +24,8 @@ pub(crate) enum ProceduralAssetKind {
     Human,
     WoodStack,
     StoneStack,
+    PrimitiveTool,
+    Workbench,
     Tree,
     StoneOutcrop,
 }
@@ -121,6 +125,14 @@ pub(crate) fn item_asset(kind: ItemKind, id: EntityId) -> ProceduralAssetKey {
     let kind = match kind {
         ItemKind::Wood => ProceduralAssetKind::WoodStack,
         ItemKind::Stone => ProceduralAssetKind::StoneStack,
+        ItemKind::PrimitiveTool => ProceduralAssetKind::PrimitiveTool,
+    };
+    ProceduralAssetKey::new(kind, variant_for_entity(id))
+}
+
+pub(crate) fn workstation_asset(kind: WorkstationKind, id: EntityId) -> ProceduralAssetKey {
+    let kind = match kind {
+        WorkstationKind::Workbench => ProceduralAssetKind::Workbench,
     };
     ProceduralAssetKey::new(kind, variant_for_entity(id))
 }
@@ -165,6 +177,8 @@ fn render_image(key: ProceduralAssetKey) -> Image {
         ProceduralAssetKind::Human => asset_code::human(&mut canvas, key.variant),
         ProceduralAssetKind::WoodStack => asset_code::wood_stack(&mut canvas, key.variant),
         ProceduralAssetKind::StoneStack => asset_code::stone_stack(&mut canvas, key.variant),
+        ProceduralAssetKind::PrimitiveTool => asset_code::primitive_tool(&mut canvas, key.variant),
+        ProceduralAssetKind::Workbench => asset_code::workbench(&mut canvas, key.variant),
         ProceduralAssetKind::Tree => asset_code::tree(&mut canvas, key.variant),
         ProceduralAssetKind::StoneOutcrop => asset_code::stone_outcrop(&mut canvas, key.variant),
     }

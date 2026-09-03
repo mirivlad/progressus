@@ -36,3 +36,19 @@ pub(super) fn stone_stack(canvas: &mut Canvas, variant: u8) {
         canvas.pixel(x, y - 2, LIGHT);
     }
 }
+
+pub(super) fn primitive_tool(canvas: &mut Canvas, variant: u8) {
+    const OUTLINE: Rgba8 = Rgba8::rgb(38, 31, 25);
+    const HANDLE: Rgba8 = Rgba8::rgb(151, 86, 42);
+    const HANDLE_LIGHT: Rgba8 = Rgba8::rgb(220, 145, 70);
+    const METAL: Rgba8 = Rgba8::rgb(157, 165, 169);
+    const METAL_LIGHT: Rgba8 = Rgba8::rgb(227, 230, 224);
+    canvas.ellipse(8, 13, 5, 2, Rgba8::rgba(10, 10, 10, 100));
+    let shift = i32::from(variant & 1);
+    canvas.line(5 + shift, 12, 10 + shift, 5, OUTLINE);
+    canvas.line(6 + shift, 12, 11 + shift, 5, HANDLE);
+    canvas.pixel(7 + shift, 10, HANDLE_LIGHT);
+    canvas.rect(7 + shift, 3, 6, 4, OUTLINE);
+    canvas.rect(8 + shift, 4, 4, 2, METAL);
+    canvas.line(9 + shift, 4, 11 + shift, 4, METAL_LIGHT);
+}

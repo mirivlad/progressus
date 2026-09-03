@@ -4,8 +4,8 @@ use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use progressus_app::{
     CHUNK_SIDE, CharacterSnapshot, ChunkCoord, EntityId, GroundItemSnapshot, JobKind, JobState,
-    LocalCell, NaturalResourceKind, NaturalResourceSnapshot, SUBUNITS_PER_CELL, WorldCell,
-    WorldPosition,
+    LocalCell, NaturalResourceKind, NaturalResourceSnapshot, SUBUNITS_PER_CELL,
+    WorkstationSnapshot, WorldCell, WorldPosition,
 };
 
 use crate::navigation::{SelectedCharacter, VisualMotion, interpolate_trace};
@@ -15,7 +15,7 @@ use crate::presentation::{
 };
 use crate::procedural_assets::{
     ProceduralAssetParams, ProceduralAssetRegistry, character_asset, item_asset, resource_asset,
-    terrain_asset,
+    terrain_asset, workstation_asset,
 };
 use crate::runtime::AuthoritativeClient;
 use crate::ui::{ToolMode, ToolState};
@@ -24,6 +24,7 @@ const CELL_SIZE: f32 = 12.0;
 const TERRAIN_Z: f32 = 0.0;
 const NATURAL_RESOURCE_Z: f32 = 3.0;
 const GROUND_ITEM_Z: f32 = 5.0;
+const WORKSTATION_Z: f32 = 7.0;
 const CHARACTER_Z: f32 = 10.0;
 const CARRIED_ITEM_LOCAL_Z: f32 = 1.0;
 const CAMERA_PAN_SPEED: f32 = 500.0;
@@ -48,6 +49,9 @@ pub(crate) struct GroundItemVisual;
 #[derive(Component)]
 pub(crate) struct CarriedItemVisual;
 
+#[derive(Component)]
+pub(crate) struct WorkstationVisual;
+
 #[derive(Resource, Default)]
 pub(crate) struct PresentationCache {
     pub(crate) render_origin: Option<WorldCell>,
@@ -62,6 +66,7 @@ pub(crate) struct PresentationCache {
     pub(crate) ground_item_labels: BTreeMap<EntityId, Entity>,
     pub(crate) carried_items: BTreeMap<EntityId, Entity>,
     pub(crate) natural_resources: BTreeMap<WorldCell, Entity>,
+    pub(crate) workstations: BTreeMap<EntityId, Entity>,
 }
 
 #[derive(Resource, Default)]
@@ -111,6 +116,14 @@ pub(crate) fn sync_presentation(
                 registry,
             );
             sync_carried_items(&mut commands, &authoritative, &mut cache, images, registry);
+            sync_workstations(
+                &mut commands,
+                &mut cache,
+                &authoritative.snapshot().workstations,
+                origin,
+                images,
+                registry,
+            );
         }
 
         if let Some(id) = selected.0 {
@@ -341,6 +354,46 @@ fn sync_natural_resources(
                     commands.entity(entity).despawn();
                 }
             }
+        }
+    }
+}
+
+fn sync_workstations(
+    commands: &mut Commands,
+    cache: &mut PresentationCache,
+    workstations: &[WorkstationSnapshot],
+    origin: WorldCell,
+    images: &mut Assets<Image>,
+    procedural_assets: &mut ProceduralAssetRegistry,
+) {
+    let authoritative = workstations
+        .iter()
+        .map(|workstation| (workstation.id, *workstation))
+        .collect::<BTreeMap<_, _>>();
+    for (id, workstation) in &authoritative {
+        let sprite = procedural_assets.sprite(
+            images,
+            workstation_asset(workstation.kind, workstation.id),
+            Vec2::splat(CELL_SIZE * 1.05),
+        );
+        let transform =
+            Transform::from_translation(world_translation(workstation.cell, origin, WORKSTATION_Z));
+        if let Some(entity) = cache.workstations.get(id) {
+            commands.entity(*entity).insert((sprite, transform));
+        } else {
+            let entity = commands.spawn((sprite, transform, WorkstationVisual)).id();
+            cache.workstations.insert(*id, entity);
+        }
+    }
+    let stale = cache
+        .workstations
+        .keys()
+        .copied()
+        .filter(|id| !authoritative.contains_key(id))
+        .collect::<Vec<_>>();
+    for id in stale {
+        if let Some(entity) = cache.workstations.remove(&id) {
+            commands.entity(entity).despawn();
         }
     }
 }
@@ -614,11 +667,11 @@ pub(crate) fn draw_tool_drag(
         return;
     }
     let color = match tool.mode {
-        ToolMode::Select => return,
+        ToolMode::Select | ToolMode::Workbench | ToolMode::Craft => return,
         ToolMode::StockpileAdd => Color::srgba(0.25, 1.0, 0.72, 0.9),
         ToolMode::StockpileRemove => Color::srgba(1.0, 0.35, 0.32, 0.9),
         ToolMode::Harvest => Color::srgba(1.0, 0.72, 0.18, 0.9),
-        ToolMode::CancelHarvest => Color::srgba(1.0, 0.25, 0.25, 0.9),
+        ToolMode::CancelJobs => Color::srgba(1.0, 0.25, 0.25, 0.9),
     };
     let half = CELL_SIZE * 0.48;
     for y in min_y..=max_y {
@@ -671,10 +724,22 @@ pub(crate) fn draw_job_designations(
         return;
     };
     for job in &authoritative.snapshot().jobs {
-        let JobKind::Harvest { source } = job.kind else {
-            continue;
+        let (cell, z) = match job.kind {
+            JobKind::Harvest { source } => (source, NATURAL_RESOURCE_Z + 1.0),
+            JobKind::Craft { workstation_id, .. } => {
+                let Some(workstation) = authoritative
+                    .snapshot()
+                    .workstations
+                    .iter()
+                    .find(|workstation| workstation.id == workstation_id)
+                else {
+                    continue;
+                };
+                (workstation.cell, WORKSTATION_Z + 1.0)
+            }
+            JobKind::Haul { .. } => continue,
         };
-        let center = world_translation(source, origin, NATURAL_RESOURCE_Z + 1.0).truncate();
+        let center = world_translation(cell, origin, z).truncate();
         let half = CELL_SIZE * 0.46;
         let color = match job.state {
             JobState::Available => Color::srgb(1.0, 0.72, 0.18),

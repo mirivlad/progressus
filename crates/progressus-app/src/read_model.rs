@@ -1,6 +1,6 @@
 use progressus_sim::{
     Character, ItemKind, ItemStack, Job, JobKind, JobState, MovementState, NaturalResource,
-    NaturalResourceKind, Stockpile, WorldPosition,
+    NaturalResourceKind, Stockpile, Workstation, WorkstationKind, WorldPosition,
 };
 
 use crate::{ChunkCoord, EntityId, LocalCell, SimulationTick, Terrain, WorldCell, WorldgenVersion};
@@ -14,12 +14,14 @@ pub struct ClientSnapshot {
     pub resource_revision: u64,
     pub job_revision: u64,
     pub stockpile_revision: u64,
+    pub workstation_revision: u64,
     pub chunks: Vec<ChunkSnapshot>,
     pub ground_items: Vec<GroundItemSnapshot>,
     pub carried_items: Vec<CarriedItemSnapshot>,
     pub natural_resources: Vec<NaturalResourceSnapshot>,
     pub jobs: Vec<JobSnapshot>,
     pub stockpiles: Vec<StockpileSnapshot>,
+    pub workstations: Vec<WorkstationSnapshot>,
     pub characters: Vec<CharacterSnapshot>,
     pub navigation: Option<NavigationSnapshot>,
 }
@@ -111,6 +113,23 @@ impl From<&Stockpile> for StockpileSnapshot {
         Self {
             id: stockpile.id(),
             cells: stockpile.cells().collect(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkstationSnapshot {
+    pub id: EntityId,
+    pub kind: WorkstationKind,
+    pub cell: WorldCell,
+}
+
+impl From<&Workstation> for WorkstationSnapshot {
+    fn from(workstation: &Workstation) -> Self {
+        Self {
+            id: workstation.id(),
+            kind: workstation.kind(),
+            cell: workstation.cell(),
         }
     }
 }
