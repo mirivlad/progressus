@@ -1,7 +1,8 @@
 use progressus_sim::{
     Character, ConstructionMaterialState, ConstructionSite, ItemKind, ItemStack, Job, JobKind,
-    JobState, MovementState, NaturalResource, NaturalResourceKind, Stockpile, Structure,
-    StructureKind, Workstation, WorkstationKind, WorldPosition,
+    JobState, MovementState, NaturalResource, NaturalResourceKind, ProductionOrder,
+    ProductionTarget, RecipeId, Stockpile, Structure, StructureKind, Workstation, WorkstationKind,
+    WorldPosition,
 };
 
 use crate::{ChunkCoord, EntityId, LocalCell, SimulationTick, Terrain, WorldCell, WorldgenVersion};
@@ -16,6 +17,7 @@ pub struct ClientSnapshot {
     pub job_revision: u64,
     pub stockpile_revision: u64,
     pub workstation_revision: u64,
+    pub production_revision: u64,
     pub construction_revision: u64,
     pub chunks: Vec<ChunkSnapshot>,
     pub ground_items: Vec<GroundItemSnapshot>,
@@ -24,6 +26,7 @@ pub struct ClientSnapshot {
     pub jobs: Vec<JobSnapshot>,
     pub stockpiles: Vec<StockpileSnapshot>,
     pub workstations: Vec<WorkstationSnapshot>,
+    pub production_orders: Vec<ProductionOrderSnapshot>,
     pub construction_sites: Vec<ConstructionSiteSnapshot>,
     pub structures: Vec<StructureSnapshot>,
     pub characters: Vec<CharacterSnapshot>,
@@ -134,6 +137,25 @@ impl From<&Workstation> for WorkstationSnapshot {
             id: workstation.id(),
             kind: workstation.kind(),
             cell: workstation.cell(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProductionOrderSnapshot {
+    pub id: EntityId,
+    pub workstation_id: EntityId,
+    pub recipe_id: RecipeId,
+    pub target: ProductionTarget,
+}
+
+impl From<&ProductionOrder> for ProductionOrderSnapshot {
+    fn from(order: &ProductionOrder) -> Self {
+        Self {
+            id: order.id(),
+            workstation_id: order.workstation_id(),
+            recipe_id: order.recipe_id(),
+            target: order.target(),
         }
     }
 }

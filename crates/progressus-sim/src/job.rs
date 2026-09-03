@@ -16,6 +16,7 @@ pub enum JobKind {
     },
     Craft {
         workstation_id: EntityId,
+        order_id: EntityId,
         recipe_id: RecipeId,
     },
     DeliverConstruction {
@@ -89,6 +90,7 @@ pub(crate) struct JobWorld {
     haul_by_item: BTreeMap<EntityId, EntityId>,
     haul_by_destination: BTreeMap<WorldCell, EntityId>,
     craft_by_workstation: BTreeMap<EntityId, EntityId>,
+    craft_by_order: BTreeMap<EntityId, EntityId>,
     craft_item_reservations: BTreeMap<EntityId, EntityId>,
     craft_items_by_job: BTreeMap<EntityId, BTreeSet<EntityId>>,
     construction_delivery_by_site: BTreeMap<EntityId, EntityId>,
@@ -128,6 +130,10 @@ impl JobWorld {
 
     pub(crate) fn craft_job_for_workstation(&self, workstation_id: EntityId) -> Option<EntityId> {
         self.craft_by_workstation.get(&workstation_id).copied()
+    }
+
+    pub(crate) fn craft_job_for_order(&self, order_id: EntityId) -> Option<EntityId> {
+        self.craft_by_order.get(&order_id).copied()
     }
 
     pub(crate) fn craft_job_for_item(&self, item_id: EntityId) -> Option<EntityId> {
@@ -172,13 +178,21 @@ impl JobWorld {
                 self.haul_by_item.insert(item_id, id);
                 self.haul_by_destination.insert(destination, id);
             }
-            JobKind::Craft { workstation_id, .. } => {
+            JobKind::Craft {
+                workstation_id,
+                order_id,
+                ..
+            } => {
                 if self.craft_by_workstation.contains_key(&workstation_id) {
                     return Err(JobWorldError::CraftWorkstationAlreadyDesignated(
                         workstation_id,
                     ));
                 }
+                if self.craft_by_order.contains_key(&order_id) {
+                    return Err(JobWorldError::CraftOrderAlreadyDesignated(order_id));
+                }
                 self.craft_by_workstation.insert(workstation_id, id);
+                self.craft_by_order.insert(order_id, id);
             }
             JobKind::DeliverConstruction { site_id, .. } => {
                 if self.construction_delivery_by_site.contains_key(&site_id) {
@@ -344,8 +358,14 @@ impl JobWorld {
                     return Err(JobWorldError::IndexCorruption);
                 }
             }
-            JobKind::Craft { workstation_id, .. } => {
-                if self.craft_by_workstation.remove(&workstation_id) != Some(job_id) {
+            JobKind::Craft {
+                workstation_id,
+                order_id,
+                ..
+            } => {
+                if self.craft_by_workstation.remove(&workstation_id) != Some(job_id)
+                    || self.craft_by_order.remove(&order_id) != Some(job_id)
+                {
                     return Err(JobWorldError::IndexCorruption);
                 }
                 self.release_craft_items_inner(job_id)?;
@@ -405,8 +425,14 @@ impl JobWorld {
                         return false;
                     }
                 }
-                JobKind::Craft { workstation_id, .. } => {
-                    if self.craft_by_workstation.get(&workstation_id) != Some(id) {
+                JobKind::Craft {
+                    workstation_id,
+                    order_id,
+                    ..
+                } => {
+                    if self.craft_by_workstation.get(&workstation_id) != Some(id)
+                        || self.craft_by_order.get(&order_id) != Some(id)
+                    {
                         return false;
                     }
                     if let Some(items) = self.craft_items_by_job.get(id)
@@ -496,6 +522,7 @@ pub(crate) enum JobWorldError {
     HaulItemAlreadyReserved(EntityId),
     HaulDestinationAlreadyReserved(WorldCell),
     CraftWorkstationAlreadyDesignated(EntityId),
+    CraftOrderAlreadyDesignated(EntityId),
     CraftItemAlreadyReserved(EntityId),
     CraftInputsAlreadyReserved(EntityId),
     ConstructionDeliveryAlreadyDesignated(EntityId),
@@ -551,6 +578,7 @@ mod tests {
             id(30),
             JobKind::Craft {
                 workstation_id: id(20),
+                order_id: id(25),
                 recipe_id: RecipeId::PrimitiveTool,
             },
         ))

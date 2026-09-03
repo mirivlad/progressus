@@ -13,6 +13,7 @@ use crate::exploration::ExploredWorld;
 use crate::item::ItemWorld;
 use crate::job::{JobWorld, JobWorldError};
 use crate::pathfinding::{PathfindingError, find_explored_path};
+use crate::production::{ProductionWorld, ProductionWorldError};
 use crate::stockpile::{StockpileWorld, StockpileWorldError};
 use crate::workstation::{WorkstationWorld, WorkstationWorldError};
 use crate::world_state::ModifiedWorld;
@@ -20,10 +21,10 @@ use crate::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, ConstructionMaterialState,
     ConstructionSite, Direction, EffectiveChunk, EntityId, GeneratedChunk, HARVEST_WORK_TICKS,
     InteractionRadius, ItemKind, ItemLocation, ItemQuantity, ItemStack, Job, JobKind, JobState,
-    LocalCell, MAX_STACK_QUANTITY, MovementState, NaturalResource, NaturalResourceKind, RecipeId,
-    SimulationTick, Stockpile, Structure, StructureKind, Terrain, Workstation, WorkstationKind,
-    WorldCell, WorldPosition, WorldPositionError, WorldSeed, WorldgenVersion, recipe_definition,
-    within_interaction_range,
+    LocalCell, MAX_STACK_QUANTITY, MovementState, NaturalResource, NaturalResourceKind,
+    ProductionOrder, ProductionTarget, RecipeId, SimulationTick, Stockpile, Structure,
+    StructureKind, Terrain, Workstation, WorkstationKind, WorldCell, WorldPosition,
+    WorldPositionError, WorldSeed, WorldgenVersion, recipe_definition, within_interaction_range,
 };
 
 const INITIAL_CHARACTERS: [(&str, i64); 5] = [
@@ -43,6 +44,7 @@ pub struct Simulation {
     modified_world: ModifiedWorld,
     item_world: ItemWorld,
     job_world: JobWorld,
+    production_world: ProductionWorld,
     stockpile_world: StockpileWorld,
     workstation_world: WorkstationWorld,
     construction_world: ConstructionWorld,
@@ -112,6 +114,7 @@ impl Simulation {
             modified_world: ModifiedWorld::default(),
             item_world,
             job_world: JobWorld::default(),
+            production_world: ProductionWorld::default(),
             stockpile_world: StockpileWorld::default(),
             workstation_world: WorkstationWorld::default(),
             construction_world: ConstructionWorld::default(),
@@ -156,6 +159,7 @@ impl Simulation {
             self.advance_characters_one_tick()?;
             self.maintain_construction_jobs()?;
             self.maintain_haul_jobs()?;
+            self.maintain_craft_jobs()?;
             self.advance_jobs_one_tick()?;
         }
 
@@ -493,6 +497,74 @@ impl Simulation {
         self.workstation_world.revision()
     }
 
+    pub fn production_orders(&self) -> impl ExactSizeIterator<Item = &ProductionOrder> {
+        self.production_world.iter()
+    }
+
+    pub const fn production_revision(&self) -> u64 {
+        self.production_world.revision()
+    }
+
+    pub fn add_production_order(
+        &mut self,
+        workstation_id: EntityId,
+        recipe_id: RecipeId,
+        target: ProductionTarget,
+    ) -> Result<EntityId, SimulationError> {
+        let workstation = self
+            .workstation_world
+            .get(workstation_id)
+            .ok_or(SimulationError::UnknownWorkstation(workstation_id))?;
+        if workstation.kind() != recipe_definition(recipe_id).workstation {
+            return Err(SimulationError::RecipeWorkstationMismatch {
+                workstation_id,
+                recipe_id,
+            });
+        }
+        let id = self.id_allocator.allocate()?;
+        self.production_world
+            .insert(ProductionOrder::new(id, workstation_id, recipe_id, target))
+            .map_err(SimulationError::from_production_world)?;
+        self.ensure_craft_job_for_workstation(workstation_id)?;
+        Ok(id)
+    }
+
+    pub fn set_production_order_target(
+        &mut self,
+        order_id: EntityId,
+        target: ProductionTarget,
+    ) -> Result<(), SimulationError> {
+        let workstation_id = self
+            .production_world
+            .get(order_id)
+            .ok_or(SimulationError::UnknownProductionOrder(order_id))?
+            .workstation_id();
+        if !target.is_pending()
+            && let Some(job_id) = self.job_world.craft_job_for_order(order_id)
+        {
+            self.cancel_job(job_id)?;
+        }
+        self.production_world
+            .set_target(order_id, target)
+            .map_err(SimulationError::from_production_world)?;
+        self.ensure_craft_job_for_workstation(workstation_id)
+    }
+
+    pub fn remove_production_order(&mut self, order_id: EntityId) -> Result<(), SimulationError> {
+        let workstation_id = self
+            .production_world
+            .get(order_id)
+            .ok_or(SimulationError::UnknownProductionOrder(order_id))?
+            .workstation_id();
+        if let Some(job_id) = self.job_world.craft_job_for_order(order_id) {
+            self.cancel_job(job_id)?;
+        }
+        self.production_world
+            .remove(order_id)
+            .map_err(SimulationError::from_production_world)?;
+        self.ensure_craft_job_for_workstation(workstation_id)
+    }
+
     pub fn workstation_at(&self, cell: WorldCell) -> Option<EntityId> {
         self.workstation_world.workstation_at(cell)
     }
@@ -523,6 +595,9 @@ impl Simulation {
         if let Some(job_id) = self.job_world.craft_job_for_workstation(workstation_id) {
             self.cancel_job(job_id)?;
         }
+        self.production_world
+            .remove_for_workstation(workstation_id)
+            .map_err(SimulationError::from_production_world)?;
         self.workstation_world
             .remove(workstation_id)
             .map_err(SimulationError::from_workstation_world)?;
@@ -534,35 +609,11 @@ impl Simulation {
         workstation_id: EntityId,
         recipe_id: RecipeId,
     ) -> Result<EntityId, SimulationError> {
-        let workstation = self
-            .workstation_world
-            .get(workstation_id)
-            .ok_or(SimulationError::UnknownWorkstation(workstation_id))?;
-        let recipe = recipe_definition(recipe_id);
-        if workstation.kind() != recipe.workstation {
-            return Err(SimulationError::RecipeWorkstationMismatch {
-                workstation_id,
-                recipe_id,
-            });
-        }
-        if self
-            .job_world
-            .craft_job_for_workstation(workstation_id)
-            .is_some()
-        {
-            return Err(SimulationError::CraftAlreadyDesignated(workstation_id));
-        }
-        let id = self.id_allocator.allocate()?;
+        let order_id =
+            self.add_production_order(workstation_id, recipe_id, ProductionTarget::finite(1))?;
         self.job_world
-            .insert(Job::new(
-                id,
-                JobKind::Craft {
-                    workstation_id,
-                    recipe_id,
-                },
-            ))
-            .map_err(SimulationError::from_job_world)?;
-        Ok(id)
+            .craft_job_for_order(order_id)
+            .ok_or(SimulationError::JobInvariantViolation)
     }
 
     fn validate_workstation_cell(&self, cell: WorldCell) -> Result<(), SimulationError> {
@@ -1115,6 +1166,60 @@ impl Simulation {
         Ok(())
     }
 
+    fn maintain_craft_jobs(&mut self) -> Result<(), SimulationError> {
+        let workstation_ids = self
+            .workstation_world
+            .iter()
+            .map(Workstation::id)
+            .collect::<Vec<_>>();
+        for workstation_id in workstation_ids {
+            self.ensure_craft_job_for_workstation(workstation_id)?;
+        }
+        Ok(())
+    }
+
+    fn ensure_craft_job_for_workstation(
+        &mut self,
+        workstation_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        if self
+            .job_world
+            .craft_job_for_workstation(workstation_id)
+            .is_some()
+        {
+            return Ok(());
+        }
+        let Some(order) = self
+            .production_world
+            .first_pending_for_workstation(workstation_id)
+            .copied()
+        else {
+            return Ok(());
+        };
+        let workstation = self
+            .workstation_world
+            .get(workstation_id)
+            .ok_or(SimulationError::UnknownWorkstation(workstation_id))?;
+        if workstation.kind() != recipe_definition(order.recipe_id()).workstation {
+            return Err(SimulationError::RecipeWorkstationMismatch {
+                workstation_id,
+                recipe_id: order.recipe_id(),
+            });
+        }
+        let job_id = self.id_allocator.allocate()?;
+        self.job_world
+            .insert(Job::new(
+                job_id,
+                JobKind::Craft {
+                    workstation_id,
+                    order_id: order.id(),
+                    recipe_id: order.recipe_id(),
+                },
+            ))
+            .map_err(SimulationError::from_job_world)?;
+        Ok(())
+    }
+
     fn advance_jobs_one_tick(&mut self) -> Result<(), SimulationError> {
         let job_ids = self.job_world.iter().map(Job::id).collect::<Vec<_>>();
         for job_id in job_ids {
@@ -1148,8 +1253,9 @@ impl Simulation {
             } => self.try_assign_haul(job_id, item_id, stockpile_id, destination),
             JobKind::Craft {
                 workstation_id,
+                order_id,
                 recipe_id,
-            } => self.try_assign_craft(job_id, workstation_id, recipe_id),
+            } => self.try_assign_craft(job_id, workstation_id, order_id, recipe_id),
             JobKind::DeliverConstruction { site_id, item_id } => {
                 self.try_assign_construction_delivery(job_id, site_id, item_id)
             }
@@ -1263,8 +1369,20 @@ impl Simulation {
         &mut self,
         job_id: EntityId,
         workstation_id: EntityId,
+        order_id: EntityId,
         recipe_id: RecipeId,
     ) -> Result<(), SimulationError> {
+        let Some(order) = self.production_world.get(order_id) else {
+            self.cancel_job(job_id)?;
+            return Ok(());
+        };
+        if order.workstation_id() != workstation_id
+            || order.recipe_id() != recipe_id
+            || !order.is_pending()
+        {
+            self.cancel_job(job_id)?;
+            return Ok(());
+        }
         let Some(workstation) = self.workstation_world.get(workstation_id) else {
             self.cancel_job(job_id)?;
             return Ok(());
@@ -1620,8 +1738,17 @@ impl Simulation {
             }
             JobKind::Craft {
                 workstation_id,
+                order_id,
                 recipe_id,
             } => {
+                if self.production_world.get(order_id).is_none_or(|order| {
+                    order.workstation_id() != workstation_id
+                        || order.recipe_id() != recipe_id
+                        || !order.is_pending()
+                }) {
+                    self.cancel_job(job_id)?;
+                    return Ok(());
+                }
                 if !self.craft_reserved_inputs_valid(job_id, workstation_id, recipe_id) {
                     self.job_world
                         .release_worker(job_id)
@@ -1922,8 +2049,17 @@ impl Simulation {
             JobKind::Haul { .. } => return Err(SimulationError::JobInvariantViolation),
             JobKind::Craft {
                 workstation_id,
+                order_id,
                 recipe_id,
             } => {
+                if self.production_world.get(order_id).is_none_or(|order| {
+                    order.workstation_id() != workstation_id
+                        || order.recipe_id() != recipe_id
+                        || !order.is_pending()
+                }) {
+                    self.cancel_job(job_id)?;
+                    return Ok(());
+                }
                 if !self.craft_reserved_inputs_valid(job_id, workstation_id, recipe_id) {
                     self.job_world
                         .release_worker(job_id)
@@ -1942,7 +2078,7 @@ impl Simulation {
                         .map_err(SimulationError::from_job_world)?;
                     return Ok(());
                 }
-                self.complete_craft(job_id, worker_id, workstation_id, recipe_id)?;
+                self.complete_craft(job_id, worker_id, workstation_id, order_id, recipe_id)?;
             }
             JobKind::DeliverConstruction { .. } => {
                 return Err(SimulationError::ConstructionInvariantViolation);
@@ -2028,6 +2164,7 @@ impl Simulation {
         job_id: EntityId,
         worker_id: EntityId,
         workstation_id: EntityId,
+        order_id: EntityId,
         recipe_id: RecipeId,
     ) -> Result<(), SimulationError> {
         if !self.craft_reserved_inputs_valid(job_id, workstation_id, recipe_id) {
@@ -2061,6 +2198,9 @@ impl Simulation {
                 output_position,
             ))
             .map_err(|_| SimulationError::JobInvariantViolation)?;
+        self.production_world
+            .complete_one(order_id)
+            .map_err(SimulationError::from_production_world)?;
         self.job_world
             .remove(job_id)
             .map_err(SimulationError::from_job_world)?;
@@ -2476,6 +2616,10 @@ pub enum SimulationError {
         recipe_id: RecipeId,
     },
     CraftAlreadyDesignated(EntityId),
+    UnknownProductionOrder(EntityId),
+    ProductionOrderQuantityTooLarge(u32),
+    ProductionRevisionOverflow,
+    ProductionInvariantViolation,
     UnknownConstructionSite(EntityId),
     ConstructionCellUndiscovered(WorldCell),
     ConstructionCellBlocked(WorldCell),
@@ -2524,6 +2668,7 @@ impl SimulationError {
             | JobWorldError::HaulDestinationAlreadyReserved(_)
             | JobWorldError::CraftItemAlreadyReserved(_)
             | JobWorldError::CraftInputsAlreadyReserved(_)
+            | JobWorldError::CraftOrderAlreadyDesignated(_)
             | JobWorldError::ConstructionDeliveryAlreadyDesignated(_)
             | JobWorldError::ConstructionAlreadyDesignated(_)
             | JobWorldError::JobNotCraft(_)
@@ -2532,6 +2677,19 @@ impl SimulationError {
             | JobWorldError::JobNotReserved(_)
             | JobWorldError::JobNotWorking(_)
             | JobWorldError::IndexCorruption => Self::JobInvariantViolation,
+        }
+    }
+
+    fn from_production_world(error: ProductionWorldError) -> Self {
+        match error {
+            ProductionWorldError::UnknownOrder(id) => Self::UnknownProductionOrder(id),
+            ProductionWorldError::QuantityTooLarge(quantity) => {
+                Self::ProductionOrderQuantityTooLarge(quantity)
+            }
+            ProductionWorldError::RevisionOverflow => Self::ProductionRevisionOverflow,
+            ProductionWorldError::DuplicateOrder(_)
+            | ProductionWorldError::OrderAlreadyComplete(_)
+            | ProductionWorldError::IndexCorruption => Self::ProductionInvariantViolation,
         }
     }
 
@@ -2696,6 +2854,17 @@ impl Display for SimulationError {
                 "workstation ID {} already has a craft designation",
                 workstation_id.value()
             ),
+            Self::UnknownProductionOrder(id) => {
+                write!(formatter, "unknown production order ID {}", id.value())
+            }
+            Self::ProductionOrderQuantityTooLarge(quantity) => write!(
+                formatter,
+                "production order quantity {quantity} exceeds the supported limit"
+            ),
+            Self::ProductionRevisionOverflow => formatter.write_str("production revision overflow"),
+            Self::ProductionInvariantViolation => {
+                formatter.write_str("production order invariant violated")
+            }
             Self::UnknownConstructionSite(id) => {
                 write!(formatter, "unknown construction site ID {}", id.value())
             }
@@ -4109,6 +4278,169 @@ mod tests {
     }
 
     #[test]
+    fn infinite_orders_share_common_inputs_without_double_reservation_or_starvation() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let bootstrap_items = simulation
+            .items()
+            .map(|item| (item.id(), item.quantity().get()))
+            .collect::<Vec<_>>();
+        for (item_id, quantity) in bootstrap_items {
+            simulation.item_world.consume(item_id, quantity).unwrap();
+        }
+        let (shared, first_bench_cell, second_bench_cell, first_stone_cell, second_stone_cell) =
+            shared_workbench_fixture_cells(&simulation);
+        let stockpile_id = simulation.create_stockpile(shared).unwrap();
+        for cell in [first_stone_cell, second_stone_cell] {
+            simulation
+                .set_stockpile_cell(stockpile_id, cell, true)
+                .unwrap();
+        }
+        let first_workstation = simulation
+            .place_workstation(WorkstationKind::Workbench, first_bench_cell)
+            .unwrap();
+        let second_workstation = simulation
+            .place_workstation(WorkstationKind::Workbench, second_bench_cell)
+            .unwrap();
+
+        let shared_wood = simulation.id_allocator.allocate().unwrap();
+        let first_stone = simulation.id_allocator.allocate().unwrap();
+        let second_stone = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .item_world
+            .insert_ground(ItemStack::new_ground(
+                shared_wood,
+                ItemKind::Wood,
+                ItemQuantity::new(2).unwrap(),
+                WorldPosition::from_cell_center(shared).unwrap(),
+            ))
+            .unwrap();
+        simulation
+            .item_world
+            .insert_ground(ItemStack::new_ground(
+                first_stone,
+                ItemKind::Stone,
+                ItemQuantity::new(1).unwrap(),
+                WorldPosition::from_cell_center(first_stone_cell).unwrap(),
+            ))
+            .unwrap();
+        simulation
+            .item_world
+            .insert_ground(ItemStack::new_ground(
+                second_stone,
+                ItemKind::Stone,
+                ItemQuantity::new(1).unwrap(),
+                WorldPosition::from_cell_center(second_stone_cell).unwrap(),
+            ))
+            .unwrap();
+
+        simulation
+            .add_production_order(
+                first_workstation,
+                RecipeId::PrimitiveTool,
+                ProductionTarget::Infinite,
+            )
+            .unwrap();
+        simulation
+            .add_production_order(
+                second_workstation,
+                RecipeId::PrimitiveTool,
+                ProductionTarget::Infinite,
+            )
+            .unwrap();
+        simulation.advance_ticks(1).unwrap();
+
+        let craft_jobs = simulation
+            .jobs()
+            .filter(|job| matches!(job.kind(), JobKind::Craft { .. }))
+            .map(Job::id)
+            .collect::<Vec<_>>();
+        assert_eq!(craft_jobs.len(), 2);
+        assert_eq!(
+            craft_jobs
+                .iter()
+                .filter(|job_id| {
+                    simulation
+                        .job_world
+                        .craft_reserved_items(**job_id)
+                        .is_some_and(|items| items.contains(&shared_wood))
+                })
+                .count(),
+            1,
+            "one physical stack can belong to only one craft reservation",
+        );
+        assert_eq!(
+            simulation.item_world.get(shared_wood).unwrap().carrier(),
+            None
+        );
+
+        for _ in 0..128 {
+            simulation.advance_ticks(1).unwrap();
+            if simulation
+                .items()
+                .filter(|item| item.kind() == ItemKind::PrimitiveTool)
+                .map(|item| item.quantity().get())
+                .sum::<u32>()
+                >= 1
+            {
+                break;
+            }
+        }
+        assert!(simulation.item_world.get(shared_wood).is_none());
+        assert!(
+            simulation.item_world.get(first_stone).is_none()
+                ^ simulation.item_world.get(second_stone).is_none(),
+            "exactly one workstation must consume its private Stone input first",
+        );
+
+        let second_wood = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .item_world
+            .insert_ground(ItemStack::new_ground(
+                second_wood,
+                ItemKind::Wood,
+                ItemQuantity::new(2).unwrap(),
+                WorldPosition::from_cell_center(shared).unwrap(),
+            ))
+            .unwrap();
+        for _ in 0..128 {
+            simulation.advance_ticks(1).unwrap();
+            if simulation
+                .items()
+                .filter(|item| item.kind() == ItemKind::PrimitiveTool)
+                .map(|item| item.quantity().get())
+                .sum::<u32>()
+                >= 2
+            {
+                break;
+            }
+        }
+
+        assert!(simulation.item_world.get(second_wood).is_none());
+        assert!(simulation.item_world.get(first_stone).is_none());
+        assert!(simulation.item_world.get(second_stone).is_none());
+        assert_eq!(
+            simulation
+                .items()
+                .filter(|item| item.kind() == ItemKind::PrimitiveTool)
+                .map(|item| item.quantity().get())
+                .sum::<u32>(),
+            2,
+        );
+        simulation.advance_ticks(32).unwrap();
+        assert_eq!(
+            simulation
+                .items()
+                .filter(|item| item.kind() == ItemKind::PrimitiveTool)
+                .map(|item| item.quantity().get())
+                .sum::<u32>(),
+            2,
+            "infinite orders wait when physical inputs are exhausted",
+        );
+        assert!(simulation.job_world.indexes_are_consistent());
+        assert!(simulation.production_world.indexes_are_consistent());
+    }
+
+    #[test]
     fn craft_job_stays_available_without_physical_inputs_near_workbench() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         let cell = empty_stockpile_cells(&simulation, 1)[0];
@@ -4131,6 +4463,61 @@ mod tests {
                 .items()
                 .all(|item| item.kind() != ItemKind::PrimitiveTool)
         );
+    }
+
+    #[test]
+    fn production_order_repeats_craft_until_remaining_runs_reaches_zero() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let stockpile_id = simulation.create_stockpile(WorldCell::new(-1, 0)).unwrap();
+        simulation
+            .set_stockpile_cell(stockpile_id, WorldCell::new(1, 0), true)
+            .unwrap();
+        let workstation_id = simulation
+            .place_workstation(WorkstationKind::Workbench, WorldCell::new(0, 0))
+            .unwrap();
+        let order_id = simulation
+            .add_production_order(
+                workstation_id,
+                RecipeId::PrimitiveTool,
+                ProductionTarget::finite(3),
+            )
+            .unwrap();
+
+        for _ in 0..512 {
+            simulation.advance_ticks(1).unwrap();
+            if simulation
+                .production_world
+                .get(order_id)
+                .is_some_and(|order| order.remaining_runs() == Some(0))
+            {
+                break;
+            }
+        }
+
+        assert_eq!(
+            simulation
+                .production_world
+                .get(order_id)
+                .unwrap()
+                .remaining_runs(),
+            Some(0)
+        );
+        assert_eq!(
+            simulation
+                .items()
+                .filter(|item| item.kind() == ItemKind::PrimitiveTool)
+                .map(|item| item.quantity().get())
+                .sum::<u32>(),
+            3
+        );
+        assert!(
+            simulation
+                .job_world
+                .craft_job_for_workstation(workstation_id)
+                .is_none()
+        );
+        assert!(simulation.production_world.indexes_are_consistent());
+        assert!(simulation.job_world.indexes_are_consistent());
     }
 
     #[test]
@@ -4440,6 +4827,29 @@ mod tests {
         assert!(simulation.construction_world.indexes_are_consistent());
         assert!(simulation.job_world.indexes_are_consistent());
         assert!(simulation.item_world.indexes_are_consistent());
+    }
+
+    fn shared_workbench_fixture_cells(
+        simulation: &Simulation,
+    ) -> (WorldCell, WorldCell, WorldCell, WorldCell, WorldCell) {
+        for y in -4..=4 {
+            for x in -5..=5 {
+                let shared = WorldCell::new(x, y);
+                let first_bench = WorldCell::new(x - 1, y);
+                let second_bench = WorldCell::new(x + 1, y);
+                let first_stone = WorldCell::new(x - 1, y + 1);
+                let second_stone = WorldCell::new(x + 1, y + 1);
+                if simulation.validate_stockpile_cell(shared).is_ok()
+                    && simulation.validate_stockpile_cell(first_stone).is_ok()
+                    && simulation.validate_stockpile_cell(second_stone).is_ok()
+                    && simulation.validate_workstation_cell(first_bench).is_ok()
+                    && simulation.validate_workstation_cell(second_bench).is_ok()
+                {
+                    return (shared, first_bench, second_bench, first_stone, second_stone);
+                }
+            }
+        }
+        panic!("seed 0 must expose a shared-input two-workbench fixture");
     }
 
     fn empty_stockpile_cells(simulation: &Simulation, count: usize) -> Vec<WorldCell> {

@@ -6,6 +6,7 @@ mod item;
 mod job;
 mod pathfinding;
 mod position;
+mod production;
 mod recipe;
 mod simulation;
 mod stockpile;
@@ -28,6 +29,7 @@ pub use position::{
     InteractionRadius, SUBUNITS_PER_CELL, WorldPosition, WorldPositionError,
     within_interaction_range,
 };
+pub use production::{MAX_PRODUCTION_ORDER_RUNS, ProductionOrder, ProductionTarget};
 pub use progressus_worldgen::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, GeneratedChunk, LocalCell, NaturalResource,
     NaturalResourceKind, Terrain, WorldCell, WorldSeed, WorldgenVersion,

@@ -9,15 +9,16 @@ pub use progressus_sim::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, ConstructionMaterialState, ConstructionSite,
     DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED, Direction, EntityId,
     InteractionRadius, ItemKind, ItemLocation, ItemQuantity, JobKind, JobState, LocalCell,
-    MovementSpeed, MovementState, NaturalResource, NaturalResourceKind, RecipeId,
-    SUBUNITS_PER_CELL, SimulationTick, Stockpile, Structure, StructureKind, Terrain, Workstation,
-    WorkstationKind, WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
+    MAX_PRODUCTION_ORDER_RUNS, MovementSpeed, MovementState, NaturalResource, NaturalResourceKind,
+    ProductionOrder, ProductionTarget, RecipeId, SUBUNITS_PER_CELL, SimulationTick, Stockpile,
+    Structure, StructureKind, Terrain, Workstation, WorkstationKind, WorldCell, WorldPosition,
+    WorldSeed, WorldgenVersion,
 };
 pub use read_model::{
     CarriedItemSnapshot, CharacterSnapshot, ChunkSnapshot, ClientSnapshot,
     ConstructionSiteSnapshot, GroundItemSnapshot, JobSnapshot, KnownTerrain,
-    NaturalResourceSnapshot, NavigationSnapshot, StockpileSnapshot, StructureSnapshot,
-    WorkstationSnapshot,
+    NaturalResourceSnapshot, NavigationSnapshot, ProductionOrderSnapshot, StockpileSnapshot,
+    StructureSnapshot, WorkstationSnapshot,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -65,6 +66,18 @@ pub enum Command {
     DesignateCraft {
         workstation_id: EntityId,
         recipe_id: RecipeId,
+    },
+    AddProductionOrder {
+        workstation_id: EntityId,
+        recipe_id: RecipeId,
+        target: ProductionTarget,
+    },
+    SetProductionOrderTarget {
+        order_id: EntityId,
+        target: ProductionTarget,
+    },
+    RemoveProductionOrder {
+        order_id: EntityId,
     },
     DesignateConstruction {
         kind: StructureKind,
@@ -134,6 +147,21 @@ impl Application {
                 recipe_id,
             } => {
                 self.simulation.designate_craft(workstation_id, recipe_id)?;
+            }
+            Command::AddProductionOrder {
+                workstation_id,
+                recipe_id,
+                target,
+            } => {
+                self.simulation
+                    .add_production_order(workstation_id, recipe_id, target)?;
+            }
+            Command::SetProductionOrderTarget { order_id, target } => {
+                self.simulation
+                    .set_production_order_target(order_id, target)?;
+            }
+            Command::RemoveProductionOrder { order_id } => {
+                self.simulation.remove_production_order(order_id)?;
             }
             Command::DesignateConstruction { kind, cell } => {
                 self.simulation.designate_construction(kind, cell)?;
@@ -243,6 +271,11 @@ impl Application {
             .workstations()
             .map(WorkstationSnapshot::from)
             .collect();
+        let production_orders = self
+            .simulation
+            .production_orders()
+            .map(ProductionOrderSnapshot::from)
+            .collect();
         let construction_sites = self
             .simulation
             .construction_sites()
@@ -263,6 +296,7 @@ impl Application {
             job_revision: self.simulation.job_revision(),
             stockpile_revision: self.simulation.stockpile_revision(),
             workstation_revision: self.simulation.workstation_revision(),
+            production_revision: self.simulation.production_revision(),
             construction_revision: self.simulation.construction_revision(),
             chunks,
             ground_items,
@@ -271,6 +305,7 @@ impl Application {
             jobs,
             stockpiles,
             workstations,
+            production_orders,
             construction_sites,
             structures,
             characters,

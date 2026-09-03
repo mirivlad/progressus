@@ -124,7 +124,15 @@ Later, the player may manage:
 
 Scaling management should reduce repetitive micromanagement rather than exposing ever more recipe bookkeeping.
 
-## 8. Design guardrail for agents
+## 8. Production orders and shared inputs
+
+A workstation may expose persistent production orders rather than requiring the player to issue one craft command per item. The bootstrap supports finite remaining counts and an explicit infinite order that continues while physical inputs and workers are available. Later stock-target or conditional policies may extend this model.
+
+An infinite order must not mean that one workstation owns all future resources. Physical input reservations belong to one concrete Craft job at a time. When two workstations can use the same stack, only one may reserve it; the other waits. Scheduling should remain deterministic and avoid starvation in ordinary shared-input cases. Ingredients are never shuttled back and forth merely because multiple workstations can use them.
+
+The UI should make the reason for waiting legible: missing inputs, unavailable worker, occupied workstation, or another reservation should be inspectable rather than hidden behind generic inactivity.
+
+## 9. Design guardrail for agents
 
 When implementing production content:
 
@@ -134,7 +142,7 @@ When implementing production content:
 4. Do not make a deeper chain merely because another factory game models it that way.
 5. If a proposed production feature substantially increases recipe depth across the game, treat it as a design decision and document the reason before implementation.
 
-## 9. Reference point
+## 10. Reference point
 
 Progressus may borrow from factory games the useful ideas of physical inputs, stock, capacity, bottlenecks, automation, and transport.
 

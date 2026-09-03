@@ -759,7 +759,7 @@ pub(crate) fn draw_tool_drag(
         return;
     }
     let color = match tool.mode {
-        ToolMode::Select | ToolMode::Workbench | ToolMode::Craft => return,
+        ToolMode::Select | ToolMode::Workbench => return,
         ToolMode::StockpileAdd => Color::srgba(0.25, 1.0, 0.72, 0.9),
         ToolMode::StockpileRemove => Color::srgba(1.0, 0.35, 0.32, 0.9),
         ToolMode::Harvest => Color::srgba(1.0, 0.72, 0.18, 0.9),

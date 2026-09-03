@@ -371,17 +371,25 @@ fn workbench_and_craft_cycle_cross_the_public_application_boundary() {
             .unwrap();
     }
     application
-        .execute(Command::DesignateCraft {
+        .execute(Command::AddProductionOrder {
             workstation_id,
             recipe_id: RecipeId::PrimitiveTool,
+            target: progressus_app::ProductionTarget::finite(3),
         })
         .unwrap();
 
     let designated = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert_eq!(designated.production_orders.len(), 1);
+    let order_id = designated.production_orders[0].id;
+    assert_eq!(
+        designated.production_orders[0].target.remaining_runs(),
+        Some(3)
+    );
     assert!(designated.jobs.iter().any(|job| {
         job.kind
             == JobKind::Craft {
                 workstation_id,
+                order_id,
                 recipe_id: RecipeId::PrimitiveTool,
             }
     }));
@@ -398,15 +406,43 @@ fn workbench_and_craft_cycle_cross_the_public_application_boundary() {
             })
             .unwrap();
         if snapshot
-            .ground_items
+            .production_orders
             .iter()
-            .any(|item| item.kind == ItemKind::PrimitiveTool)
+            .any(|order| order.id == order_id && order.target.remaining_runs() == Some(0))
         {
-            produced = true;
+            let quantity = snapshot
+                .ground_items
+                .iter()
+                .filter(|item| item.kind == ItemKind::PrimitiveTool)
+                .map(|item| item.quantity)
+                .sum::<u32>();
+            produced = quantity == 3;
             break;
         }
     }
     assert!(produced);
+
+    application
+        .execute(Command::SetProductionOrderTarget {
+            order_id,
+            target: progressus_app::ProductionTarget::Infinite,
+        })
+        .unwrap();
+    let infinite = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert_eq!(
+        infinite.production_orders[0].target,
+        progressus_app::ProductionTarget::Infinite
+    );
+    assert!(infinite.jobs.iter().any(|job| matches!(
+        job.kind,
+        JobKind::Craft { order_id: job_order_id, .. } if job_order_id == order_id
+    )));
+    application
+        .execute(Command::SetProductionOrderTarget {
+            order_id,
+            target: progressus_app::ProductionTarget::finite(0),
+        })
+        .unwrap();
 
     application
         .execute(Command::RemoveWorkstation { workstation_id })

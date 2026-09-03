@@ -6,10 +6,12 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use progressus_app::{
     Application, ApplicationError, ChunkCoord, ClientSnapshot, Command, EntityId, JobKind,
-    NewGameOptions, RecipeId, SnapshotQuery, StructureKind, WorkstationKind, WorldCell, WorldSeed,
+    NewGameOptions, SnapshotQuery, StructureKind, WorkstationKind, WorldCell, WorldSeed,
 };
 
+use crate::i18n::Locale;
 use crate::interaction::{TickScheduler, movement_command};
+use crate::modal::{ModalPresentation, ModalState, modal_interaction, modal_keyboard, sync_modal};
 use crate::navigation::{SelectedCharacter, VisualMotion, quantize_local_click, select_nearest};
 use crate::presentation::PresentationError;
 use crate::procedural_assets::ProceduralAssetRegistry;
@@ -18,7 +20,11 @@ use crate::render::{
     draw_selected_character, draw_selected_navigation, draw_stockpiles, draw_tool_drag,
     setup_camera, sync_presentation,
 };
-use crate::ui::{ToolMode, ToolState, setup_toolbar, toolbar_interaction, update_ui_capture};
+use crate::ui::{
+    ToolMode, ToolState, language_toggle_interaction, refresh_toolbar_localization, setup_toolbar,
+    toolbar_interaction, update_ui_capture,
+};
+use crate::ui_font::setup_ui_font;
 
 impl Resource for TickScheduler {}
 
@@ -46,6 +52,10 @@ impl AuthoritativeClient {
         &self.snapshot
     }
 
+    pub(crate) fn application_mut(&mut self) -> &mut Application {
+        &mut self.application
+    }
+
     pub(crate) fn terrain_snapshot(
         &self,
         chunks: Vec<ChunkCoord>,
@@ -60,7 +70,7 @@ impl AuthoritativeClient {
         std::mem::take(&mut self.snapshot_dirty)
     }
 
-    fn refresh_lightweight_snapshot(
+    pub(crate) fn refresh_lightweight_snapshot(
         &mut self,
         navigation_for: Option<EntityId>,
     ) -> Result<(), ClientError> {
@@ -83,9 +93,12 @@ pub(crate) fn advance_authority(
     mut scheduler: ResMut<TickScheduler>,
     mut authoritative: ResMut<AuthoritativeClient>,
     selected: Res<SelectedCharacter>,
+    modal: Res<ModalState>,
 ) {
     let mut command_attempted = false;
-    if let Some(command) = movement_command(&keys, cora_id()) {
+    if !modal.is_open()
+        && let Some(command) = movement_command(&keys, cora_id())
+    {
         command_attempted = true;
         if let Err(error) = authoritative.application.execute(command) {
             warn!("movement command rejected: {error}");
@@ -115,12 +128,16 @@ pub(crate) fn pointer_navigation(
         ResMut<SelectedCharacter>,
         ResMut<VisualMotion>,
         ResMut<ToolState>,
+        ResMut<ModalState>,
     ),
     mut authoritative: ResMut<AuthoritativeClient>,
     cache: Res<PresentationCache>,
 ) {
     let (buttons, keys) = input;
-    let (mut selected, mut motion, mut tool) = interaction_state;
+    let (mut selected, mut motion, mut tool, mut modal) = interaction_state;
+    if modal.is_open() {
+        return;
+    }
     let tool_active = tool.mode != ToolMode::Select;
     let area_tool = tool.mode.uses_area_drag();
 
@@ -252,7 +269,7 @@ pub(crate) fn pointer_navigation(
     }
 
     if buttons.just_pressed(MouseButton::Left) {
-        selected.0 = select_nearest(
+        let character = select_nearest(
             authoritative
                 .snapshot()
                 .characters
@@ -261,7 +278,16 @@ pub(crate) fn pointer_navigation(
             target,
             progressus_app::SUBUNITS_PER_CELL / 2,
         );
-        if selected.0.is_none() {
+        if let Some(character_id) = character {
+            selected.0 = Some(character_id);
+        } else if let Some(workstation_id) =
+            workstation_at(authoritative.snapshot(), target.containing_cell())
+        {
+            selected.0 = None;
+            motion.clear();
+            modal.open_workstation(workstation_id);
+        } else {
+            selected.0 = None;
             motion.clear();
         }
         if let Err(error) = authoritative.refresh_lightweight_snapshot(selected.0) {
@@ -295,11 +321,7 @@ fn apply_point_tool(
 ) -> Result<(), ClientError> {
     match mode {
         ToolMode::Workbench => {
-            if let Some(workstation_id) = workstation_at(authoritative.snapshot(), cell) {
-                authoritative
-                    .application
-                    .execute(Command::RemoveWorkstation { workstation_id })?;
-            } else {
+            if workstation_at(authoritative.snapshot(), cell).is_none() {
                 authoritative
                     .application
                     .execute(Command::PlaceWorkstation {
@@ -307,19 +329,6 @@ fn apply_point_tool(
                         cell,
                     })?;
             }
-        }
-        ToolMode::Craft => {
-            let Some(workstation_id) = workstation_at(authoritative.snapshot(), cell) else {
-                return Ok(());
-            };
-            let command = craft_job_at(authoritative.snapshot(), workstation_id).map_or(
-                Command::DesignateCraft {
-                    workstation_id,
-                    recipe_id: RecipeId::PrimitiveTool,
-                },
-                |job_id| Command::CancelJob { job_id },
-            );
-            authoritative.application.execute(command)?;
         }
         ToolMode::Select
         | ToolMode::StockpileAdd
@@ -497,26 +506,14 @@ fn apply_tool_area(
                     })?;
             }
         }
-        ToolMode::Workbench | ToolMode::Craft => {}
+        ToolMode::Workbench => {}
         ToolMode::CancelJobs => {
             let selected = cells.into_iter().collect::<BTreeSet<_>>();
-            let workstation_cells = area_snapshot
-                .workstations
-                .iter()
-                .map(|workstation| (workstation.id, workstation.cell))
-                .collect::<BTreeMap<_, _>>();
             let jobs = area_snapshot
                 .jobs
                 .iter()
                 .filter_map(|job| match job.kind {
                     JobKind::Harvest { source } if selected.contains(&source) => Some(job.id),
-                    JobKind::Craft { workstation_id, .. }
-                        if workstation_cells
-                            .get(&workstation_id)
-                            .is_some_and(|cell| selected.contains(cell)) =>
-                    {
-                        Some(job.id)
-                    }
                     JobKind::Harvest { .. }
                     | JobKind::Haul { .. }
                     | JobKind::Craft { .. }
@@ -587,16 +584,6 @@ fn workstation_at(snapshot: &ClientSnapshot, cell: WorldCell) -> Option<EntityId
         .iter()
         .find(|workstation| workstation.cell == cell)
         .map(|workstation| workstation.id)
-}
-
-fn craft_job_at(snapshot: &ClientSnapshot, workstation_id: EntityId) -> Option<EntityId> {
-    snapshot.jobs.iter().find_map(|job| match job.kind {
-        JobKind::Craft {
-            workstation_id: job_workstation_id,
-            ..
-        } if job_workstation_id == workstation_id => Some(job.id),
-        _ => None,
-    })
 }
 
 fn stockpile_at(snapshot: &ClientSnapshot, cell: WorldCell) -> Option<EntityId> {
@@ -671,6 +658,9 @@ pub fn run() -> Result<(), ClientError> {
         .insert_resource(SelectedCharacter::default())
         .insert_resource(VisualMotion::default())
         .insert_resource(ToolState::default())
+        .insert_resource(Locale::default())
+        .insert_resource(ModalState::default())
+        .insert_resource(ModalPresentation::default())
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Progressus — Prototype 01".to_owned(),
@@ -678,11 +668,19 @@ pub fn run() -> Result<(), ClientError> {
             }),
             ..default()
         }))
-        .add_systems(Startup, (setup_camera, setup_toolbar))
+        .add_systems(
+            Startup,
+            (setup_ui_font, setup_camera, setup_toolbar).chain(),
+        )
         .add_systems(
             Update,
             (
+                language_toggle_interaction,
+                modal_keyboard,
+                modal_interaction,
                 toolbar_interaction,
+                refresh_toolbar_localization,
+                sync_modal,
                 update_ui_capture,
                 pointer_navigation,
                 advance_authority,
