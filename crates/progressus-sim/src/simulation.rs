@@ -533,19 +533,19 @@ impl Simulation {
             .workstation_world
             .get(workstation_id)
             .ok_or(SimulationError::UnknownWorkstation(workstation_id))?;
-        if workstation.kind() == WorkstationKind::Workbench && kind == ProductionZoneKind::Input {
-            return Err(SimulationError::WorkbenchInputPortsFixed(workstation_id));
+        if workstation.kind() == WorkstationKind::Workbench {
+            return match kind {
+                ProductionZoneKind::Input => {
+                    Err(SimulationError::WorkbenchInputPortsFixed(workstation_id))
+                }
+                ProductionZoneKind::Output => {
+                    Err(SimulationError::WorkbenchOutputPortsFixed(workstation_id))
+                }
+            };
         }
         if enabled {
             let workstation_cell = workstation.cell();
-            let in_range = if workstation.kind() == WorkstationKind::Workbench
-                && kind == ProductionZoneKind::Output
-            {
-                is_diagonal_production_neighbour(workstation_cell, cell)
-            } else {
-                is_production_zone_neighbour(workstation_cell, cell)
-            };
-            if !in_range {
+            if !is_production_zone_neighbour(workstation_cell, cell) {
                 return Err(SimulationError::ProductionZoneCellOutOfRange {
                     workstation_id,
                     workstation_cell,
@@ -589,13 +589,44 @@ impl Simulation {
             .get(workstation_id)
             .ok_or(SimulationError::UnknownWorkstation(workstation_id))?
             .cell();
+        self.cycle_workstation_ports(
+            workstation_id,
+            ProductionZoneKind::Input,
+            production_input_layouts(workstation_cell),
+            true,
+        )
+    }
+
+    pub fn cycle_workstation_outputs(
+        &mut self,
+        workstation_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        let workstation_cell = self
+            .workstation_world
+            .get(workstation_id)
+            .ok_or(SimulationError::UnknownWorkstation(workstation_id))?
+            .cell();
+        self.cycle_workstation_ports(
+            workstation_id,
+            ProductionZoneKind::Output,
+            production_output_layouts(workstation_cell),
+            false,
+        )
+    }
+
+    fn cycle_workstation_ports(
+        &mut self,
+        workstation_id: EntityId,
+        kind: ProductionZoneKind,
+        layouts: Vec<[WorldCell; 2]>,
+        cancel_supply: bool,
+    ) -> Result<(), SimulationError> {
         let current = self
             .production_logistics_world
             .get(workstation_id)
             .ok_or(SimulationError::UnknownWorkstation(workstation_id))?
-            .cells(ProductionZoneKind::Input)
+            .cells(kind)
             .collect::<BTreeSet<_>>();
-        let layouts = production_input_layouts(workstation_cell);
         if layouts.is_empty() {
             return Err(SimulationError::ProductionOutputBlocked(workstation_id));
         }
@@ -608,11 +639,11 @@ impl Simulation {
             if current.contains(&cell) {
                 continue;
             }
-            if let Some((owner, kind)) = self.production_logistics_world.zone_at(cell) {
+            if let Some((owner, owner_kind)) = self.production_logistics_world.zone_at(cell) {
                 return Err(SimulationError::ProductionZoneCellAlreadyOwned {
                     cell,
                     workstation_id: owner,
-                    kind,
+                    kind: owner_kind,
                 });
             }
             self.validate_production_zone_cell(cell)?;
@@ -620,27 +651,29 @@ impl Simulation {
         if let Some(job_id) = self.job_world.craft_job_for_workstation(workstation_id) {
             self.cancel_job(job_id)?;
         }
-        let supply_jobs = self
-            .job_world
-            .iter()
-            .filter_map(|job| match job.kind() {
-                JobKind::SupplyProduction {
-                    workstation_id: id, ..
-                } if id == workstation_id => Some(job.id()),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        for job_id in supply_jobs {
-            self.cancel_job(job_id)?;
+        if cancel_supply {
+            let supply_jobs = self
+                .job_world
+                .iter()
+                .filter_map(|job| match job.kind() {
+                    JobKind::SupplyProduction {
+                        workstation_id: id, ..
+                    } if id == workstation_id => Some(job.id()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            for job_id in supply_jobs {
+                self.cancel_job(job_id)?;
+            }
         }
         for cell in current {
             self.production_logistics_world
-                .set_cell(workstation_id, ProductionZoneKind::Input, cell, false)
+                .set_cell(workstation_id, kind, cell, false)
                 .map_err(SimulationError::from_production_logistics_world)?;
         }
         for cell in pair {
             self.production_logistics_world
-                .set_cell(workstation_id, ProductionZoneKind::Input, cell, true)
+                .set_cell(workstation_id, kind, cell, true)
                 .map_err(SimulationError::from_production_logistics_world)?;
         }
         self.ensure_craft_job_for_workstation(workstation_id)
@@ -744,6 +777,9 @@ impl Simulation {
                 workstation_id: existing,
             });
         }
+        let (inputs, outputs) = match kind {
+            WorkstationKind::Workbench => self.default_workbench_ports(cell)?,
+        };
         let id = self.id_allocator.allocate()?;
         self.workstation_world
             .insert(Workstation::new(id, kind, cell))
@@ -751,45 +787,40 @@ impl Simulation {
         self.production_logistics_world
             .insert_workstation(id)
             .map_err(SimulationError::from_production_logistics_world)?;
-        self.seed_default_production_zones(id, cell)?;
+        for input in inputs {
+            self.production_logistics_world
+                .set_cell(id, ProductionZoneKind::Input, input, true)
+                .map_err(SimulationError::from_production_logistics_world)?;
+        }
+        for output in outputs {
+            self.production_logistics_world
+                .set_cell(id, ProductionZoneKind::Output, output, true)
+                .map_err(SimulationError::from_production_logistics_world)?;
+        }
         Ok(id)
     }
 
-    fn seed_default_production_zones(
-        &mut self,
-        workstation_id: EntityId,
+    fn default_workbench_ports(
+        &self,
         workstation_cell: WorldCell,
-    ) -> Result<(), SimulationError> {
-        let mut inputs = None;
-        for pair in production_input_layouts(workstation_cell) {
-            if pair.iter().all(|cell| {
-                self.production_logistics_world.zone_at(*cell).is_none()
-                    && self.validate_production_zone_cell(*cell).is_ok()
-            }) {
-                inputs = Some(pair);
-                break;
-            }
-        }
-        let Some(inputs) = inputs else {
-            return Ok(());
+    ) -> Result<([WorldCell; 2], [WorldCell; 2]), SimulationError> {
+        let available = |cell: &WorldCell| {
+            self.production_logistics_world.zone_at(*cell).is_none()
+                && self.validate_production_zone_cell(*cell).is_ok()
         };
-        for input in inputs {
-            self.production_logistics_world
-                .set_cell(workstation_id, ProductionZoneKind::Input, input, true)
-                .map_err(SimulationError::from_production_logistics_world)?;
-        }
-        if let Some(output) = production_output_candidates(workstation_cell)
+        let inputs = production_input_layouts(workstation_cell)
             .into_iter()
-            .find(|cell| {
-                self.production_logistics_world.zone_at(*cell).is_none()
-                    && self.validate_production_zone_cell(*cell).is_ok()
-            })
-        {
-            self.production_logistics_world
-                .set_cell(workstation_id, ProductionZoneKind::Output, output, true)
-                .map_err(SimulationError::from_production_logistics_world)?;
-        }
-        Ok(())
+            .find(|pair| pair.iter().all(&available))
+            .ok_or(SimulationError::WorkstationPortLayoutUnavailable(
+                workstation_cell,
+            ))?;
+        let outputs = production_output_layouts(workstation_cell)
+            .into_iter()
+            .find(|pair| pair.iter().all(&available))
+            .ok_or(SimulationError::WorkstationPortLayoutUnavailable(
+                workstation_cell,
+            ))?;
+        Ok((inputs, outputs))
     }
 
     pub fn remove_workstation(&mut self, workstation_id: EntityId) -> Result<(), SimulationError> {
@@ -3266,28 +3297,44 @@ fn production_input_layouts(center: WorldCell) -> Vec<[WorldCell; 2]> {
     .collect()
 }
 
-fn production_output_candidates(center: WorldCell) -> Vec<WorldCell> {
-    [(-1_i64, 1_i64), (1, 1), (1, -1), (-1, -1)]
-        .into_iter()
-        .filter_map(|(dx, dy)| {
-            Some(WorldCell::new(
-                center.x().checked_add(dx)?,
-                center.y().checked_add(dy)?,
-            ))
-        })
-        .collect()
+fn production_output_layouts(center: WorldCell) -> Vec<[WorldCell; 2]> {
+    let north_west = center
+        .x()
+        .checked_sub(1)
+        .zip(center.y().checked_add(1))
+        .map(|(x, y)| WorldCell::new(x, y));
+    let north_east = center
+        .x()
+        .checked_add(1)
+        .zip(center.y().checked_add(1))
+        .map(|(x, y)| WorldCell::new(x, y));
+    let south_east = center
+        .x()
+        .checked_add(1)
+        .zip(center.y().checked_sub(1))
+        .map(|(x, y)| WorldCell::new(x, y));
+    let south_west = center
+        .x()
+        .checked_sub(1)
+        .zip(center.y().checked_sub(1))
+        .map(|(x, y)| WorldCell::new(x, y));
+    [
+        (north_west, south_east),
+        (north_east, south_west),
+        (north_west, north_east),
+        (north_east, south_east),
+        (south_east, south_west),
+        (south_west, north_west),
+    ]
+    .into_iter()
+    .filter_map(|(first, second)| Some([first?, second?]))
+    .collect()
 }
 
 fn is_production_zone_neighbour(center: WorldCell, cell: WorldCell) -> bool {
     let dx = i128::from(cell.x()) - i128::from(center.x());
     let dy = i128::from(cell.y()) - i128::from(center.y());
     dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0)
-}
-
-fn is_diagonal_production_neighbour(center: WorldCell, cell: WorldCell) -> bool {
-    let dx = i128::from(cell.x()) - i128::from(center.x());
-    let dy = i128::from(cell.y()) - i128::from(center.y());
-    dx.abs() == 1 && dy.abs() == 1
 }
 
 fn cell_manhattan_distance(first: WorldCell, second: WorldCell) -> u128 {
@@ -3409,6 +3456,7 @@ pub enum SimulationError {
     },
     WorkstationRevisionOverflow,
     WorkstationInvariantViolation,
+    WorkstationPortLayoutUnavailable(WorldCell),
     RecipeWorkstationMismatch {
         workstation_id: EntityId,
         recipe_id: RecipeId,
@@ -3419,6 +3467,7 @@ pub enum SimulationError {
     ProductionRevisionOverflow,
     ProductionInvariantViolation,
     WorkbenchInputPortsFixed(EntityId),
+    WorkbenchOutputPortsFixed(EntityId),
     ProductionZoneCellOutOfRange {
         workstation_id: EntityId,
         workstation_cell: WorldCell,
@@ -3679,6 +3728,12 @@ impl Display for SimulationError {
             Self::WorkstationInvariantViolation => {
                 formatter.write_str("workstation ownership invariant violated")
             }
+            Self::WorkstationPortLayoutUnavailable(cell) => write!(
+                formatter,
+                "workstation at ({}, {}) cannot provide two input and two output ports",
+                cell.x(),
+                cell.y()
+            ),
             Self::RecipeWorkstationMismatch {
                 workstation_id,
                 recipe_id,
@@ -3707,6 +3762,11 @@ impl Display for SimulationError {
             Self::WorkbenchInputPortsFixed(workstation_id) => write!(
                 formatter,
                 "workbench ID {} has two fixed cardinal input ports; rotate them instead of editing input cells directly",
+                workstation_id.value()
+            ),
+            Self::WorkbenchOutputPortsFixed(workstation_id) => write!(
+                formatter,
+                "workbench ID {} has two fixed diagonal output ports; rotate them instead of editing output cells directly",
                 workstation_id.value()
             ),
             Self::ProductionZoneCellOutOfRange {
@@ -5661,6 +5721,42 @@ mod tests {
     }
 
     #[test]
+    fn blocked_workbench_port_layout_rejects_placement_before_allocating_id() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        clear_all_items(&mut simulation);
+        let center = WorldCell::new(0, 0);
+        for dy in -1_i64..=1 {
+            for dx in -1_i64..=1 {
+                let cell = WorldCell::new(center.x() + dx, center.y() + dy);
+                simulation
+                    .set_terrain_override(cell, Terrain::Grass)
+                    .unwrap();
+                simulation.depleted_resources.insert(cell);
+            }
+        }
+        let diagonals = [
+            WorldCell::new(-1, 1),
+            WorldCell::new(1, 1),
+            WorldCell::new(1, -1),
+            WorldCell::new(-1, -1),
+        ];
+        let stockpile_id = simulation.create_stockpile(diagonals[0]).unwrap();
+        for cell in diagonals.into_iter().skip(1) {
+            simulation
+                .set_stockpile_cell(stockpile_id, cell, true)
+                .unwrap();
+        }
+        let next_id = simulation.next_entity_id();
+
+        assert_eq!(
+            simulation.place_workstation(WorkstationKind::Workbench, center),
+            Err(SimulationError::WorkstationPortLayoutUnavailable(center))
+        );
+        assert_eq!(simulation.next_entity_id(), next_id);
+        assert_eq!(simulation.workstation_at(center), None);
+    }
+
+    #[test]
     fn workbench_ports_are_fixed_local_and_exclusive_from_stockpiles() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         clear_all_items(&mut simulation);
@@ -5669,9 +5765,10 @@ mod tests {
             .place_workstation(WorkstationKind::Workbench, workstation_cell)
             .unwrap();
         let inputs = production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Input);
-        let output =
-            production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Output)[0];
+        let outputs =
+            production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Output);
         assert_eq!(inputs.len(), 2);
+        assert_eq!(outputs.len(), 2);
 
         assert_eq!(
             simulation.set_production_zone_cell(
@@ -5682,38 +5779,22 @@ mod tests {
             ),
             Err(SimulationError::WorkbenchInputPortsFixed(workstation_id))
         );
+        assert_eq!(
+            simulation.set_production_zone_cell(
+                workstation_id,
+                ProductionZoneKind::Output,
+                outputs[0],
+                false,
+            ),
+            Err(SimulationError::WorkbenchOutputPortsFixed(workstation_id))
+        );
         assert!(matches!(
             simulation.create_stockpile(inputs[0]),
             Err(SimulationError::StockpileCellBlocked(cell)) if cell == inputs[0]
         ));
-
-        let far = WorldCell::new(2, 0);
         assert!(matches!(
-            simulation.set_production_zone_cell(
-                workstation_id,
-                ProductionZoneKind::Output,
-                far,
-                true,
-            ),
-            Err(SimulationError::ProductionZoneCellOutOfRange { cell, .. }) if cell == far
-        ));
-
-        simulation
-            .set_production_zone_cell(workstation_id, ProductionZoneKind::Output, output, false)
-            .unwrap();
-        let stockpile_id = simulation.create_stockpile(output).unwrap();
-        assert_eq!(
-            simulation.stockpile_world.stockpile_at(output),
-            Some(stockpile_id)
-        );
-        assert!(matches!(
-            simulation.set_production_zone_cell(
-                workstation_id,
-                ProductionZoneKind::Output,
-                output,
-                true,
-            ),
-            Err(SimulationError::ProductionZoneCellOccupied(cell)) if cell == output
+            simulation.create_stockpile(outputs[0]),
+            Err(SimulationError::StockpileCellBlocked(cell)) if cell == outputs[0]
         ));
         assert!(
             simulation
@@ -6175,7 +6256,85 @@ mod tests {
     }
 
     #[test]
-    fn workbench_input_layouts_follow_the_six_cardinal_pair_cycle() {
+    fn workbench_input_and_output_cycles_are_independent() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        clear_all_items(&mut simulation);
+        let center = WorldCell::new(0, 0);
+        for dy in -1_i64..=1 {
+            for dx in -1_i64..=1 {
+                let cell = WorldCell::new(center.x() + dx, center.y() + dy);
+                simulation
+                    .set_terrain_override(cell, Terrain::Grass)
+                    .unwrap();
+                simulation.depleted_resources.insert(cell);
+            }
+        }
+        let workstation_id = simulation
+            .place_workstation(WorkstationKind::Workbench, center)
+            .unwrap();
+        let original_inputs =
+            production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Input);
+        let original_outputs =
+            production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Output);
+        assert_eq!(original_inputs.len(), 2);
+        assert_eq!(original_outputs.len(), 2);
+
+        let mut input_layouts = vec![original_inputs.clone()];
+        for _ in 0..5 {
+            simulation.cycle_workstation_inputs(workstation_id).unwrap();
+            input_layouts.push(production_zone_cells(
+                &simulation,
+                workstation_id,
+                ProductionZoneKind::Input,
+            ));
+            assert_eq!(
+                production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Output),
+                original_outputs
+            );
+        }
+        input_layouts.sort();
+        input_layouts.dedup();
+        assert_eq!(input_layouts.len(), 6);
+        simulation.cycle_workstation_inputs(workstation_id).unwrap();
+        assert_eq!(
+            production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Input),
+            original_inputs
+        );
+
+        let mut output_layouts = vec![original_outputs.clone()];
+        for _ in 0..5 {
+            simulation
+                .cycle_workstation_outputs(workstation_id)
+                .unwrap();
+            output_layouts.push(production_zone_cells(
+                &simulation,
+                workstation_id,
+                ProductionZoneKind::Output,
+            ));
+            assert_eq!(
+                production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Input),
+                original_inputs
+            );
+        }
+        output_layouts.sort();
+        output_layouts.dedup();
+        assert_eq!(output_layouts.len(), 6);
+        simulation
+            .cycle_workstation_outputs(workstation_id)
+            .unwrap();
+        assert_eq!(
+            production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Output),
+            original_outputs
+        );
+        assert!(
+            simulation
+                .production_logistics_world
+                .indexes_are_consistent()
+        );
+    }
+
+    #[test]
+    fn workbench_port_layouts_follow_the_two_independent_six_pair_cycles() {
         let center = WorldCell::new(10, 20);
         assert_eq!(
             production_input_layouts(center),
@@ -6189,12 +6348,14 @@ mod tests {
             ]
         );
         assert_eq!(
-            production_output_candidates(center),
+            production_output_layouts(center),
             vec![
-                WorldCell::new(9, 21),
-                WorldCell::new(11, 21),
-                WorldCell::new(11, 19),
-                WorldCell::new(9, 19),
+                [WorldCell::new(9, 21), WorldCell::new(11, 19)],
+                [WorldCell::new(11, 21), WorldCell::new(9, 19)],
+                [WorldCell::new(9, 21), WorldCell::new(11, 21)],
+                [WorldCell::new(11, 21), WorldCell::new(11, 19)],
+                [WorldCell::new(11, 19), WorldCell::new(9, 19)],
+                [WorldCell::new(9, 19), WorldCell::new(9, 21)],
             ]
         );
     }

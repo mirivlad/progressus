@@ -352,7 +352,7 @@ fn workbench_and_craft_cycle_cross_the_public_application_boundary() {
         workstation_id
     );
     assert_eq!(placed.production_logistics[0].input_cells.len(), 2);
-    assert_eq!(placed.production_logistics[0].output_cells.len(), 1);
+    assert_eq!(placed.production_logistics[0].output_cells.len(), 2);
 
     let original_inputs = placed.production_logistics[0].input_cells.clone();
     let edited_input = original_inputs[0];
@@ -407,6 +407,20 @@ fn workbench_and_craft_cycle_cross_the_public_application_boundary() {
         application
             .execute(Command::CreateStockpile { cell: active_input })
             .is_err()
+    );
+
+    let original_outputs = wrapped.production_logistics[0].output_cells.clone();
+    let edited_output = original_outputs[0];
+    assert!(
+        application
+            .execute(Command::SetProductionZoneCell {
+                workstation_id,
+                kind: ProductionZoneKind::Output,
+                cell: edited_output,
+                enabled: false,
+            })
+            .is_err(),
+        "workbench output ports are rotated as a pair rather than edited cell-by-cell"
     );
 
     let first_stock = WorldCell::new(-2, 0);
@@ -506,6 +520,96 @@ fn workbench_and_craft_cycle_cross_the_public_application_boundary() {
     let removed = application.snapshot(SnapshotQuery::default()).unwrap();
     assert!(removed.workstations.is_empty());
     assert!(removed.production_logistics.is_empty());
+}
+
+#[test]
+fn workbench_output_rotation_crosses_the_public_application_boundary() {
+    let mut application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(0),
+    })
+    .unwrap();
+
+    for y in -4..=4 {
+        for x in -6..=6 {
+            let cell = WorldCell::new(x, y);
+            if application
+                .execute(Command::PlaceWorkstation {
+                    kind: WorkstationKind::Workbench,
+                    cell,
+                })
+                .is_err()
+            {
+                continue;
+            }
+            let placed = application.snapshot(SnapshotQuery::default()).unwrap();
+            let Some(workstation) = placed
+                .workstations
+                .iter()
+                .find(|workstation| workstation.cell == cell)
+            else {
+                continue;
+            };
+            let workstation_id = workstation.id;
+            let logistics = placed
+                .production_logistics
+                .iter()
+                .find(|logistics| logistics.workstation_id == workstation_id)
+                .unwrap();
+            if logistics.input_cells.len() != 2 || logistics.output_cells.len() != 2 {
+                application
+                    .execute(Command::RemoveWorkstation { workstation_id })
+                    .unwrap();
+                continue;
+            }
+            let original_inputs = logistics.input_cells.clone();
+            let original_outputs = logistics.output_cells.clone();
+            let mut layouts = vec![original_outputs.clone()];
+            let mut complete_cycle = true;
+            for _ in 0..5 {
+                if application
+                    .execute(Command::CycleWorkstationOutputs { workstation_id })
+                    .is_err()
+                {
+                    complete_cycle = false;
+                    break;
+                }
+                layouts.push(
+                    application
+                        .snapshot(SnapshotQuery::default())
+                        .unwrap()
+                        .production_logistics
+                        .iter()
+                        .find(|logistics| logistics.workstation_id == workstation_id)
+                        .unwrap()
+                        .output_cells
+                        .clone(),
+                );
+            }
+            if complete_cycle {
+                layouts.sort();
+                layouts.dedup();
+                assert_eq!(layouts.len(), 6);
+                application
+                    .execute(Command::CycleWorkstationOutputs { workstation_id })
+                    .unwrap();
+                let wrapped = application.snapshot(SnapshotQuery::default()).unwrap();
+                let wrapped = wrapped
+                    .production_logistics
+                    .iter()
+                    .find(|logistics| logistics.workstation_id == workstation_id)
+                    .unwrap();
+                assert_eq!(wrapped.output_cells, original_outputs);
+                assert_eq!(wrapped.input_cells, original_inputs);
+                return;
+            }
+            application
+                .execute(Command::RemoveWorkstation { workstation_id })
+                .unwrap();
+        }
+    }
+    panic!(
+        "expected one explored seed-0 workbench fixture with all four diagonal output cells free"
+    );
 }
 
 #[test]

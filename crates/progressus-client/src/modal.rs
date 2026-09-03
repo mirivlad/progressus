@@ -86,6 +86,11 @@ pub(crate) struct RotateWorkbenchInputsButton {
 }
 
 #[derive(Component)]
+pub(crate) struct RotateWorkbenchOutputsButton {
+    workstation_id: EntityId,
+}
+
+#[derive(Component)]
 pub(crate) struct EditProductionZoneButton {
     workstation_id: EntityId,
     kind: ProductionZoneKind,
@@ -116,6 +121,12 @@ pub(crate) struct ModalInteractionQueries<'w, 's> {
         'w,
         's,
         (&'static Interaction, &'static RotateWorkbenchInputsButton),
+        Changed<Interaction>,
+    >,
+    rotate_outputs: Query<
+        'w,
+        's,
+        (&'static Interaction, &'static RotateWorkbenchOutputsButton),
         Changed<Interaction>,
     >,
     edit_zone: Query<
@@ -347,8 +358,6 @@ fn spawn_logistics(
         .production_logistics
         .iter()
         .find(|logistics| logistics.workstation_id == workstation_id);
-    let output_count = logistics.map_or(0, |logistics| logistics.output_cells.len());
-
     panel.spawn(text_bundle(
         locale.tr(TextKey::Logistics),
         font,
@@ -424,12 +433,12 @@ fn spawn_logistics(
                                 position_type: PositionType::Absolute,
                                 left: px(left),
                                 top: px(top),
-                                width: px(10),
-                                height: px(10),
+                                width: px(12),
+                                height: px(12),
                                 border_radius: BorderRadius::MAX,
                                 ..default()
                             },
-                            BackgroundColor(Color::srgb(0.95, 0.62, 0.12)),
+                            BackgroundColor(Color::srgb(0.98, 0.84, 0.12)),
                         ));
                     }
                 }
@@ -462,49 +471,28 @@ fn spawn_logistics(
                             TEXT,
                         ));
                     });
-            });
-        });
-
-    panel
-        .spawn((
-            Node {
-                width: percent(100),
-                padding: UiRect::all(px(10)),
-                justify_content: JustifyContent::SpaceBetween,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(ROW),
-        ))
-        .with_children(|row| {
-            row.spawn(text_bundle(
-                format!("{}: {}", locale.tr(TextKey::OutputZone), output_count),
-                font,
-                15.0,
-                TEXT,
-            ));
-            row.spawn(Node {
-                column_gap: px(7),
-                ..default()
-            })
-            .with_children(|actions| {
-                for (enabled, key) in [(true, TextKey::AddCells), (false, TextKey::RemoveCells)] {
-                    actions
-                        .spawn((
-                            Button,
-                            EditProductionZoneButton {
-                                workstation_id,
-                                kind: ProductionZoneKind::Output,
-                                enabled,
-                            },
-                            UiCapture,
-                            button_node(),
-                            BackgroundColor(BUTTON),
-                        ))
-                        .with_children(|button| {
-                            button.spawn(text_bundle(locale.tr(key), font, 13.0, TEXT));
-                        });
-                }
+                actions.spawn(text_bundle(
+                    locale.tr(TextKey::OutputPorts),
+                    font,
+                    15.0,
+                    TEXT,
+                ));
+                actions
+                    .spawn((
+                        Button,
+                        RotateWorkbenchOutputsButton { workstation_id },
+                        UiCapture,
+                        button_node(),
+                        BackgroundColor(BUTTON),
+                    ))
+                    .with_children(|button| {
+                        button.spawn(text_bundle(
+                            locale.tr(TextKey::RotateOutputs),
+                            font,
+                            13.0,
+                            TEXT,
+                        ));
+                    });
             });
         });
 }
@@ -717,6 +705,7 @@ pub(crate) fn modal_interaction(
         delete,
         remove,
         rotate_inputs,
+        rotate_outputs,
         edit_zone,
     } = interactions;
     if close
@@ -865,6 +854,24 @@ pub(crate) fn modal_interaction(
                 })
         {
             warn!("workstation input rotation rejected: {error}");
+        } else {
+            refresh(&mut authoritative);
+            state.dirty = true;
+        }
+    }
+
+    for (interaction, button) in &rotate_outputs {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        if let Err(error) =
+            authoritative
+                .application_mut()
+                .execute(Command::CycleWorkstationOutputs {
+                    workstation_id: button.workstation_id,
+                })
+        {
+            warn!("workstation output rotation rejected: {error}");
         } else {
             refresh(&mut authoritative);
             state.dirty = true;

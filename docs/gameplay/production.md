@@ -132,7 +132,7 @@ An infinite order must not mean that one workstation owns all future resources. 
 
 Production objects expose explicit physical Input and Output buffers rather than requiring ordinary stockpile ground beside every machine. Supply jobs move only the needed quantity from shared storage into the owning producer's Input zone; completed goods appear in its Output zone and then re-enter ordinary hauling. These zones remain physical ground, not hidden inventories.
 
-The generic logistics model does not imply that every machine exposes free-form painted zones. A producer may define fixed ports or a constrained footprint. The bootstrap Workbench deliberately uses two cardinal Input ports with six rotatable pair layouts, reducing repetitive zone micromanagement while keeping every delivered stack physically located on the map.
+The generic logistics model does not imply that every machine exposes free-form painted zones. A producer may define fixed ports or a constrained footprint. The bootstrap Workbench deliberately uses two cardinal Input ports and two diagonal Output ports; each pair has six independently rotatable layouts. This reduces repetitive zone micromanagement while keeping every delivered and produced stack physically located on the map.
 
 The UI should make the reason for waiting legible: missing inputs, unavailable worker, occupied workstation, or another reservation should be inspectable rather than hidden behind generic inactivity.
 

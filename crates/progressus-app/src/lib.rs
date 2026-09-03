@@ -85,6 +85,9 @@ pub enum Command {
     CycleWorkstationInputs {
         workstation_id: EntityId,
     },
+    CycleWorkstationOutputs {
+        workstation_id: EntityId,
+    },
     RemoveProductionOrder {
         order_id: EntityId,
     },
@@ -179,6 +182,9 @@ impl Application {
                 .set_production_zone_cell(workstation_id, kind, cell, enabled)?,
             Command::CycleWorkstationInputs { workstation_id } => {
                 self.simulation.cycle_workstation_inputs(workstation_id)?;
+            }
+            Command::CycleWorkstationOutputs { workstation_id } => {
+                self.simulation.cycle_workstation_outputs(workstation_id)?;
             }
             Command::RemoveProductionOrder { order_id } => {
                 self.simulation.remove_production_order(order_id)?;
