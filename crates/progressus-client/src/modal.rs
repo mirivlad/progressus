@@ -6,14 +6,19 @@ use progressus_app::{
 };
 
 use crate::i18n::{Locale, TextKey};
+use crate::interaction::TickScheduler;
+use crate::navigation::{SelectedCharacter, VisualMotion};
 use crate::procedural_assets::{ProceduralAssetParams, workstation_asset};
+use crate::render::PresentationCache;
 use crate::runtime::AuthoritativeClient;
+use crate::save_slots::{SaveNotice, SaveSlot, SaveSlotState, SaveStore};
 use crate::ui::{ToolMode, ToolState, UiCapture};
 use crate::ui_font::UiFont;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ModalKind {
     Workstation(EntityId),
+    Saves,
 }
 
 #[derive(Resource, Debug, Default)]
@@ -25,6 +30,11 @@ pub(crate) struct ModalState {
 impl ModalState {
     pub(crate) fn open_workstation(&mut self, workstation_id: EntityId) {
         self.open = Some(ModalKind::Workstation(workstation_id));
+        self.dirty = true;
+    }
+
+    pub(crate) fn open_saves(&mut self) {
+        self.open = Some(ModalKind::Saves);
         self.dirty = true;
     }
 
@@ -41,7 +51,7 @@ impl ModalState {
 #[derive(Resource, Default)]
 pub(crate) struct ModalPresentation {
     root: Option<Entity>,
-    signature: Option<(ModalKind, u64, u64, u64, crate::i18n::Language)>,
+    signature: Option<(ModalKind, u64, u64, u64, u64, crate::i18n::Language)>,
 }
 
 #[derive(Component)]
@@ -97,6 +107,40 @@ pub(crate) struct EditProductionZoneButton {
     enabled: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SaveSlotAction {
+    Save,
+    Load,
+}
+
+#[derive(Component)]
+pub(crate) struct SaveSlotButton {
+    slot: SaveSlot,
+    action: SaveSlotAction,
+}
+
+#[derive(SystemParam)]
+pub(crate) struct SaveModalState<'w> {
+    authoritative: ResMut<'w, AuthoritativeClient>,
+    save_store: ResMut<'w, SaveStore>,
+    modal: ResMut<'w, ModalState>,
+    tool: ResMut<'w, ToolState>,
+    selected: ResMut<'w, SelectedCharacter>,
+    motion: ResMut<'w, VisualMotion>,
+    cache: ResMut<'w, PresentationCache>,
+    scheduler: ResMut<'w, TickScheduler>,
+}
+
+#[derive(SystemParam)]
+pub(crate) struct ModalRenderState<'w> {
+    authoritative: Res<'w, AuthoritativeClient>,
+    save_store: Res<'w, SaveStore>,
+    modal: ResMut<'w, ModalState>,
+    presentation: ResMut<'w, ModalPresentation>,
+    locale: Res<'w, Locale>,
+    font: Res<'w, UiFont>,
+}
+
 #[derive(SystemParam)]
 pub(crate) struct ModalInteractionQueries<'w, 's> {
     close: Query<'w, 's, &'static Interaction, (Changed<Interaction>, With<ModalCloseButton>)>,
@@ -150,49 +194,120 @@ pub(crate) fn modal_keyboard(keys: Res<ButtonInput<KeyCode>>, mut state: ResMut<
     }
 }
 
+pub(crate) fn save_modal_interaction(
+    mut state: SaveModalState,
+    buttons: Query<(&Interaction, &SaveSlotButton), Changed<Interaction>>,
+    locale: Res<Locale>,
+    mut cameras: Query<&mut Transform, With<Camera2d>>,
+) {
+    let Some((_, button)) = buttons
+        .iter()
+        .find(|(interaction, _)| **interaction == Interaction::Pressed)
+    else {
+        return;
+    };
+
+    match button.action {
+        SaveSlotAction::Save => match state.authoritative.save_json() {
+            Ok(bytes) => match state.save_store.save_bytes(button.slot, &bytes) {
+                Ok(()) => {
+                    state.save_store.set_notice(SaveNotice::Saved(button.slot));
+                    state.modal.dirty = true;
+                }
+                Err(error) => {
+                    state.save_store.set_notice(SaveNotice::Error(format!(
+                        "{}: {error}",
+                        locale.tr(TextKey::SaveError)
+                    )));
+                    state.modal.dirty = true;
+                }
+            },
+            Err(error) => {
+                state.save_store.set_notice(SaveNotice::Error(format!(
+                    "{}: {error}",
+                    locale.tr(TextKey::SaveError)
+                )));
+                state.modal.dirty = true;
+            }
+        },
+        SaveSlotAction::Load => {
+            let bytes = match state.save_store.load_bytes(button.slot) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    state.save_store.set_notice(SaveNotice::Error(format!(
+                        "{}: {error}",
+                        locale.tr(TextKey::LoadError)
+                    )));
+                    state.modal.dirty = true;
+                    return;
+                }
+            };
+            if let Err(error) = state.authoritative.load_json(&bytes) {
+                state.save_store.set_notice(SaveNotice::Error(format!(
+                    "{}: {error}",
+                    locale.tr(TextKey::LoadError)
+                )));
+                state.modal.dirty = true;
+                return;
+            }
+
+            state.selected.0 = None;
+            state.motion.clear();
+            state.tool.mode = ToolMode::Select;
+            state.tool.cancel_drag();
+            state.cache.invalidate_loaded_world();
+            *state.scheduler = TickScheduler::default();
+            if let Ok(mut camera) = cameras.single_mut() {
+                camera.translation.x = 0.0;
+                camera.translation.y = 0.0;
+            }
+            state.save_store.set_notice(SaveNotice::Loaded(button.slot));
+            state.modal.close();
+        }
+    }
+}
+
 pub(crate) fn sync_modal(
     mut commands: Commands,
-    authoritative: Res<AuthoritativeClient>,
-    mut state: ResMut<ModalState>,
-    mut presentation: ResMut<ModalPresentation>,
-    locale: Res<Locale>,
-    font: Res<UiFont>,
+    mut state: ModalRenderState,
     mut procedural: ProceduralAssetParams,
 ) {
-    let Some(kind) = state.open else {
-        if let Some(root) = presentation.root.take() {
+    let Some(kind) = state.modal.open else {
+        if let Some(root) = state.presentation.root.take() {
             commands.entity(root).despawn();
         }
-        presentation.signature = None;
-        state.dirty = false;
+        state.presentation.signature = None;
+        state.modal.dirty = false;
         return;
     };
 
     let signature = (
         kind,
-        authoritative.snapshot().production_revision,
-        authoritative.snapshot().workstation_revision,
-        authoritative.snapshot().production_logistics_revision,
-        locale.language,
+        state.authoritative.snapshot().production_revision,
+        state.authoritative.snapshot().workstation_revision,
+        state.authoritative.snapshot().production_logistics_revision,
+        state.save_store.revision(),
+        state.locale.language,
     );
-    if !state.dirty && presentation.signature == Some(signature) {
+    if !state.modal.dirty && state.presentation.signature == Some(signature) {
         return;
     }
-    if let Some(root) = presentation.root.take() {
+    if let Some(root) = state.presentation.root.take() {
         commands.entity(root).despawn();
     }
 
     let root = match kind {
         ModalKind::Workstation(workstation_id) => {
-            let Some(workstation) = authoritative
+            let Some(workstation) = state
+                .authoritative
                 .snapshot()
                 .workstations
                 .iter()
                 .find(|workstation| workstation.id == workstation_id)
                 .copied()
             else {
-                state.close();
-                presentation.signature = None;
+                state.modal.close();
+                state.presentation.signature = None;
                 return;
             };
             let workbench_image = {
@@ -201,19 +316,22 @@ pub(crate) fn sync_modal(
             };
             spawn_workstation_modal(
                 &mut commands,
-                authoritative.snapshot(),
+                state.authoritative.snapshot(),
                 workstation_id,
                 workstation.kind,
-                *locale,
-                &font,
+                *state.locale,
+                &state.font,
                 workbench_image,
             )
         }
+        ModalKind::Saves => {
+            spawn_saves_modal(&mut commands, &state.save_store, *state.locale, &state.font)
+        }
     };
 
-    presentation.root = Some(root);
-    presentation.signature = Some(signature);
-    state.dirty = false;
+    state.presentation.root = Some(root);
+    state.presentation.signature = Some(signature);
+    state.modal.dirty = false;
 }
 
 fn text_bundle(text: impl Into<String>, font: &UiFont, size: f32, color: Color) -> impl Bundle {
@@ -237,6 +355,206 @@ fn button_node() -> Node {
         border: UiRect::all(px(1)),
         ..default()
     }
+}
+
+fn spawn_saves_modal(
+    commands: &mut Commands,
+    save_store: &SaveStore,
+    locale: Locale,
+    font: &UiFont,
+) -> Entity {
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: percent(100),
+                height: percent(100),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
+            GlobalZIndex(100),
+            Interaction::default(),
+            UiCapture,
+        ))
+        .with_children(|backdrop| {
+            backdrop
+                .spawn((
+                    Node {
+                        width: px(620),
+                        min_height: px(340),
+                        padding: UiRect::all(px(16)),
+                        row_gap: px(12),
+                        flex_direction: FlexDirection::Column,
+                        border: UiRect::all(px(1)),
+                        ..default()
+                    },
+                    BackgroundColor(PANEL),
+                    BorderColor::all(Color::srgb(0.30, 0.36, 0.38)),
+                    UiCapture,
+                ))
+                .with_children(|panel| {
+                    panel
+                        .spawn(Node {
+                            width: percent(100),
+                            justify_content: JustifyContent::SpaceBetween,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn(text_bundle(locale.tr(TextKey::Saves), font, 22.0, TEXT));
+                            row.spawn((
+                                Button,
+                                ModalCloseButton,
+                                UiCapture,
+                                button_node(),
+                                BackgroundColor(BUTTON),
+                            ))
+                            .with_children(|button| {
+                                button.spawn(text_bundle(
+                                    locale.tr(TextKey::Close),
+                                    font,
+                                    14.0,
+                                    TEXT,
+                                ));
+                            });
+                        });
+
+                    panel.spawn(text_bundle(
+                        format!(
+                            "{}: {}",
+                            locale.tr(TextKey::SaveDirectory),
+                            save_store.root().display()
+                        ),
+                        font,
+                        12.0,
+                        MUTED,
+                    ));
+
+                    for slot in save_store.slots() {
+                        spawn_save_slot_row(panel, slot, locale, font);
+                    }
+
+                    if let Some(notice) = save_store.notice() {
+                        let (text, color) = match notice {
+                            SaveNotice::Saved(slot) => (
+                                format!("{} {}", locale.tr(TextKey::SavedSlot), slot.number()),
+                                Color::srgb(0.55, 0.92, 0.62),
+                            ),
+                            SaveNotice::Loaded(slot) => (
+                                format!("{} {}", locale.tr(TextKey::LoadedSlot), slot.number()),
+                                Color::srgb(0.55, 0.92, 0.62),
+                            ),
+                            SaveNotice::Error(error) => {
+                                (error.clone(), Color::srgb(1.0, 0.45, 0.42))
+                            }
+                        };
+                        panel.spawn(text_bundle(text, font, 13.0, color));
+                    }
+                });
+        })
+        .id()
+}
+
+fn spawn_save_slot_row(
+    panel: &mut ChildSpawnerCommands,
+    slot: &crate::save_slots::SaveSlotInfo,
+    locale: Locale,
+    font: &UiFont,
+) {
+    panel
+        .spawn((
+            Node {
+                width: percent(100),
+                min_height: px(58),
+                padding: UiRect::all(px(10)),
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Center,
+                column_gap: px(12),
+                ..default()
+            },
+            BackgroundColor(ROW),
+        ))
+        .with_children(|row| {
+            let description = match &slot.state {
+                SaveSlotState::Empty => format!(
+                    "{} {} — {}",
+                    locale.tr(TextKey::SaveSlot),
+                    slot.slot.number(),
+                    locale.tr(TextKey::EmptySlot)
+                ),
+                SaveSlotState::Ready(metadata) => format!(
+                    "{} {} — seed {} · tick {} · save v{}",
+                    locale.tr(TextKey::SaveSlot),
+                    slot.slot.number(),
+                    metadata.world_seed.value(),
+                    metadata.tick.value(),
+                    metadata.format_version
+                ),
+                SaveSlotState::Invalid(error) => format!(
+                    "{} {} — {}\n{}",
+                    locale.tr(TextKey::SaveSlot),
+                    slot.slot.number(),
+                    locale.tr(TextKey::InvalidSlot),
+                    error
+                ),
+            };
+            row.spawn((
+                text_bundle(description, font, 14.0, TEXT),
+                Node {
+                    flex_grow: 1.0,
+                    ..default()
+                },
+            ));
+            row.spawn(Node {
+                column_gap: px(7),
+                align_items: AlignItems::Center,
+                ..default()
+            })
+            .with_children(|actions| {
+                actions
+                    .spawn((
+                        Button,
+                        SaveSlotButton {
+                            slot: slot.slot,
+                            action: SaveSlotAction::Save,
+                        },
+                        UiCapture,
+                        button_node(),
+                        BackgroundColor(BUTTON),
+                    ))
+                    .with_children(|button| {
+                        button.spawn(text_bundle(
+                            locale.tr(TextKey::SaveAction),
+                            font,
+                            13.0,
+                            TEXT,
+                        ));
+                    });
+                if matches!(slot.state, SaveSlotState::Ready(_)) {
+                    actions
+                        .spawn((
+                            Button,
+                            SaveSlotButton {
+                                slot: slot.slot,
+                                action: SaveSlotAction::Load,
+                            },
+                            UiCapture,
+                            button_node(),
+                            BackgroundColor(BUTTON),
+                        ))
+                        .with_children(|button| {
+                            button.spawn(text_bundle(
+                                locale.tr(TextKey::LoadAction),
+                                font,
+                                13.0,
+                                TEXT,
+                            ));
+                        });
+                }
+            });
+        });
 }
 
 fn spawn_workstation_modal(

@@ -2,6 +2,8 @@ use bevy::prelude::*;
 use progressus_app::{EntityId, ProductionZoneKind};
 
 use crate::i18n::{Language, Locale, TextKey};
+use crate::modal::ModalState;
+use crate::save_slots::SaveStore;
 use crate::ui_font::UiFont;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -89,6 +91,10 @@ pub(crate) struct ToolButtonLabel(ToolMode);
 #[derive(Component)]
 pub(crate) struct ToolStatus;
 #[derive(Component)]
+pub(crate) struct SaveMenuButton;
+#[derive(Component)]
+pub(crate) struct SaveMenuButtonLabel;
+#[derive(Component)]
 pub(crate) struct LanguageToggle;
 #[derive(Component)]
 pub(crate) struct LanguageToggleLabel;
@@ -170,6 +176,37 @@ pub(crate) fn setup_toolbar(mut commands: Commands, locale: Res<Locale>, font: R
                 },
                 ToolStatus,
             ));
+
+            toolbar
+                .spawn((
+                    Button,
+                    SaveMenuButton,
+                    UiCapture,
+                    Node {
+                        min_width: px(96),
+                        height: px(36),
+                        margin: UiRect::left(px(8)),
+                        padding: UiRect::horizontal(px(10)),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(px(1)),
+                        ..default()
+                    },
+                    BackgroundColor(NORMAL_BUTTON),
+                    BorderColor::all(Color::srgb(0.30, 0.34, 0.36)),
+                ))
+                .with_children(|button| {
+                    button.spawn((
+                        Text::new(locale.tr(TextKey::Saves)),
+                        TextFont {
+                            font: font.0.clone(),
+                            font_size: 13.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.91, 0.93, 0.94)),
+                        SaveMenuButtonLabel,
+                    ));
+                });
 
             toolbar
                 .spawn((
@@ -270,6 +307,23 @@ pub(crate) fn toolbar_interaction(
     }
 }
 
+pub(crate) fn save_menu_interaction(
+    buttons: Query<&Interaction, (Changed<Interaction>, With<SaveMenuButton>)>,
+    mut modal: ResMut<ModalState>,
+    mut tool: ResMut<ToolState>,
+    mut save_store: ResMut<SaveStore>,
+) {
+    if buttons
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        tool.mode = ToolMode::Select;
+        tool.cancel_drag();
+        save_store.refresh();
+        modal.open_saves();
+    }
+}
+
 pub(crate) fn language_toggle_interaction(
     mut locale: ResMut<Locale>,
     buttons: Query<&Interaction, (Changed<Interaction>, With<LanguageToggle>)>,
@@ -282,16 +336,27 @@ pub(crate) fn language_toggle_interaction(
     }
 }
 
+type SaveMenuLabelFilter = (With<SaveMenuButtonLabel>, Without<ToolButtonLabel>);
+type LanguageLabelFilter = (
+    With<LanguageToggleLabel>,
+    Without<ToolButtonLabel>,
+    Without<SaveMenuButtonLabel>,
+);
+
 pub(crate) fn refresh_toolbar_localization(
     locale: Res<Locale>,
     mut tool_labels: Query<(&ToolButtonLabel, &mut Text)>,
-    mut language_labels: Query<&mut Text, (With<LanguageToggleLabel>, Without<ToolButtonLabel>)>,
+    mut save_labels: Query<&mut Text, SaveMenuLabelFilter>,
+    mut language_labels: Query<&mut Text, LanguageLabelFilter>,
 ) {
     if !locale.is_changed() {
         return;
     }
     for (label, mut text) in &mut tool_labels {
         **text = locale.tr(label.0.text_key()).to_owned();
+    }
+    if let Ok(mut text) = save_labels.single_mut() {
+        **text = locale.tr(TextKey::Saves).to_owned();
     }
     if let Ok(mut text) = language_labels.single_mut() {
         **text = language_target(locale.language).to_owned();

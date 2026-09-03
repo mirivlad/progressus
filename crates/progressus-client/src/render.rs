@@ -81,6 +81,17 @@ pub(crate) struct PresentationCache {
     pub(crate) structures: BTreeMap<EntityId, Entity>,
 }
 
+impl PresentationCache {
+    pub(crate) fn invalidate_loaded_world(&mut self) {
+        self.render_origin = None;
+        self.central_chunk = None;
+        self.visible_window = None;
+        self.exploration_revision = None;
+        self.item_revision = None;
+        self.resource_revision = None;
+    }
+}
+
 #[derive(Resource, Default)]
 pub(crate) struct NavigationDebug(pub(crate) bool);
 

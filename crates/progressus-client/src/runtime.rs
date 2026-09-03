@@ -12,7 +12,10 @@ use progressus_app::{
 
 use crate::i18n::Locale;
 use crate::interaction::{TickScheduler, movement_command};
-use crate::modal::{ModalPresentation, ModalState, modal_interaction, modal_keyboard, sync_modal};
+use crate::modal::{
+    ModalPresentation, ModalState, modal_interaction, modal_keyboard, save_modal_interaction,
+    sync_modal,
+};
 use crate::navigation::{SelectedCharacter, VisualMotion, quantize_local_click, select_nearest};
 use crate::presentation::PresentationError;
 use crate::procedural_assets::ProceduralAssetRegistry;
@@ -21,13 +24,15 @@ use crate::render::{
     draw_production_zones, draw_selected_character, draw_selected_navigation, draw_stockpiles,
     draw_tool_drag, setup_camera, sync_presentation,
 };
+use crate::save_slots::SaveStore;
 use crate::ui::{
-    ToolMode, ToolState, language_toggle_interaction, refresh_toolbar_localization, setup_toolbar,
-    toolbar_interaction, update_ui_capture,
+    ToolMode, ToolState, language_toggle_interaction, refresh_toolbar_localization,
+    save_menu_interaction, setup_toolbar, toolbar_interaction, update_ui_capture,
 };
 use crate::ui_font::setup_ui_font;
 
 impl Resource for TickScheduler {}
+impl Resource for SaveStore {}
 
 #[derive(Resource)]
 pub(crate) struct AuthoritativeClient {
@@ -55,6 +60,19 @@ impl AuthoritativeClient {
 
     pub(crate) fn application_mut(&mut self) -> &mut Application {
         &mut self.application
+    }
+
+    pub(crate) fn save_json(&self) -> Result<Vec<u8>, ClientError> {
+        Ok(self.application.save_json()?)
+    }
+
+    pub(crate) fn load_json(&mut self, bytes: &[u8]) -> Result<(), ClientError> {
+        let application = Application::from_save_json(bytes)?;
+        let snapshot = application.snapshot(SnapshotQuery::default())?;
+        self.application = application;
+        self.snapshot = snapshot;
+        self.snapshot_dirty = true;
+        Ok(())
     }
 
     pub(crate) fn terrain_snapshot(
@@ -818,6 +836,7 @@ pub fn run() -> Result<(), ClientError> {
         .insert_resource(Locale::default())
         .insert_resource(ModalState::default())
         .insert_resource(ModalPresentation::default())
+        .insert_resource(SaveStore::default())
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Progressus — Prototype 01".to_owned(),
@@ -832,25 +851,33 @@ pub fn run() -> Result<(), ClientError> {
         .add_systems(
             Update,
             (
-                language_toggle_interaction,
-                modal_keyboard,
-                modal_interaction,
-                toolbar_interaction,
-                refresh_toolbar_localization,
-                sync_modal,
-                update_ui_capture,
-                pointer_navigation,
-                advance_authority,
-                sync_presentation,
-                crate::render::interpolate_selected_visual,
-                draw_selected_character,
-                draw_selected_navigation,
-                crate::render::draw_navigation_debug,
-                draw_tool_drag,
-                draw_job_designations,
-                draw_production_zones,
-                draw_stockpiles,
-                camera_controls,
+                (
+                    language_toggle_interaction,
+                    modal_keyboard,
+                    save_menu_interaction,
+                    save_modal_interaction,
+                    modal_interaction,
+                    toolbar_interaction,
+                    refresh_toolbar_localization,
+                    sync_modal,
+                    update_ui_capture,
+                    pointer_navigation,
+                )
+                    .chain(),
+                (
+                    advance_authority,
+                    sync_presentation,
+                    crate::render::interpolate_selected_visual,
+                    draw_selected_character,
+                    draw_selected_navigation,
+                    crate::render::draw_navigation_debug,
+                    draw_tool_drag,
+                    draw_job_designations,
+                    draw_production_zones,
+                    draw_stockpiles,
+                    camera_controls,
+                )
+                    .chain(),
             )
                 .chain(),
         )

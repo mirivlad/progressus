@@ -811,3 +811,26 @@ fn rejected_move_to_keeps_the_selected_navigation_snapshot() {
     );
     assert_eq!(application.snapshot(query).unwrap(), before);
 }
+
+#[test]
+fn save_load_crosses_the_public_application_boundary_without_internal_access() {
+    let mut application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(77),
+    })
+    .unwrap();
+    application
+        .execute(Command::AdvanceTicks { count: 37 })
+        .unwrap();
+    let before = application.save_json().unwrap();
+    let metadata = Application::save_metadata(&before).unwrap();
+    assert_eq!(metadata.world_seed, WorldSeed::new(77));
+    assert_eq!(metadata.tick, SimulationTick::new(37));
+
+    let restored = Application::from_save_json(&before).unwrap();
+    assert_eq!(restored.save_json().unwrap(), before);
+
+    let mut corrupted = before.clone();
+    corrupted.truncate(corrupted.len() / 2);
+    assert!(Application::from_save_json(&corrupted).is_err());
+    assert_eq!(application.save_json().unwrap(), before);
+}

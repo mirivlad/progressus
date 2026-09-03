@@ -11,8 +11,9 @@ pub use progressus_sim::{
     InteractionRadius, ItemKind, ItemLocation, ItemQuantity, JobKind, JobState, LocalCell,
     MAX_PRODUCTION_ORDER_RUNS, MovementSpeed, MovementState, NaturalResource, NaturalResourceKind,
     ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind, RecipeId,
-    SUBUNITS_PER_CELL, SimulationTick, Stockpile, Structure, StructureKind, Terrain, Workstation,
-    WorkstationKind, WorldCell, WorldPosition, WorldSeed, WorldgenVersion,
+    SAVE_FORMAT_VERSION, SUBUNITS_PER_CELL, SaveError, SaveMetadata, SimulationTick, Stockpile,
+    Structure, StructureKind, Terrain, Workstation, WorkstationKind, WorldCell, WorldPosition,
+    WorldSeed, WorldgenVersion,
 };
 pub use read_model::{
     CarriedItemSnapshot, CharacterSnapshot, ChunkSnapshot, ClientSnapshot,
@@ -116,6 +117,20 @@ impl Application {
         Ok(Self {
             simulation: Simulation::new(options.seed)?,
         })
+    }
+
+    pub fn save_json(&self) -> Result<Vec<u8>, ApplicationError> {
+        Ok(self.simulation.save_json()?)
+    }
+
+    pub fn from_save_json(bytes: &[u8]) -> Result<Self, ApplicationError> {
+        Ok(Self {
+            simulation: Simulation::load_json(bytes)?,
+        })
+    }
+
+    pub fn save_metadata(bytes: &[u8]) -> Result<SaveMetadata, ApplicationError> {
+        Ok(Simulation::save_metadata(bytes)?)
     }
 
     pub fn execute(&mut self, command: Command) -> Result<(), ApplicationError> {
@@ -362,12 +377,14 @@ impl Application {
 #[derive(Debug)]
 pub enum ApplicationError {
     Simulation(SimulationError),
+    Save(SaveError),
 }
 
 impl Display for ApplicationError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::Simulation(error) => Display::fmt(error, formatter),
+            Self::Save(error) => Display::fmt(error, formatter),
         }
     }
 }
@@ -376,6 +393,7 @@ impl Error for ApplicationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Simulation(error) => Some(error),
+            Self::Save(error) => Some(error),
         }
     }
 }
@@ -383,6 +401,12 @@ impl Error for ApplicationError {
 impl From<SimulationError> for ApplicationError {
     fn from(error: SimulationError) -> Self {
         Self::Simulation(error)
+    }
+}
+
+impl From<SaveError> for ApplicationError {
+    fn from(error: SaveError) -> Self {
+        Self::Save(error)
     }
 }
 

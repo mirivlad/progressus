@@ -6,6 +6,7 @@ pub mod presentation;
 mod procedural_assets;
 mod render;
 mod runtime;
+mod save_slots;
 mod tile_connectivity;
 mod ui;
 mod ui_font;
