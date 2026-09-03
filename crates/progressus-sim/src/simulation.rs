@@ -158,8 +158,9 @@ impl Simulation {
             self.clock.advance(1)?;
             self.advance_characters_one_tick()?;
             self.maintain_construction_jobs()?;
-            self.maintain_haul_jobs()?;
             self.maintain_craft_jobs()?;
+            self.maintain_craft_supply_jobs()?;
+            self.maintain_haul_jobs()?;
             self.advance_jobs_one_tick()?;
         }
 
@@ -893,25 +894,126 @@ impl Simulation {
             .is_some_and(|combined| combined <= MAX_STACK_QUANTITY)
     }
 
+    fn stockpile_merge_capacity(
+        &self,
+        item_id: EntityId,
+        destination: WorldCell,
+    ) -> Option<(EntityId, u32)> {
+        let item = self.item_world.get(item_id)?;
+        let mut occupants = self.item_world.iter().filter(|other| {
+            other.id() != item_id
+                && other
+                    .ground_position()
+                    .is_some_and(|position| position.containing_cell() == destination)
+        });
+        let existing = occupants.next()?;
+        if occupants.next().is_some() || existing.kind() != item.kind() {
+            return None;
+        }
+        let capacity = MAX_STACK_QUANTITY.saturating_sub(existing.quantity().get());
+        (capacity > 0).then_some((existing.id(), capacity))
+    }
+
     fn stockpile_merge_target(
         &self,
         item_id: EntityId,
         destination: WorldCell,
     ) -> Option<EntityId> {
         let item = self.item_world.get(item_id)?;
-        self.item_world.iter().find_map(|other| {
-            (other.id() != item_id
-                && other.kind() == item.kind()
-                && other
-                    .ground_position()
-                    .is_some_and(|position| position.containing_cell() == destination)
-                && other
-                    .quantity()
-                    .get()
-                    .checked_add(item.quantity().get())
-                    .is_some_and(|combined| combined <= MAX_STACK_QUANTITY))
-            .then_some(other.id())
-        })
+        let (target_id, capacity) = self.stockpile_merge_capacity(item_id, destination)?;
+        (item.quantity().get() <= capacity).then_some(target_id)
+    }
+
+    fn stockpile_destination_for_item(
+        &self,
+        item_id: EntityId,
+        allow_empty: bool,
+    ) -> Result<Option<(EntityId, WorldCell, u32)>, SimulationError> {
+        let Some(item) = self.item_world.get(item_id) else {
+            return Ok(None);
+        };
+        let quantity = item.quantity().get();
+
+        // First pass always prefers filling an existing compatible stack,
+        // even when only part of the source fits. The caller splits that
+        // exact amount before creating the physical Haul job.
+        for stockpile in self.stockpile_world.iter() {
+            for cell in stockpile.cells() {
+                if self.job_world.haul_job_for_destination(cell).is_some()
+                    || !self.is_walkable(cell)?
+                {
+                    continue;
+                }
+                if let Some((_target_id, capacity)) = self.stockpile_merge_capacity(item_id, cell) {
+                    return Ok(Some((stockpile.id(), cell, quantity.min(capacity))));
+                }
+            }
+        }
+
+        if !allow_empty {
+            return Ok(None);
+        }
+        for stockpile in self.stockpile_world.iter() {
+            for cell in stockpile.cells() {
+                if self.job_world.haul_job_for_destination(cell).is_some()
+                    || !self.is_walkable(cell)?
+                {
+                    continue;
+                }
+                let occupied = self.item_world.iter().any(|other| {
+                    other.id() != item_id
+                        && other
+                            .ground_position()
+                            .is_some_and(|position| position.containing_cell() == cell)
+                });
+                if !occupied {
+                    return Ok(Some((stockpile.id(), cell, quantity)));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn stockpile_consolidation_destination(
+        &self,
+        item_id: EntityId,
+    ) -> Result<Option<(EntityId, WorldCell, u32)>, SimulationError> {
+        let Some(item) = self.item_world.get(item_id) else {
+            return Ok(None);
+        };
+        let Some(source_position) = item.ground_position() else {
+            return Ok(None);
+        };
+        let source_cell = source_position.containing_cell();
+        let Some(stockpile_id) = self.stockpile_world.stockpile_at(source_cell) else {
+            return Ok(None);
+        };
+        let Some(stockpile) = self.stockpile_world.get(stockpile_id) else {
+            return Ok(None);
+        };
+
+        // Only move a higher stable ID into a lower one. This canonical
+        // direction prevents underfilled stacks from ping-ponging between
+        // cells on successive maintenance ticks.
+        for cell in stockpile.cells() {
+            if cell == source_cell
+                || self.job_world.haul_job_for_destination(cell).is_some()
+                || !self.is_walkable(cell)?
+            {
+                continue;
+            }
+            let Some((target_id, capacity)) = self.stockpile_merge_capacity(item_id, cell) else {
+                continue;
+            };
+            if target_id < item_id {
+                return Ok(Some((
+                    stockpile_id,
+                    cell,
+                    item.quantity().get().min(capacity),
+                )));
+            }
+        }
+        Ok(None)
     }
 
     fn maintain_construction_jobs(&mut self) -> Result<(), SimulationError> {
@@ -1071,6 +1173,242 @@ impl Simulation {
         }
     }
 
+    fn craft_local_quantity(&self, workstation_cell: WorldCell, kind: ItemKind) -> u32 {
+        self.item_world
+            .iter()
+            .filter(|item| item.kind() == kind)
+            .filter(|item| self.job_world.haul_job_for_item(item.id()).is_none())
+            .filter(|item| self.job_world.craft_job_for_item(item.id()).is_none())
+            .filter(|item| {
+                self.construction_world
+                    .site_for_material(item.id())
+                    .is_none()
+            })
+            .filter(|item| {
+                item.ground_position().is_some_and(|position| {
+                    let cell = position.containing_cell();
+                    self.stockpile_world.stockpile_at(cell).is_some()
+                        && cell_manhattan_distance(cell, workstation_cell) <= 1
+                })
+            })
+            .map(|item| item.quantity().get())
+            .fold(0_u32, u32::saturating_add)
+    }
+
+    fn craft_incoming_quantity(&self, workstation_cell: WorldCell, kind: ItemKind) -> u32 {
+        self.job_world
+            .iter()
+            .filter_map(|job| match job.kind() {
+                JobKind::Haul {
+                    item_id,
+                    destination,
+                    ..
+                } if cell_manhattan_distance(destination, workstation_cell) <= 1 => {
+                    self.item_world.get(item_id)
+                }
+                _ => None,
+            })
+            .filter(|item| item.kind() == kind)
+            .map(|item| item.quantity().get())
+            .fold(0_u32, u32::saturating_add)
+    }
+
+    fn craft_staging_destination(
+        &self,
+        workstation_cell: WorldCell,
+        kind: ItemKind,
+        quantity: u32,
+    ) -> Result<Option<(EntityId, WorldCell)>, SimulationError> {
+        for merge_only in [true, false] {
+            for stockpile in self.stockpile_world.iter() {
+                for cell in stockpile.cells() {
+                    if cell_manhattan_distance(cell, workstation_cell) > 1
+                        || self.job_world.haul_job_for_destination(cell).is_some()
+                        || !self.is_walkable(cell)?
+                    {
+                        continue;
+                    }
+                    let occupants = self
+                        .item_world
+                        .iter()
+                        .filter(|item| {
+                            item.ground_position()
+                                .is_some_and(|position| position.containing_cell() == cell)
+                        })
+                        .collect::<Vec<_>>();
+                    let acceptable = match occupants.as_slice() {
+                        [] => !merge_only,
+                        [existing] => {
+                            existing.kind() == kind
+                                && self.job_world.haul_job_for_item(existing.id()).is_none()
+                                && self.job_world.craft_job_for_item(existing.id()).is_none()
+                                && self
+                                    .construction_world
+                                    .site_for_material(existing.id())
+                                    .is_none()
+                                && existing
+                                    .quantity()
+                                    .get()
+                                    .checked_add(quantity)
+                                    .is_some_and(|combined| combined <= MAX_STACK_QUANTITY)
+                        }
+                        _ => false,
+                    };
+                    if acceptable {
+                        return Ok(Some((stockpile.id(), cell)));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn craft_supply_source(
+        &self,
+        workstation_cell: WorldCell,
+        kind: ItemKind,
+    ) -> Option<(EntityId, u32)> {
+        let mut candidates = self
+            .item_world
+            .iter()
+            .filter_map(|item| {
+                if item.kind() != kind
+                    || self.job_world.haul_job_for_item(item.id()).is_some()
+                    || self.job_world.craft_job_for_item(item.id()).is_some()
+                    || self
+                        .construction_world
+                        .site_for_material(item.id())
+                        .is_some()
+                {
+                    return None;
+                }
+                let position = item.ground_position()?;
+                let cell = position.containing_cell();
+                (self.stockpile_world.stockpile_at(cell).is_some()
+                    && cell_manhattan_distance(cell, workstation_cell) > 1)
+                    .then_some((
+                        cell_manhattan_distance(cell, workstation_cell),
+                        item.id(),
+                        item.quantity().get(),
+                    ))
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_unstable();
+        candidates
+            .into_iter()
+            .next()
+            .map(|(_, item_id, quantity)| (item_id, quantity))
+    }
+
+    fn maintain_craft_supply_jobs(&mut self) -> Result<(), SimulationError> {
+        let waiting = self
+            .job_world
+            .iter()
+            .filter_map(|job| match (job.kind(), job.state()) {
+                (
+                    JobKind::Craft {
+                        workstation_id,
+                        recipe_id,
+                        ..
+                    },
+                    JobState::Available,
+                ) => Some((job.id(), workstation_id, recipe_id)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        // Job IDs are stable and monotonic, so older waiting production gets
+        // first access to a newly scarce shared input. A completed infinite
+        // order creates a newer Craft job and naturally yields to an older
+        // waiting workstation before taking another scarce batch.
+        for (_job_id, workstation_id, recipe_id) in waiting {
+            let Some(workstation) = self.workstation_world.get(workstation_id) else {
+                continue;
+            };
+            let workstation_cell = workstation.cell();
+            let recipe = recipe_definition(recipe_id);
+            for requirement in recipe.inputs {
+                let local = self.craft_local_quantity(workstation_cell, requirement.kind);
+                let incoming = self.craft_incoming_quantity(workstation_cell, requirement.kind);
+                let mut missing = requirement
+                    .quantity
+                    .saturating_sub(local.saturating_add(incoming));
+                while missing > 0 {
+                    let Some((source_id, source_quantity)) =
+                        self.craft_supply_source(workstation_cell, requirement.kind)
+                    else {
+                        break;
+                    };
+                    let move_quantity = missing.min(source_quantity);
+                    let Some((stockpile_id, destination)) = self.craft_staging_destination(
+                        workstation_cell,
+                        requirement.kind,
+                        move_quantity,
+                    )?
+                    else {
+                        break;
+                    };
+                    let item_id = if move_quantity < source_quantity {
+                        let split_id = self.id_allocator.allocate()?;
+                        self.item_world
+                            .split_ground_stack(source_id, split_id, move_quantity)
+                            .map_err(|_| SimulationError::JobInvariantViolation)?;
+                        split_id
+                    } else {
+                        source_id
+                    };
+                    let haul_id = self.id_allocator.allocate()?;
+                    self.job_world
+                        .insert(Job::new(
+                            haul_id,
+                            JobKind::Haul {
+                                item_id,
+                                stockpile_id,
+                                destination,
+                            },
+                        ))
+                        .map_err(SimulationError::from_job_world)?;
+                    missing -= move_quantity;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn item_is_local_input_for_waiting_craft(&self, item_id: EntityId) -> bool {
+        let Some(item) = self.item_world.get(item_id) else {
+            return false;
+        };
+        let Some(position) = item.ground_position() else {
+            return false;
+        };
+        let cell = position.containing_cell();
+        if self.stockpile_world.stockpile_at(cell).is_none() {
+            return false;
+        }
+        self.job_world.iter().any(|job| {
+            let JobKind::Craft {
+                workstation_id,
+                recipe_id,
+                ..
+            } = job.kind()
+            else {
+                return false;
+            };
+            if job.state() != JobState::Available {
+                return false;
+            }
+            let Some(workstation) = self.workstation_world.get(workstation_id) else {
+                return false;
+            };
+            cell_manhattan_distance(cell, workstation.cell()) <= 1
+                && recipe_definition(recipe_id)
+                    .inputs
+                    .iter()
+                    .any(|requirement| requirement.kind == item.kind())
+        })
+    }
+
     fn maintain_haul_jobs(&mut self) -> Result<(), SimulationError> {
         let existing_haul_jobs = self
             .job_world
@@ -1106,9 +1444,8 @@ impl Simulation {
                     .is_some_and(|item| item.carrier() == Some(worker_id)),
                 _ => self.item_world.get(item_id).is_some_and(|item| {
                     item.ground_position().is_some_and(|position| {
-                        self.stockpile_world
-                            .stockpile_at(position.containing_cell())
-                            .is_none()
+                        self.is_explored(position.containing_cell())
+                            && position.containing_cell() != destination
                     })
                 }),
             };
@@ -1117,46 +1454,54 @@ impl Simulation {
             }
         }
 
-        let candidate_items = self
+        let available_ground_items = self
             .item_world
             .iter()
             .filter_map(|item| {
                 let position = item.ground_position()?;
-                let cell = position.containing_cell();
-                (self.is_explored(cell)
-                    && self.stockpile_world.stockpile_at(cell).is_none()
+                (self.is_explored(position.containing_cell())
                     && self.job_world.haul_job_for_item(item.id()).is_none()
                     && self.job_world.craft_job_for_item(item.id()).is_none()
+                    && !self.item_is_local_input_for_waiting_craft(item.id())
                     && self
                         .construction_world
                         .site_for_material(item.id())
                         .is_none())
-                .then_some(item.id())
+                .then_some((item.id(), position.containing_cell()))
             })
             .collect::<Vec<_>>();
-        for item_id in candidate_items {
-            let mut destination = None;
-            'stockpiles: for stockpile in self.stockpile_world.iter() {
-                for cell in stockpile.cells() {
-                    if self.job_world.haul_job_for_destination(cell).is_some()
-                        || !self.is_walkable(cell)?
-                        || !self.stockpile_destination_accepts_item(item_id, cell)
-                    {
-                        continue;
-                    }
-                    destination = Some((stockpile.id(), cell));
-                    break 'stockpiles;
-                }
-            }
-            let Some((stockpile_id, destination)) = destination else {
+
+        for (item_id, source_cell) in available_ground_items {
+            let source_stockpile = self.stockpile_world.stockpile_at(source_cell);
+            let destination = if source_stockpile.is_some() {
+                self.stockpile_consolidation_destination(item_id)?
+            } else {
+                self.stockpile_destination_for_item(item_id, true)?
+            };
+            let Some((stockpile_id, destination, move_quantity)) = destination else {
                 continue;
+            };
+            let source_quantity = self
+                .item_world
+                .get(item_id)
+                .expect("candidate item is still live")
+                .quantity()
+                .get();
+            let haul_item_id = if move_quantity < source_quantity {
+                let split_id = self.id_allocator.allocate()?;
+                self.item_world
+                    .split_ground_stack(item_id, split_id, move_quantity)
+                    .map_err(|_| SimulationError::JobInvariantViolation)?;
+                split_id
+            } else {
+                item_id
             };
             let job_id = self.id_allocator.allocate()?;
             self.job_world
                 .insert(Job::new(
                     job_id,
                     JobKind::Haul {
-                        item_id,
+                        item_id: haul_item_id,
                         stockpile_id,
                         destination,
                     },
@@ -1337,14 +1682,6 @@ impl Simulation {
             self.cancel_job(job_id)?;
             return Ok(());
         };
-        if self
-            .stockpile_world
-            .stockpile_at(item_position.containing_cell())
-            .is_some()
-        {
-            self.cancel_job(job_id)?;
-            return Ok(());
-        }
         for worker_id in self.available_workers_by_distance(item_position.containing_cell()) {
             let route = match self.plan_navigation_route(worker_id, item_position) {
                 Ok(route) => route,
@@ -4438,6 +4775,260 @@ mod tests {
         );
         assert!(simulation.job_world.indexes_are_consistent());
         assert!(simulation.production_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn haul_prefers_a_compatible_partial_stack_before_an_empty_stockpile_cell() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let target_id = EntityId::new(6).unwrap();
+        let source_id = EntityId::new(8).unwrap();
+        let target_cell = simulation
+            .item_world
+            .get(target_id)
+            .unwrap()
+            .ground_position()
+            .unwrap()
+            .containing_cell();
+        let empty_cell = empty_stockpile_cells(&simulation, 1)[0];
+        let stockpile_id = simulation.create_stockpile(empty_cell).unwrap();
+        simulation
+            .set_stockpile_cell(stockpile_id, target_cell, true)
+            .unwrap();
+
+        assert_eq!(
+            simulation
+                .stockpile_destination_for_item(source_id, true)
+                .unwrap(),
+            Some((stockpile_id, target_cell, 10)),
+        );
+    }
+
+    #[test]
+    fn stockpile_fills_partial_capacity_before_leaving_a_remainder_stack() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let bootstrap_items = simulation
+            .items()
+            .map(|item| (item.id(), item.quantity().get()))
+            .collect::<Vec<_>>();
+        for (item_id, quantity) in bootstrap_items {
+            simulation.item_world.consume(item_id, quantity).unwrap();
+        }
+        let cells = empty_stockpile_cells(&simulation, 2);
+        let stockpile_id = simulation.create_stockpile(cells[0]).unwrap();
+        simulation
+            .set_stockpile_cell(stockpile_id, cells[1], true)
+            .unwrap();
+        let target_id = simulation.id_allocator.allocate().unwrap();
+        let source_id = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .item_world
+            .insert_ground(ItemStack::new_ground(
+                target_id,
+                ItemKind::Wood,
+                ItemQuantity::new(1020).unwrap(),
+                WorldPosition::from_cell_center(cells[0]).unwrap(),
+            ))
+            .unwrap();
+        simulation
+            .item_world
+            .insert_ground(ItemStack::new_ground(
+                source_id,
+                ItemKind::Wood,
+                ItemQuantity::new(10).unwrap(),
+                WorldPosition::from_cell_center(cells[1]).unwrap(),
+            ))
+            .unwrap();
+
+        for _ in 0..256 {
+            simulation.advance_ticks(1).unwrap();
+            if simulation
+                .item_world
+                .get(target_id)
+                .is_some_and(|item| item.quantity().get() == MAX_STACK_QUANTITY)
+            {
+                break;
+            }
+        }
+
+        assert_eq!(
+            simulation
+                .item_world
+                .get(target_id)
+                .unwrap()
+                .quantity()
+                .get(),
+            MAX_STACK_QUANTITY
+        );
+        assert_eq!(
+            simulation
+                .item_world
+                .get(source_id)
+                .unwrap()
+                .quantity()
+                .get(),
+            6
+        );
+        assert_eq!(
+            simulation
+                .items()
+                .filter(|item| item.kind() == ItemKind::Wood)
+                .map(|item| item.quantity().get())
+                .sum::<u32>(),
+            1030
+        );
+        assert!(simulation.item_world.indexes_are_consistent());
+        assert!(simulation.job_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn stockpile_compacts_same_kind_stacks_until_one_stack_holds_the_total() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let cells = [
+            WorldCell::new(-2, 0),
+            WorldCell::new(-1, 0),
+            WorldCell::new(1, 0),
+            WorldCell::new(2, 0),
+        ];
+        let stockpile_id = simulation.create_stockpile(cells[0]).unwrap();
+        for cell in cells.into_iter().skip(1) {
+            simulation
+                .set_stockpile_cell(stockpile_id, cell, true)
+                .unwrap();
+        }
+
+        for _ in 0..512 {
+            simulation.advance_ticks(1).unwrap();
+            let wood = simulation
+                .items()
+                .filter(|item| item.kind() == ItemKind::Wood)
+                .count();
+            let stone = simulation
+                .items()
+                .filter(|item| item.kind() == ItemKind::Stone)
+                .count();
+            if wood == 1 && stone == 1 {
+                break;
+            }
+        }
+
+        let wood = simulation
+            .items()
+            .filter(|item| item.kind() == ItemKind::Wood)
+            .collect::<Vec<_>>();
+        let stone = simulation
+            .items()
+            .filter(|item| item.kind() == ItemKind::Stone)
+            .collect::<Vec<_>>();
+        assert_eq!(wood.len(), 1);
+        assert_eq!(wood[0].quantity().get(), 18);
+        assert_eq!(stone.len(), 1);
+        assert_eq!(stone[0].quantity().get(), 14);
+        assert!(simulation.item_world.indexes_are_consistent());
+        assert!(simulation.job_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn production_physically_supplies_exact_recipe_amounts_from_distant_stockpile_cells() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let stockpile_id = simulation.create_stockpile(WorldCell::new(-2, 0)).unwrap();
+        for cell in [
+            WorldCell::new(-1, 0),
+            WorldCell::new(1, 0),
+            WorldCell::new(2, 0),
+            WorldCell::new(-1, 1),
+            WorldCell::new(1, 1),
+            WorldCell::new(0, 0),
+            WorldCell::new(0, 2),
+        ] {
+            simulation
+                .set_stockpile_cell(stockpile_id, cell, true)
+                .unwrap();
+        }
+        let workstation_id = simulation
+            .place_workstation(WorkstationKind::Workbench, WorldCell::new(0, 1))
+            .unwrap();
+        simulation
+            .add_production_order(
+                workstation_id,
+                RecipeId::PrimitiveTool,
+                ProductionTarget::finite(1),
+            )
+            .unwrap();
+        let initial_wood = simulation
+            .items()
+            .filter(|item| item.kind() == ItemKind::Wood)
+            .map(|item| item.quantity().get())
+            .sum::<u32>();
+        let initial_stone = simulation
+            .items()
+            .filter(|item| item.kind() == ItemKind::Stone)
+            .map(|item| item.quantity().get())
+            .sum::<u32>();
+        let mut saw_exact_wood_delivery = false;
+        let mut saw_exact_stone_delivery = false;
+
+        for _ in 0..1024 {
+            simulation.advance_ticks(1).unwrap();
+            saw_exact_wood_delivery |= simulation.jobs().any(|job| match job.kind() {
+                JobKind::Haul {
+                    item_id,
+                    destination,
+                    ..
+                } if cell_manhattan_distance(destination, WorldCell::new(0, 1)) <= 1 => {
+                    simulation.item_world.get(item_id).is_some_and(|item| {
+                        item.kind() == ItemKind::Wood && item.quantity().get() == 2
+                    })
+                }
+                _ => false,
+            });
+            saw_exact_stone_delivery |= simulation.jobs().any(|job| match job.kind() {
+                JobKind::Haul {
+                    item_id,
+                    destination,
+                    ..
+                } if cell_manhattan_distance(destination, WorldCell::new(0, 1)) <= 1 => {
+                    simulation.item_world.get(item_id).is_some_and(|item| {
+                        item.kind() == ItemKind::Stone && item.quantity().get() == 1
+                    })
+                }
+                _ => false,
+            });
+            if simulation
+                .items()
+                .any(|item| item.kind() == ItemKind::PrimitiveTool)
+            {
+                break;
+            }
+        }
+
+        assert!(saw_exact_wood_delivery);
+        assert!(saw_exact_stone_delivery);
+        assert_eq!(
+            simulation
+                .items()
+                .filter(|item| item.kind() == ItemKind::PrimitiveTool)
+                .map(|item| item.quantity().get())
+                .sum::<u32>(),
+            1
+        );
+        assert_eq!(
+            simulation
+                .items()
+                .filter(|item| item.kind() == ItemKind::Wood)
+                .map(|item| item.quantity().get())
+                .sum::<u32>(),
+            initial_wood - 2
+        );
+        assert_eq!(
+            simulation
+                .items()
+                .filter(|item| item.kind() == ItemKind::Stone)
+                .map(|item| item.quantity().get())
+                .sum::<u32>(),
+            initial_stone - 1
+        );
+        assert!(simulation.item_world.indexes_are_consistent());
+        assert!(simulation.job_world.indexes_are_consistent());
     }
 
     #[test]

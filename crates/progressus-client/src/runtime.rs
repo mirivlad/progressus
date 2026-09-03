@@ -269,7 +269,17 @@ pub(crate) fn pointer_navigation(
     }
 
     if buttons.just_pressed(MouseButton::Left) {
-        let character = select_nearest(
+        // A workstation owns its whole coarse cell for pointer hit-testing.
+        // Check it before the character-radius picker so a worker walking or
+        // crafting beside the bench cannot make the bench intermittently
+        // impossible to open.
+        if let Some(workstation_id) =
+            workstation_at(authoritative.snapshot(), target.containing_cell())
+        {
+            selected.0 = None;
+            motion.clear();
+            modal.open_workstation(workstation_id);
+        } else if let Some(character_id) = select_nearest(
             authoritative
                 .snapshot()
                 .characters
@@ -277,15 +287,8 @@ pub(crate) fn pointer_navigation(
                 .map(|character| (character.id, character.position)),
             target,
             progressus_app::SUBUNITS_PER_CELL / 2,
-        );
-        if let Some(character_id) = character {
+        ) {
             selected.0 = Some(character_id);
-        } else if let Some(workstation_id) =
-            workstation_at(authoritative.snapshot(), target.containing_cell())
-        {
-            selected.0 = None;
-            motion.clear();
-            modal.open_workstation(workstation_id);
         } else {
             selected.0 = None;
             motion.clear();

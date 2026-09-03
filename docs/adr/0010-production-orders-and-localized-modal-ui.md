@@ -22,7 +22,7 @@ Only one Craft job may be active for a workstation at a time. Pending orders are
 
 When two workstations can use the same stockpiled input, the first job that successfully reserves it owns that input until release or consumption. The other job waits. Completed infinite work creates a later job ID while an already-waiting competing job keeps its earlier ID, which prevents the simple shared-input case from starving one workstation indefinitely. This behavior has a regression test.
 
-Crafting does not shuttle ingredients between workstations. The current bootstrap consumes only physical stacks lying on designated stockpile ground within Manhattan distance 1 of the workstation. Ordinary Haul moves non-stockpiled items into stockpiles under its own rules.
+Crafting does not teleport ingredients or shuttle a whole shared source stack between workstations. Craft consumes physical stacks on designated stockpile ground within Manhattan distance 1 of the workstation. If a pending job lacks a local ingredient, production supply splits only the missing recipe quantity from an available distant stockpiled stack and sends that split batch through an ordinary Haul job to an adjacent staging stockpile cell. Stable job ordering plus concrete item reservations preserve deterministic arbitration between competing finite or infinite orders.
 
 ## UI decision
 

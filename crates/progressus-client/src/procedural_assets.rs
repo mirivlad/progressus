@@ -9,6 +9,8 @@ use progressus_app::{
     EntityId, ItemKind, NaturalResourceKind, StructureKind, Terrain, WorkstationKind, WorldCell,
 };
 
+use crate::tile_connectivity::CardinalConnections;
+
 const ART_PIXELS: u32 = 16;
 const VARIANT_COUNT: u8 = 8;
 const QUANTITY_PIXEL_WORLD_SIZE: f32 = 0.5;
@@ -43,6 +45,13 @@ impl ProceduralAssetKey {
         Self {
             kind,
             variant: variant % VARIANT_COUNT,
+        }
+    }
+
+    const fn topology(kind: ProceduralAssetKind, connections: CardinalConnections) -> Self {
+        Self {
+            kind,
+            variant: connections.bits() & 0x0f,
         }
     }
 }
@@ -139,18 +148,24 @@ pub(crate) fn workstation_asset(kind: WorkstationKind, id: EntityId) -> Procedur
     ProceduralAssetKey::new(kind, variant_for_entity(id))
 }
 
-pub(crate) fn construction_site_asset(kind: StructureKind, id: EntityId) -> ProceduralAssetKey {
+pub(crate) fn construction_site_asset(
+    kind: StructureKind,
+    connections: CardinalConnections,
+) -> ProceduralAssetKey {
     let kind = match kind {
         StructureKind::StoneWall => ProceduralAssetKind::StoneWallBlueprint,
     };
-    ProceduralAssetKey::new(kind, variant_for_entity(id))
+    ProceduralAssetKey::topology(kind, connections)
 }
 
-pub(crate) fn structure_asset(kind: StructureKind, id: EntityId) -> ProceduralAssetKey {
+pub(crate) fn structure_asset(
+    kind: StructureKind,
+    connections: CardinalConnections,
+) -> ProceduralAssetKey {
     let kind = match kind {
         StructureKind::StoneWall => ProceduralAssetKind::StoneWall,
     };
-    ProceduralAssetKey::new(kind, variant_for_entity(id))
+    ProceduralAssetKey::topology(kind, connections)
 }
 
 pub(crate) fn resource_asset(kind: NaturalResourceKind, cell: WorldCell) -> ProceduralAssetKey {

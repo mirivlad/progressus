@@ -1,40 +1,90 @@
 use super::{Canvas, Rgba8};
 
-pub(super) fn stone_wall_blueprint(canvas: &mut Canvas, variant: u8) {
-    const LINE: Rgba8 = Rgba8::rgba(84, 220, 238, 220);
-    const FAINT: Rgba8 = Rgba8::rgba(84, 220, 238, 70);
-    canvas.rect(2, 3, 12, 10, FAINT);
-    for x in (2..14).step_by(2) {
-        canvas.pixel(x, 3, LINE);
-        canvas.pixel(x, 12, LINE);
-    }
-    for y in (3..13).step_by(2) {
-        canvas.pixel(2, y, LINE);
-        canvas.pixel(13, y, LINE);
-    }
-    let shift = i32::from(variant & 1);
-    canvas.line(4, 10, 11 + shift, 5, LINE);
-    canvas.line(4, 5, 11 + shift, 10, LINE);
+const NORTH: u8 = 1 << 0;
+const EAST: u8 = 1 << 1;
+const SOUTH: u8 = 1 << 2;
+const WEST: u8 = 1 << 3;
+
+pub(super) fn stone_wall_blueprint(canvas: &mut Canvas, connections: u8) {
+    const LINE: Rgba8 = Rgba8::rgba(84, 220, 238, 225);
+    const FAINT: Rgba8 = Rgba8::rgba(84, 220, 238, 72);
+    connected_body(canvas, connections, FAINT);
+    connected_edges(canvas, connections, LINE);
+    canvas.line(5, 10, 10, 5, LINE);
+    canvas.line(5, 5, 10, 10, LINE);
 }
 
-pub(super) fn stone_wall(canvas: &mut Canvas, variant: u8) {
+pub(super) fn stone_wall(canvas: &mut Canvas, connections: u8) {
     const OUTLINE: Rgba8 = Rgba8::rgb(47, 49, 53);
     const DARK: Rgba8 = Rgba8::rgb(91, 96, 101);
     const MID: Rgba8 = Rgba8::rgb(139, 145, 149);
     const LIGHT: Rgba8 = Rgba8::rgb(187, 190, 188);
-    canvas.rect(1, 3, 14, 10, OUTLINE);
-    canvas.rect(2, 4, 12, 8, MID);
-    for y in [7, 10] {
-        canvas.rect(2, y, 12, 1, DARK);
+
+    connected_body(canvas, connections, OUTLINE);
+    connected_inset(canvas, connections, MID);
+
+    // A few stable masonry joints. The connected arms deliberately reach the
+    // canvas edge so adjacent cardinal tiles meet without presentation gaps.
+    canvas.rect(4, 7, 8, 1, DARK);
+    canvas.rect(7, 4, 1, 8, DARK);
+    if connections & (EAST | WEST) != 0 {
+        canvas.rect(0, 7, 16, 1, DARK);
+        canvas.line(0, 5, 15, 5, LIGHT);
     }
-    let offset = i32::from(variant & 1) * 2;
-    for x in [5 + offset, 10] {
-        canvas.rect(x, 4, 1, 3, DARK);
+    if connections & (NORTH | SOUTH) != 0 {
+        canvas.rect(7, 0, 1, 16, DARK);
+        canvas.line(5, 0, 5, 15, LIGHT);
     }
-    for x in [3 + offset, 8, 12] {
-        canvas.rect(x, 8, 1, 3, DARK);
+    canvas.line(5, 4, 10, 4, LIGHT);
+}
+
+fn connected_body(canvas: &mut Canvas, connections: u8, color: Rgba8) {
+    canvas.rect(3, 3, 10, 10, color);
+    if connections & NORTH != 0 {
+        canvas.rect(3, 8, 10, 8, color);
     }
-    canvas.line(3, 4, 12, 4, LIGHT);
-    canvas.pixel(3, 5, LIGHT);
-    canvas.ellipse(8, 13, 6, 1, Rgba8::rgba(10, 10, 10, 90));
+    if connections & EAST != 0 {
+        canvas.rect(8, 3, 8, 10, color);
+    }
+    if connections & SOUTH != 0 {
+        canvas.rect(3, 0, 10, 8, color);
+    }
+    if connections & WEST != 0 {
+        canvas.rect(0, 3, 8, 10, color);
+    }
+}
+
+fn connected_inset(canvas: &mut Canvas, connections: u8, color: Rgba8) {
+    canvas.rect(4, 4, 8, 8, color);
+    if connections & NORTH != 0 {
+        canvas.rect(4, 8, 8, 8, color);
+    }
+    if connections & EAST != 0 {
+        canvas.rect(8, 4, 8, 8, color);
+    }
+    if connections & SOUTH != 0 {
+        canvas.rect(4, 0, 8, 8, color);
+    }
+    if connections & WEST != 0 {
+        canvas.rect(0, 4, 8, 8, color);
+    }
+}
+
+fn connected_edges(canvas: &mut Canvas, connections: u8, color: Rgba8) {
+    canvas.rect(3, 3, 10, 1, color);
+    canvas.rect(3, 12, 10, 1, color);
+    canvas.rect(3, 3, 1, 10, color);
+    canvas.rect(12, 3, 1, 10, color);
+    if connections & NORTH != 0 {
+        canvas.rect(3, 15, 10, 1, color);
+    }
+    if connections & EAST != 0 {
+        canvas.rect(15, 3, 1, 10, color);
+    }
+    if connections & SOUTH != 0 {
+        canvas.rect(3, 0, 10, 1, color);
+    }
+    if connections & WEST != 0 {
+        canvas.rect(0, 3, 1, 10, color);
+    }
 }

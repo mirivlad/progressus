@@ -188,6 +188,57 @@ impl ItemWorld {
         Ok(())
     }
 
+    pub(crate) fn split_ground_stack(
+        &mut self,
+        source_id: EntityId,
+        split_id: EntityId,
+        amount: u32,
+    ) -> Result<(), ItemWorldError> {
+        if amount == 0 {
+            return Err(ItemWorldError::ZeroSplit);
+        }
+        if self.items.contains_key(&split_id) {
+            return Err(ItemWorldError::DuplicateItem(split_id));
+        }
+        let source = self
+            .items
+            .get(&source_id)
+            .ok_or(ItemWorldError::UnknownItem(source_id))?;
+        let position = source
+            .ground_position()
+            .ok_or(ItemWorldError::ExpectedGroundItem(source_id))?;
+        let available = source.quantity().get();
+        if amount >= available {
+            return Err(ItemWorldError::SplitMustLeaveRemainder {
+                item_id: source_id,
+                requested: amount,
+                available,
+            });
+        }
+        let kind = source.kind();
+        self.items
+            .get_mut(&source_id)
+            .expect("source stack was checked above")
+            .quantity = ItemQuantity::new(available - amount)
+            .expect("a valid split leaves a positive source quantity");
+        self.items.insert(
+            split_id,
+            ItemStack::new_ground(
+                split_id,
+                kind,
+                ItemQuantity::new(amount)
+                    .expect("split quantity is positive and within stack capacity"),
+                position,
+            ),
+        );
+        self.ground_by_chunk
+            .entry(position.containing_cell().split().0)
+            .or_default()
+            .insert(split_id);
+        self.bump_revision();
+        Ok(())
+    }
+
     pub(crate) fn consume(&mut self, item_id: EntityId, amount: u32) -> Result<(), ItemWorldError> {
         if amount == 0 {
             return Err(ItemWorldError::ZeroConsumption);
@@ -408,6 +459,12 @@ pub(crate) enum ItemWorldError {
     DuplicateItem(EntityId),
     UnknownItem(EntityId),
     ZeroConsumption,
+    ZeroSplit,
+    SplitMustLeaveRemainder {
+        item_id: EntityId,
+        requested: u32,
+        available: u32,
+    },
     InsufficientQuantity {
         item_id: EntityId,
         requested: u32,
@@ -488,6 +545,33 @@ mod tests {
             MAX_STACK_QUANTITY
         );
         assert!(world.get(id(21)).is_none());
+        assert!(world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn splitting_ground_stack_preserves_kind_position_and_total_quantity() {
+        let position = WorldPosition::from_cell_center(WorldCell::new(4, -2)).unwrap();
+        let mut world = ItemWorld::default();
+        world
+            .insert_ground(ItemStack::new_ground(
+                id(30),
+                ItemKind::Wood,
+                ItemQuantity::new(115).unwrap(),
+                position,
+            ))
+            .unwrap();
+
+        world.split_ground_stack(id(30), id(31), 2).unwrap();
+
+        assert_eq!(world.get(id(30)).unwrap().quantity().get(), 113);
+        let split = world.get(id(31)).unwrap();
+        assert_eq!(split.kind(), ItemKind::Wood);
+        assert_eq!(split.quantity().get(), 2);
+        assert_eq!(split.ground_position(), Some(position));
+        assert_eq!(
+            world.get(id(30)).unwrap().quantity().get() + split.quantity().get(),
+            115
+        );
         assert!(world.indexes_are_consistent());
     }
 

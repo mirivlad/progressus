@@ -5,7 +5,8 @@ use bevy::prelude::*;
 use progressus_app::{
     CHUNK_SIDE, CharacterSnapshot, ChunkCoord, ConstructionSiteSnapshot, EntityId,
     GroundItemSnapshot, JobKind, JobState, LocalCell, NaturalResourceKind, NaturalResourceSnapshot,
-    SUBUNITS_PER_CELL, StructureSnapshot, WorkstationSnapshot, WorldCell, WorldPosition,
+    SUBUNITS_PER_CELL, StructureKind, StructureSnapshot, WorkstationSnapshot, WorldCell,
+    WorldPosition,
 };
 
 use crate::navigation::{SelectedCharacter, VisualMotion, interpolate_trace};
@@ -17,7 +18,9 @@ use crate::procedural_assets::{
     ProceduralAssetParams, ProceduralAssetRegistry, character_asset, construction_site_asset,
     item_asset, resource_asset, structure_asset, terrain_asset, workstation_asset,
 };
+
 use crate::runtime::AuthoritativeClient;
+use crate::tile_connectivity::CardinalConnections;
 use crate::ui::{ToolMode, ToolState};
 
 const CELL_SIZE: f32 = 12.0;
@@ -425,15 +428,34 @@ fn sync_construction(
     images: &mut Assets<Image>,
     procedural_assets: &mut ProceduralAssetRegistry,
 ) {
+    let mut connected_cells = BTreeMap::<StructureKind, BTreeSet<WorldCell>>::new();
+    for site in sites {
+        connected_cells
+            .entry(site.kind)
+            .or_default()
+            .insert(site.cell);
+    }
+    for structure in structures {
+        connected_cells
+            .entry(structure.kind)
+            .or_default()
+            .insert(structure.cell);
+    }
     let authoritative_sites = sites
         .iter()
         .map(|site| (site.id, *site))
         .collect::<BTreeMap<_, _>>();
     for (id, site) in &authoritative_sites {
+        let connections = CardinalConnections::from_cells(
+            site.cell,
+            connected_cells
+                .get(&site.kind)
+                .expect("the site contributes to its connectivity set"),
+        );
         let sprite = procedural_assets.sprite(
             images,
-            construction_site_asset(site.kind, site.id),
-            Vec2::splat(CELL_SIZE * 0.96),
+            construction_site_asset(site.kind, connections),
+            Vec2::splat(CELL_SIZE),
         );
         let transform =
             Transform::from_translation(world_translation(site.cell, origin, CONSTRUCTION_Z));
@@ -463,9 +485,15 @@ fn sync_construction(
         .map(|structure| (structure.id, *structure))
         .collect::<BTreeMap<_, _>>();
     for (id, structure) in &authoritative_structures {
+        let connections = CardinalConnections::from_cells(
+            structure.cell,
+            connected_cells
+                .get(&structure.kind)
+                .expect("the structure contributes to its connectivity set"),
+        );
         let sprite = procedural_assets.sprite(
             images,
-            structure_asset(structure.kind, structure.id),
+            structure_asset(structure.kind, connections),
             Vec2::splat(CELL_SIZE),
         );
         let transform =
