@@ -27,13 +27,24 @@ pub(super) fn stone_wall(canvas: &mut Canvas, connections: u8) {
     // canvas edge so adjacent cardinal tiles meet without presentation gaps.
     canvas.rect(4, 7, 8, 1, DARK);
     canvas.rect(7, 4, 1, 8, DARK);
-    if connections & (EAST | WEST) != 0 {
-        canvas.rect(0, 7, 16, 1, DARK);
-        canvas.line(0, 5, 15, 5, LIGHT);
+    if connections & EAST != 0 {
+        canvas.rect(8, 7, 8, 1, DARK);
+        canvas.line(8, 5, 15, 5, LIGHT);
     }
-    if connections & (NORTH | SOUTH) != 0 {
-        canvas.rect(7, 0, 1, 16, DARK);
-        canvas.line(5, 0, 5, 15, LIGHT);
+    if connections & WEST != 0 {
+        canvas.rect(0, 7, 8, 1, DARK);
+        canvas.line(0, 5, 7, 5, LIGHT);
+    }
+    // Canvas Y grows downward while world Y grows upward. North therefore
+    // reaches y=0 and south reaches y=15. Keep each arm's masonry detail
+    // local so a one-sided connection never implies a neighbour on both sides.
+    if connections & NORTH != 0 {
+        canvas.rect(7, 0, 1, 8, DARK);
+        canvas.line(5, 0, 5, 7, LIGHT);
+    }
+    if connections & SOUTH != 0 {
+        canvas.rect(7, 8, 1, 8, DARK);
+        canvas.line(5, 8, 5, 15, LIGHT);
     }
     canvas.line(5, 4, 10, 4, LIGHT);
 }
@@ -41,13 +52,13 @@ pub(super) fn stone_wall(canvas: &mut Canvas, connections: u8) {
 fn connected_body(canvas: &mut Canvas, connections: u8, color: Rgba8) {
     canvas.rect(3, 3, 10, 10, color);
     if connections & NORTH != 0 {
-        canvas.rect(3, 8, 10, 8, color);
+        canvas.rect(3, 0, 10, 8, color);
     }
     if connections & EAST != 0 {
         canvas.rect(8, 3, 8, 10, color);
     }
     if connections & SOUTH != 0 {
-        canvas.rect(3, 0, 10, 8, color);
+        canvas.rect(3, 8, 10, 8, color);
     }
     if connections & WEST != 0 {
         canvas.rect(0, 3, 8, 10, color);
@@ -57,13 +68,13 @@ fn connected_body(canvas: &mut Canvas, connections: u8, color: Rgba8) {
 fn connected_inset(canvas: &mut Canvas, connections: u8, color: Rgba8) {
     canvas.rect(4, 4, 8, 8, color);
     if connections & NORTH != 0 {
-        canvas.rect(4, 8, 8, 8, color);
+        canvas.rect(4, 0, 8, 8, color);
     }
     if connections & EAST != 0 {
         canvas.rect(8, 4, 8, 8, color);
     }
     if connections & SOUTH != 0 {
-        canvas.rect(4, 0, 8, 8, color);
+        canvas.rect(4, 8, 8, 8, color);
     }
     if connections & WEST != 0 {
         canvas.rect(0, 4, 8, 8, color);
@@ -76,13 +87,13 @@ fn connected_edges(canvas: &mut Canvas, connections: u8, color: Rgba8) {
     canvas.rect(3, 3, 1, 10, color);
     canvas.rect(12, 3, 1, 10, color);
     if connections & NORTH != 0 {
-        canvas.rect(3, 15, 10, 1, color);
+        canvas.rect(3, 0, 10, 1, color);
     }
     if connections & EAST != 0 {
         canvas.rect(15, 3, 1, 10, color);
     }
     if connections & SOUTH != 0 {
-        canvas.rect(3, 0, 10, 1, color);
+        canvas.rect(3, 15, 10, 1, color);
     }
     if connections & WEST != 0 {
         canvas.rect(0, 3, 1, 10, color);

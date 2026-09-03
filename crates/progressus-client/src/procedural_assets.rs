@@ -359,9 +359,13 @@ impl Canvas {
 #[cfg(test)]
 mod tests {
     use bevy::prelude::{Assets, Vec2};
-    use progressus_app::{EntityId, Terrain, WorldCell};
+    use std::collections::BTreeSet;
 
-    use super::{ProceduralAssetRegistry, render_image, terrain_asset};
+    use progressus_app::{EntityId, StructureKind, Terrain, WorldCell};
+
+    use crate::tile_connectivity::CardinalConnections;
+
+    use super::{ProceduralAssetRegistry, render_image, structure_asset, terrain_asset};
 
     fn image_hash(image: &bevy::prelude::Image) -> u64 {
         image
@@ -402,5 +406,32 @@ mod tests {
     fn entity_variants_are_stable() {
         let id = EntityId::new(42).unwrap();
         assert_eq!(super::character_asset(id), super::character_asset(id));
+    }
+    fn alpha_at(image: &bevy::prelude::Image, x: usize, y: usize) -> u8 {
+        image.data.as_deref().unwrap()[(y * 16 + x) * 4 + 3]
+    }
+
+    #[test]
+    fn wall_raster_reaches_only_the_requested_cardinal_edges() {
+        let center = WorldCell::new(0, 0);
+        let north_cells = [center, WorldCell::new(0, 1)]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let north = render_image(structure_asset(
+            StructureKind::StoneWall,
+            CardinalConnections::from_cells(center, &north_cells),
+        ));
+        assert_ne!(alpha_at(&north, 8, 0), 0);
+        assert_eq!(alpha_at(&north, 8, 15), 0);
+
+        let west_cells = [center, WorldCell::new(-1, 0)]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let west = render_image(structure_asset(
+            StructureKind::StoneWall,
+            CardinalConnections::from_cells(center, &west_cells),
+        ));
+        assert_ne!(alpha_at(&west, 0, 8), 0);
+        assert_eq!(alpha_at(&west, 15, 8), 0);
     }
 }

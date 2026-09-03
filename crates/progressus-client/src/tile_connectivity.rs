@@ -73,4 +73,36 @@ mod tests {
             0b0011
         );
     }
+    #[test]
+    fn horizontal_pair_is_reciprocal_and_preserves_west_bit() {
+        let left = WorldCell::new(10, -4);
+        let right = WorldCell::new(11, -4);
+        let cells = [left, right].into_iter().collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            CardinalConnections::from_cells(left, &cells).bits(),
+            CardinalConnections::EAST
+        );
+        assert_eq!(
+            CardinalConnections::from_cells(right, &cells).bits(),
+            CardinalConnections::WEST
+        );
+        assert_eq!(CardinalConnections::WEST, 0b1000);
+    }
+
+    #[test]
+    fn vertical_pair_uses_positive_world_y_as_north() {
+        let south = WorldCell::new(3, 8);
+        let north = WorldCell::new(3, 9);
+        let cells = [south, north].into_iter().collect::<BTreeSet<_>>();
+
+        assert_eq!(
+            CardinalConnections::from_cells(south, &cells).bits(),
+            CardinalConnections::NORTH
+        );
+        assert_eq!(
+            CardinalConnections::from_cells(north, &cells).bits(),
+            CardinalConnections::SOUTH
+        );
+    }
 }
