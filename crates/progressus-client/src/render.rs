@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
-use bevy::sprite::Text2dShadow;
 use progressus_app::{
     CHUNK_SIDE, CharacterSnapshot, ChunkCoord, EntityId, GroundItemSnapshot, JobKind, JobState,
     LocalCell, NaturalResourceKind, NaturalResourceSnapshot, SUBUNITS_PER_CELL, WorldCell,
@@ -379,17 +378,8 @@ fn sync_ground_items(
                     .id();
                 let label = commands
                     .spawn((
-                        Text2d::new(item.quantity.to_string()),
-                        TextFont {
-                            font_size: 6.0,
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                        Text2dShadow {
-                            offset: Vec2::new(1.0, 1.0),
-                            color: Color::BLACK,
-                        },
-                        Transform::from_xyz(CELL_SIZE * 0.28, -CELL_SIZE * 0.3, 1.0),
+                        procedural_assets.quantity_sprite(images, item.quantity),
+                        Transform::from_xyz(CELL_SIZE * 0.27, -CELL_SIZE * 0.34, 1.0),
                         ChildOf(entity),
                     ))
                     .id();
@@ -409,7 +399,7 @@ fn sync_ground_items(
                     if let Some(label) = cache.ground_item_labels.get(&item.id) {
                         commands
                             .entity(*label)
-                            .insert(Text2d::new(item.quantity.to_string()));
+                            .insert(procedural_assets.quantity_sprite(images, item.quantity));
                     }
                 }
             }

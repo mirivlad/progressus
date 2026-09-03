@@ -9,6 +9,7 @@ use progressus_app::{EntityId, ItemKind, NaturalResourceKind, Terrain, WorldCell
 
 const ART_PIXELS: u32 = 16;
 const VARIANT_COUNT: u8 = 8;
+const QUANTITY_PIXEL_WORLD_SIZE: f32 = 0.5;
 
 #[path = "../../../assets/procedural/mod.rs"]
 mod asset_code;
@@ -43,6 +44,7 @@ impl ProceduralAssetKey {
 #[derive(Resource, Default)]
 pub(crate) struct ProceduralAssetRegistry {
     images: BTreeMap<ProceduralAssetKey, Handle<Image>>,
+    quantity_images: BTreeMap<u32, Handle<Image>>,
 }
 
 #[derive(SystemParam)]
@@ -70,6 +72,23 @@ impl ProceduralAssetRegistry {
         sprite
     }
 
+    pub(crate) fn quantity_sprite(&mut self, images: &mut Assets<Image>, quantity: u32) -> Sprite {
+        let image = if let Some(handle) = self.quantity_images.get(&quantity) {
+            handle.clone()
+        } else {
+            let handle = images.add(render_quantity_image(quantity));
+            self.quantity_images.insert(quantity, handle.clone());
+            handle
+        };
+        let (width, height) = asset_code::quantity_dimensions(quantity);
+        let mut sprite = Sprite::from_image(image);
+        sprite.custom_size = Some(Vec2::new(
+            width as f32 * QUANTITY_PIXEL_WORLD_SIZE,
+            height as f32 * QUANTITY_PIXEL_WORLD_SIZE,
+        ));
+        sprite
+    }
+
     fn image(&mut self, images: &mut Assets<Image>, key: ProceduralAssetKey) -> Handle<Image> {
         if let Some(handle) = self.images.get(&key) {
             return handle.clone();
@@ -81,7 +100,7 @@ impl ProceduralAssetRegistry {
 
     #[cfg(test)]
     fn cached_count(&self) -> usize {
-        self.images.len()
+        self.images.len() + self.quantity_images.len()
     }
 }
 
@@ -130,6 +149,13 @@ fn mix64(mut value: u64) -> u64 {
     value ^ (value >> 31)
 }
 
+fn render_quantity_image(quantity: u32) -> Image {
+    let (width, height) = asset_code::quantity_dimensions(quantity);
+    let mut canvas = Canvas::new(width, height);
+    asset_code::quantity_label(&mut canvas, quantity);
+    canvas.into_image()
+}
+
 fn render_image(key: ProceduralAssetKey) -> Image {
     let mut canvas = Canvas::new(ART_PIXELS, ART_PIXELS);
     match key.kind {
@@ -142,19 +168,7 @@ fn render_image(key: ProceduralAssetKey) -> Image {
         ProceduralAssetKind::Tree => asset_code::tree(&mut canvas, key.variant),
         ProceduralAssetKind::StoneOutcrop => asset_code::stone_outcrop(&mut canvas, key.variant),
     }
-    let mut image = Image::new(
-        Extent3d {
-            width: canvas.width,
-            height: canvas.height,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        canvas.pixels,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::default(),
-    );
-    image.sampler = ImageSampler::nearest();
-    image
+    canvas.into_image()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -183,6 +197,22 @@ impl Canvas {
             height,
             pixels: vec![0; width as usize * height as usize * 4],
         }
+    }
+
+    fn into_image(self) -> Image {
+        let mut image = Image::new(
+            Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            self.pixels,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::default(),
+        );
+        image.sampler = ImageSampler::nearest();
+        image
     }
 
     pub(super) fn fill(&mut self, color: Rgba8) {

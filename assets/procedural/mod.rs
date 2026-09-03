@@ -2,6 +2,7 @@ use super::{Canvas, Rgba8};
 
 mod characters;
 mod items;
+mod labels;
 mod resources;
 mod terrain;
 
@@ -35,4 +36,12 @@ pub(super) fn tree(canvas: &mut Canvas, variant: u8) {
 
 pub(super) fn stone_outcrop(canvas: &mut Canvas, variant: u8) {
     resources::stone_outcrop(canvas, variant);
+}
+
+pub(super) fn quantity_dimensions(quantity: u32) -> (u32, u32) {
+    labels::quantity_dimensions(quantity)
+}
+
+pub(super) fn quantity_label(canvas: &mut Canvas, quantity: u32) {
+    labels::quantity_label(canvas, quantity);
 }
