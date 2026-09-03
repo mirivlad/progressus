@@ -59,6 +59,28 @@ struct ChunkDelta {
 }
 
 impl ModifiedWorld {
+    pub(crate) fn overrides(&self) -> impl Iterator<Item = (ChunkCoord, LocalCell, Terrain)> + '_ {
+        self.chunks.iter().flat_map(|(coordinate, delta)| {
+            delta
+                .overrides
+                .iter()
+                .map(move |(local, terrain)| (*coordinate, *local, *terrain))
+        })
+    }
+
+    pub(crate) fn restore_override(
+        &mut self,
+        coordinate: ChunkCoord,
+        local: LocalCell,
+        terrain: Terrain,
+    ) {
+        self.chunks
+            .entry(coordinate)
+            .or_default()
+            .overrides
+            .insert(local, terrain);
+    }
+
     pub(crate) fn override_at(&self, coordinate: ChunkCoord, local: LocalCell) -> Option<Terrain> {
         self.chunks
             .get(&coordinate)

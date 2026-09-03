@@ -15,6 +15,17 @@ impl ExploredWorld {
         self.cells.contains(&cell)
     }
 
+    pub(crate) fn cells(&self) -> impl ExactSizeIterator<Item = WorldCell> + '_ {
+        self.cells.iter().copied()
+    }
+
+    pub(crate) fn restore_cells(cells: impl IntoIterator<Item = WorldCell>) -> Self {
+        Self {
+            cells: cells.into_iter().collect(),
+            revision: 0,
+        }
+    }
+
     pub(crate) const fn revision(&self) -> u64 {
         self.revision
     }

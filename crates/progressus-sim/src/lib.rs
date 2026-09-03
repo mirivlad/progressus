@@ -37,7 +37,7 @@ pub use progressus_worldgen::{
     NaturalResourceKind, Terrain, WorldCell, WorldSeed, WorldgenVersion,
 };
 pub use recipe::{CRAFT_WORK_TICKS, RecipeDefinition, RecipeId, RecipeInput, recipe_definition};
-pub use simulation::{Simulation, SimulationError};
+pub use simulation::{SAVE_FORMAT_VERSION, SaveError, SaveMetadata, Simulation, SimulationError};
 pub use stockpile::Stockpile;
 pub use workstation::{Workstation, WorkstationKind};
 pub use world_state::EffectiveChunk;

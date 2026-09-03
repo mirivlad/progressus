@@ -4,6 +4,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
+mod persistence;
+pub use persistence::{SAVE_FORMAT_VERSION, SaveError, SaveMetadata};
+
 use progressus_worldgen::{WorldGenerator, WorldgenError};
 
 use crate::clock::SimulationClock;

@@ -93,6 +93,27 @@ impl Character {
         }
     }
 
+    pub(crate) fn restore(
+        id: EntityId,
+        name: String,
+        position: WorldPosition,
+        speed: MovementSpeed,
+        interaction_radius: InteractionRadius,
+        movement: MovementState,
+        route: Option<NavigationRoute>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            position,
+            speed,
+            interaction_radius,
+            movement,
+            route,
+            last_tick_motion_trace: vec![position],
+        }
+    }
+
     pub const fn id(&self) -> EntityId {
         self.id
     }
@@ -178,6 +199,10 @@ impl EntityIdAllocator {
         let id = EntityId::new(value).ok_or(SimulationError::EntityIdExhausted)?;
         self.next = value.checked_add(1);
         Ok(id)
+    }
+
+    pub(crate) const fn restore_next(next: Option<u64>) -> Self {
+        Self { next }
     }
 
     pub(crate) fn peek(self) -> Option<EntityId> {
