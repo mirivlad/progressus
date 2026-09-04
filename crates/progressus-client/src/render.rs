@@ -976,8 +976,10 @@ pub(crate) fn draw_selected_navigation(
         previous = next;
     }
     if let Some(destination) = navigation.destination {
+        let route_reaches_destination = navigation.remaining_waypoints.last().copied()
+            == Some(destination);
         let destination = to_visual(destination).truncate();
-        if previous != destination {
+        if route_reaches_destination && previous != destination {
             gizmos.line_2d(previous, destination, route_color);
         }
         let marker = 3.0;

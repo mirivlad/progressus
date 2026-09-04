@@ -38,6 +38,73 @@ pub(crate) fn find_explored_path(
     find_path_with_budget(simulation, start, goal, PATHFINDING_NODE_BUDGET, true)
 }
 
+pub(crate) fn find_closest_explored_path(
+    simulation: &Simulation,
+    start: WorldCell,
+    goal: WorldCell,
+) -> Result<Result<Vec<WorldCell>, PathfindingError>, SimulationError> {
+    let mut chunks = BTreeMap::<ChunkCoord, EffectiveChunk>::new();
+    let mut open = BinaryHeap::new();
+    let mut costs = BTreeMap::from([(start, 0_usize)]);
+    let mut predecessors = BTreeMap::<WorldCell, WorldCell>::new();
+    let mut insertion = 0_u64;
+    let h_score = manhattan(start, goal);
+    let mut best = (h_score, 0_usize, start);
+    open.push(Reverse(OpenNode {
+        f_score: h_score,
+        h_score,
+        insertion,
+        cell: start,
+    }));
+    let mut expanded = 0_usize;
+
+    while let Some(Reverse(node)) = open.pop() {
+        let Some(&cost) = costs.get(&node.cell) else {
+            continue;
+        };
+        if node.f_score != u128::from(cost as u64) + manhattan(node.cell, goal) {
+            continue;
+        }
+        if expanded == PATHFINDING_NODE_BUDGET {
+            return Ok(Err(PathfindingError::SearchBudgetExceeded));
+        }
+        expanded += 1;
+        best = best.min((manhattan(node.cell, goal), cost, node.cell));
+
+        for direction in [
+            Direction::East,
+            Direction::North,
+            Direction::South,
+            Direction::West,
+        ] {
+            let Some(next) = direction.adjacent(node.cell) else {
+                continue;
+            };
+            if next == start || !is_walkable(simulation, next, &mut chunks, true)? {
+                continue;
+            }
+            let next_cost = cost + 1;
+            if costs.get(&next).is_some_and(|known| *known <= next_cost) {
+                continue;
+            }
+            costs.insert(next, next_cost);
+            predecessors.insert(next, node.cell);
+            insertion = insertion
+                .checked_add(1)
+                .expect("A* insertion sequence overflow");
+            let h_score = manhattan(next, goal);
+            open.push(Reverse(OpenNode {
+                f_score: u128::from(next_cost as u64) + h_score,
+                h_score,
+                insertion,
+                cell: next,
+            }));
+        }
+    }
+
+    Ok(Ok(reconstruct_path(start, best.2, &predecessors)))
+}
+
 fn find_path_with_budget(
     simulation: &Simulation,
     start: WorldCell,
