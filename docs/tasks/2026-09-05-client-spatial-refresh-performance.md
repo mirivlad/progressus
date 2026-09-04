@@ -23,4 +23,4 @@ The deeper rendering problem was the terrain representation itself. Every explor
 
 Server-safe validation includes fmt, Clippy, client all-target typecheck, app/sim/headless tests, dependency boundaries and existing 100k smoke scenarios. Client regression tests now assert that terrain roots survive exploration/camera refreshes and that a full known chunk produces one terrain-chunk presentation entry rather than per-cell entities.
 
-The graphical client is not linked/run on `tomas`. Owner-PC validation must compare CPU percentage and movement smoothness against the reported ~356% case using the same seed, zoom and approximate explored area.
+The graphical client is not linked/run on `tomas`. Owner-PC validation reduced the reported load from ~356% to ~70% after chunk batching, which confirms the main terrain-entity regression but leaves a material steady-state client cost. A temporary `--diagnostics` mode now logs FPS/frame time, Bevy entity count, Progressus update/authority/presentation timing, WGPU render-pass diagnostics, and the selected render adapter so the remaining cost can be measured on the owner PC instead of inferred from `htop`.

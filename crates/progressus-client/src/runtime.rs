@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
+use std::time::Instant;
+
+use bevy::diagnostic::Diagnostics;
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -10,6 +13,10 @@ use progressus_app::{
     WorldSeed,
 };
 
+use crate::client_diagnostics::{
+    AUTHORITY_MS, ClientUpdateTimer, ProgressusDiagnosticsPlugin, begin_client_update,
+    end_client_update, record_elapsed,
+};
 use crate::i18n::Locale;
 use crate::interaction::{TickScheduler, movement_command};
 use crate::modal::{
@@ -134,7 +141,9 @@ pub(crate) fn advance_authority(
     mut authoritative: ResMut<AuthoritativeClient>,
     selected: Res<SelectedCharacter>,
     modal: Res<ModalState>,
+    mut diagnostics: Diagnostics,
 ) {
+    let started = Instant::now();
     let mut command_attempted = false;
     if !modal.is_open()
         && let Some(command) = movement_command(&keys, cora_id())
@@ -151,6 +160,7 @@ pub(crate) fn advance_authority(
             .execute(Command::AdvanceTicks { count: 1 })
     {
         error!("authoritative tick failed: {error}");
+        record_elapsed(&mut diagnostics, &AUTHORITY_MS, started);
         return;
     }
     if (command_attempted || tick_due)
@@ -158,6 +168,7 @@ pub(crate) fn advance_authority(
     {
         error!("authoritative snapshot failed: {error}");
     }
+    record_elapsed(&mut diagnostics, &AUTHORITY_MS, started);
 }
 
 #[allow(clippy::type_complexity)]
@@ -827,12 +838,16 @@ impl Display for PresentationError {
 impl Error for PresentationError {}
 
 pub fn run() -> Result<(), ClientError> {
-    run_with_seed(0)
+    run_with_options(0, false)
 }
 
 pub fn run_with_seed(seed: u64) -> Result<(), ClientError> {
-    App::new()
-        .insert_resource(AuthoritativeClient::new_with_seed(WorldSeed::new(seed))?)
+    run_with_options(seed, false)
+}
+
+pub fn run_with_options(seed: u64, diagnostics_enabled: bool) -> Result<(), ClientError> {
+    let mut app = App::new();
+    app.insert_resource(AuthoritativeClient::new_with_seed(WorldSeed::new(seed))?)
         .insert_resource(TickScheduler::default())
         .insert_resource(PresentationCache::default())
         .insert_resource(ProceduralAssetRegistry::default())
@@ -848,64 +863,70 @@ pub fn run_with_seed(seed: u64) -> Result<(), ClientError> {
         .insert_resource(ModalState::default())
         .insert_resource(ModalPresentation::default())
         .insert_resource(SaveStore::default())
+        .insert_resource(ClientUpdateTimer::default())
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: format!("Progressus — Prototype 01 — seed {seed}"),
                 ..default()
             }),
             ..default()
-        }))
-        .add_systems(
-            Startup,
+        }));
+    if diagnostics_enabled {
+        app.add_plugins(ProgressusDiagnosticsPlugin);
+    }
+    app.add_systems(
+        Startup,
+        (
+            setup_ui_font,
+            setup_camera,
+            setup_toolbar,
+            setup_character_inspector,
+            setup_stockpile_inspector,
+        )
+            .chain(),
+    )
+    .add_systems(
+        Update,
+        (
+            begin_client_update,
             (
-                setup_ui_font,
-                setup_camera,
-                setup_toolbar,
-                setup_character_inspector,
-                setup_stockpile_inspector,
+                language_toggle_interaction,
+                pause_toggle_interaction,
+                zone_visibility_interaction,
+                modal_keyboard,
+                save_menu_interaction,
+                configure_stockpile_interaction,
+                save_modal_interaction,
+                modal_interaction,
+                toolbar_interaction,
+                hud_palette_interaction,
+                refresh_toolbar_localization,
+                sync_hud_tooltip,
+                sync_modal,
+                update_ui_capture,
+                pointer_navigation,
             )
                 .chain(),
-        )
-        .add_systems(
-            Update,
             (
-                (
-                    language_toggle_interaction,
-                    pause_toggle_interaction,
-                    zone_visibility_interaction,
-                    modal_keyboard,
-                    save_menu_interaction,
-                    configure_stockpile_interaction,
-                    save_modal_interaction,
-                    modal_interaction,
-                    toolbar_interaction,
-                    hud_palette_interaction,
-                    refresh_toolbar_localization,
-                    sync_hud_tooltip,
-                    sync_modal,
-                    update_ui_capture,
-                    pointer_navigation,
-                )
-                    .chain(),
-                (
-                    advance_authority,
-                    sync_presentation,
-                    sync_character_inspector,
-                    sync_stockpile_inspector,
-                    crate::render::interpolate_character_visuals,
-                    draw_selected_character,
-                    draw_selected_navigation,
-                    crate::render::draw_navigation_debug,
-                    draw_tool_drag,
-                    draw_job_designations,
-                    draw_stockpiles,
-                    camera_controls,
-                )
-                    .chain(),
+                advance_authority,
+                sync_presentation,
+                sync_character_inspector,
+                sync_stockpile_inspector,
+                crate::render::interpolate_character_visuals,
+                draw_selected_character,
+                draw_selected_navigation,
+                crate::render::draw_navigation_debug,
+                draw_tool_drag,
+                draw_job_designations,
+                draw_stockpiles,
+                camera_controls,
             )
                 .chain(),
+            end_client_update,
         )
-        .run();
+            .chain(),
+    )
+    .run();
     Ok(())
 }
 

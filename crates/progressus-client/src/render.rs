@@ -1,4 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
+
+use bevy::diagnostic::Diagnostics;
 
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
@@ -9,6 +12,7 @@ use progressus_app::{
     WorldPosition,
 };
 
+use crate::client_diagnostics::{PRESENTATION_MS, record_elapsed};
 use crate::navigation::{SelectedCharacter, VisualMotion, interpolate_trace};
 use crate::presentation::{
     CharacterSyncAction, GroundItemSyncAction, NaturalResourceSyncAction, VisibleChunkWindow,
@@ -128,7 +132,9 @@ pub(crate) fn sync_presentation(
     mut motion: ResMut<VisualMotion>,
     mut procedural_assets: ProceduralAssetParams,
     cameras: Query<(&Transform, &Projection), With<Camera2d>>,
+    mut diagnostics: Diagnostics,
 ) {
+    let started = Instant::now();
     let snapshot_dirty = authoritative.take_snapshot_dirty();
     if cache.render_origin.is_none() {
         cache.render_origin = authoritative
@@ -292,6 +298,7 @@ pub(crate) fn sync_presentation(
         cache.item_revision = Some(spatial.item_revision);
         cache.resource_revision = Some(spatial.resource_revision);
     }
+    record_elapsed(&mut diagnostics, &PRESENTATION_MS, started);
 }
 
 fn camera_window(
