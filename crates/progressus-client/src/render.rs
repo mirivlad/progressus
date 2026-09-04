@@ -977,7 +977,9 @@ pub(crate) fn draw_selected_navigation(
     }
     if let Some(destination) = navigation.destination {
         let destination = to_visual(destination).truncate();
-        gizmos.line_2d(previous, destination, route_color);
+        if previous != destination {
+            gizmos.line_2d(previous, destination, route_color);
+        }
         let marker = 3.0;
         gizmos.line_2d(
             destination + Vec2::new(-marker, -marker),

@@ -3738,14 +3738,28 @@ fn build_waypoints(
             cells
                 .iter()
                 .skip(1)
+                .take(cells.len().saturating_sub(2))
                 .map(|cell| WorldPosition::from_cell_center(*cell))
                 .collect::<Result<Vec<_>, _>>()?,
         );
-        let destination_center = WorldPosition::from_cell_center(destination.containing_cell())?;
-        points.push(WorldPosition::from_subunits(
-            destination.x_subunits(),
-            destination_center.y_subunits(),
-        )?);
+        let approach_cell = *cells
+            .get(cells.len().saturating_sub(2))
+            .expect("cross-cell path contains an approach cell");
+        let destination_cell = destination.containing_cell();
+        debug_assert_eq!(cell_manhattan_distance(approach_cell, destination_cell), 1);
+        let approach_center = WorldPosition::from_cell_center(approach_cell)?;
+        let final_turn = if approach_cell.x() != destination_cell.x() {
+            WorldPosition::from_subunits(
+                destination.x_subunits(),
+                approach_center.y_subunits(),
+            )?
+        } else {
+            WorldPosition::from_subunits(
+                approach_center.x_subunits(),
+                destination.y_subunits(),
+            )?
+        };
+        points.push(final_turn);
     }
     points.push(destination);
     Ok(points.into_iter().filter(|point| *point != current).fold(
@@ -5013,6 +5027,54 @@ mod tests {
             character(&simulation, cora).position(),
             position_at_cell(WorldCell::new(1, 0))
         );
+    }
+
+    #[test]
+    fn cross_cell_waypoints_approach_exact_destination_without_center_backtrack() {
+        let cases = [
+            (
+                WorldCell::new(0, 0),
+                WorldCell::new(1, 0),
+                WorldPosition::from_subunits(1_100, 900).unwrap(),
+                vec![
+                    WorldPosition::from_subunits(1_100, 512).unwrap(),
+                    WorldPosition::from_subunits(1_100, 900).unwrap(),
+                ],
+            ),
+            (
+                WorldCell::new(2, 0),
+                WorldCell::new(1, 0),
+                WorldPosition::from_subunits(1_900, 100).unwrap(),
+                vec![
+                    WorldPosition::from_subunits(1_900, 512).unwrap(),
+                    WorldPosition::from_subunits(1_900, 100).unwrap(),
+                ],
+            ),
+            (
+                WorldCell::new(1, -1),
+                WorldCell::new(1, 0),
+                WorldPosition::from_subunits(1_800, 100).unwrap(),
+                vec![
+                    WorldPosition::from_subunits(1_536, 100).unwrap(),
+                    WorldPosition::from_subunits(1_800, 100).unwrap(),
+                ],
+            ),
+            (
+                WorldCell::new(1, 1),
+                WorldCell::new(1, 0),
+                WorldPosition::from_subunits(1_200, 900).unwrap(),
+                vec![
+                    WorldPosition::from_subunits(1_536, 900).unwrap(),
+                    WorldPosition::from_subunits(1_200, 900).unwrap(),
+                ],
+            ),
+        ];
+
+        for (start, goal, destination, expected) in cases {
+            let current = WorldPosition::from_cell_center(start).unwrap();
+            let route = build_waypoints(current, destination, &[start, goal]).unwrap();
+            assert_eq!(route.into_iter().collect::<Vec<_>>(), expected);
+        }
     }
 
     #[test]
