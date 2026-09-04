@@ -1,6 +1,6 @@
 # Task: playtest UX fixes after terrain/door pass
 
-Status: **Implemented; owner-PC client/visual validation pending**
+Status: **Implemented and owner-PC validated**
 Date: 2026-09-04
 
 ## Scope

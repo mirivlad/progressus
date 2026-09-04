@@ -33,6 +33,11 @@ use crate::{
     WorldPositionError, WorldSeed, WorldgenVersion, recipe_definition, within_interaction_range,
 };
 
+const IDLE_BEHAVIOR_INTERVAL_TICKS: u64 = 48;
+const IDLE_WANDER_RADIUS_CELLS: i64 = 3;
+const IDLE_SOCIAL_CHANCE_DIVISOR: u64 = 5;
+const IDLE_DESTINATION_ATTEMPTS: u64 = 16;
+
 const INITIAL_CHARACTERS: [(&str, i64); 5] = [
     ("Ada", -2),
     ("Borin", -1),
@@ -227,11 +232,200 @@ impl Simulation {
             self.maintain_craft_supply_jobs()?;
             self.maintain_haul_jobs()?;
             self.advance_jobs_one_tick()?;
+            self.maintain_idle_behavior()?;
             self.maintain_doors()?;
             self.reconcile_chunk_residency()?;
         }
 
         Ok(())
+    }
+
+    fn maintain_idle_behavior(&mut self) -> Result<(), SimulationError> {
+        let tick = self.clock.tick().value();
+        let seed = self.generator.seed().value();
+        let character_ids = self.characters.keys().copied().collect::<Vec<_>>();
+
+        for character_id in character_ids {
+            let eligible = self.characters.get(&character_id).is_some_and(|character| {
+                character.movement() == MovementState::Idle
+                    && !character.is_hungry()
+                    && self.job_world.job_for_worker(character_id).is_none()
+                    && !self
+                        .item_world
+                        .iter()
+                        .any(|item| item.carrier() == Some(character_id))
+            });
+            if !eligible {
+                continue;
+            }
+
+            let phase = 16 + character_id.value().wrapping_mul(5) % 24;
+            if tick % IDLE_BEHAVIOR_INTERVAL_TICKS != phase {
+                continue;
+            }
+
+            let cycle = tick / IDLE_BEHAVIOR_INTERVAL_TICKS;
+            let entropy = idle_entropy(seed, character_id.value(), cycle);
+            let route = if entropy % IDLE_SOCIAL_CHANCE_DIVISOR == 0 {
+                self.plan_idle_social_route(character_id, entropy)?
+                    .or(self.plan_idle_wander_route(character_id, entropy)?)
+            } else {
+                self.plan_idle_wander_route(character_id, entropy)?
+            };
+
+            if let Some(route) = route {
+                self.characters
+                    .get_mut(&character_id)
+                    .expect("idle character is still present")
+                    .set_wandering_route(route);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn plan_idle_social_route(
+        &self,
+        character_id: EntityId,
+        entropy: u64,
+    ) -> Result<Option<NavigationRoute>, SimulationError> {
+        let Some(character) = self.characters.get(&character_id) else {
+            return Err(SimulationError::UnknownCharacter(character_id));
+        };
+        let current = character.position().containing_cell();
+        let anchor = character.idle_anchor();
+        let mut companions = self
+            .characters
+            .values()
+            .filter(|other| other.id() != character_id)
+            .filter(|other| other.movement() == MovementState::Idle)
+            .filter(|other| !other.is_hungry())
+            .filter(|other| self.job_world.job_for_worker(other.id()).is_none())
+            .map(|other| {
+                (
+                    cell_manhattan_distance(current, other.position().containing_cell()),
+                    other.id(),
+                    other.position().containing_cell(),
+                )
+            })
+            .filter(|(distance, ..)| *distance <= 6)
+            .collect::<Vec<_>>();
+        companions.sort_unstable();
+        if companions.is_empty() {
+            return Ok(None);
+        }
+
+        let start = (entropy as usize) % companions.len();
+        let directions = [
+            Direction::East,
+            Direction::North,
+            Direction::West,
+            Direction::South,
+        ];
+        for offset in 0..companions.len() {
+            let (_, _, companion_cell) = companions[(start + offset) % companions.len()];
+            let direction_start =
+                ((entropy >> (8 + offset.min(6) * 4)) as usize) % directions.len();
+            for direction_offset in 0..directions.len() {
+                let direction = directions[(direction_start + direction_offset) % directions.len()];
+                let Some(destination) = direction.adjacent(companion_cell) else {
+                    continue;
+                };
+                if !idle_cell_within_anchor(anchor, destination) {
+                    continue;
+                }
+                if self.character_occupies_cell(character_id, destination) {
+                    continue;
+                }
+                if let Some(route) = self.plan_idle_route_to_cell(character_id, destination)? {
+                    return Ok(Some(route));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn plan_idle_wander_route(
+        &self,
+        character_id: EntityId,
+        entropy: u64,
+    ) -> Result<Option<NavigationRoute>, SimulationError> {
+        let anchor = self
+            .characters
+            .get(&character_id)
+            .ok_or(SimulationError::UnknownCharacter(character_id))?
+            .idle_anchor();
+
+        for attempt in 0..IDLE_DESTINATION_ATTEMPTS {
+            let mixed =
+                mix_idle_entropy(entropy.wrapping_add(attempt.wrapping_mul(0x9E37_79B9_7F4A_7C15)));
+            let dx = (mixed % 7) as i64 - IDLE_WANDER_RADIUS_CELLS;
+            let dy = ((mixed >> 11) % 7) as i64 - IDLE_WANDER_RADIUS_CELLS;
+            if dx == 0 && dy == 0 || dx.abs() + dy.abs() > IDLE_WANDER_RADIUS_CELLS {
+                continue;
+            }
+            let Some(x) = anchor.x().checked_add(dx) else {
+                continue;
+            };
+            let Some(y) = anchor.y().checked_add(dy) else {
+                continue;
+            };
+            let destination = WorldCell::new(x, y);
+            if self.character_occupies_cell(character_id, destination) {
+                continue;
+            }
+            if let Some(route) = self.plan_idle_route_to_cell(character_id, destination)? {
+                return Ok(Some(route));
+            }
+        }
+        Ok(None)
+    }
+
+    fn plan_idle_route_to_cell(
+        &self,
+        character_id: EntityId,
+        destination: WorldCell,
+    ) -> Result<Option<NavigationRoute>, SimulationError> {
+        let character = self
+            .characters
+            .get(&character_id)
+            .ok_or(SimulationError::UnknownCharacter(character_id))?;
+        let current_position = character.position();
+        let current = current_position.containing_cell();
+        let anchor = character.idle_anchor();
+        if current == destination
+            || !idle_cell_within_anchor(anchor, destination)
+            || !self.is_explored(destination)
+            || !self.is_walkable(destination)?
+        {
+            return Ok(None);
+        }
+
+        let cells = match find_explored_path(self, current, destination)? {
+            Ok(cells) => cells,
+            Err(PathfindingError::PathNotFound | PathfindingError::SearchBudgetExceeded) => {
+                return Ok(None);
+            }
+        };
+        if !cells
+            .iter()
+            .copied()
+            .all(|cell| idle_cell_within_anchor(anchor, cell))
+        {
+            return Ok(None);
+        }
+
+        let destination_position = WorldPosition::from_cell_center(destination)?;
+        Ok(Some(NavigationRoute {
+            destination: destination_position,
+            waypoints: build_waypoints(current_position, destination_position, &cells)?,
+        }))
+    }
+
+    fn character_occupies_cell(&self, character_id: EntityId, cell: WorldCell) -> bool {
+        self.characters.values().any(|character| {
+            character.id() != character_id && character.position().containing_cell() == cell
+        })
     }
 
     fn maintain_doors(&mut self) -> Result<(), SimulationError> {
@@ -295,7 +489,7 @@ impl Simulation {
             }
 
             let current_job = self.job_world.job_for_worker(character_id);
-            if current_job.is_none() && character.movement() != MovementState::Idle {
+            if current_job.is_none() && !character.is_available_for_work() {
                 continue;
             }
 
@@ -335,13 +529,17 @@ impl Simulation {
             }
 
             let Some((source_item_id, position, quantity, route)) = chosen else {
-                if self
+                let starving = self
                     .characters
                     .get(&character_id)
-                    .is_some_and(Character::is_starving)
-                    && current_job.is_some()
-                {
-                    self.interrupt_worker_job(character_id)?;
+                    .is_some_and(Character::is_starving);
+                let wandering = self.characters.get(&character_id).is_some_and(|character| {
+                    matches!(character.movement(), MovementState::Wandering { .. })
+                });
+                if starving && (current_job.is_some() || wandering) {
+                    if current_job.is_some() {
+                        self.interrupt_worker_job(character_id)?;
+                    }
                     self.characters
                         .get_mut(&character_id)
                         .expect("starving character is still present")
@@ -2230,7 +2428,7 @@ impl Simulation {
             .characters
             .values()
             .filter(|character| {
-                character.movement() == MovementState::Idle
+                character.is_available_for_work()
                     && !character.is_starving()
                     && self.job_world.job_for_worker(character.id()).is_none()
                     && !self
@@ -2260,7 +2458,7 @@ impl Simulation {
             return Ok(());
         };
         if !character.is_hungry()
-            || character.movement() != MovementState::Idle
+            || !character.is_available_for_work()
             || self.job_world.job_for_worker(character_id).is_some()
         {
             return Ok(());
@@ -3572,7 +3770,7 @@ impl Simulation {
                         direction,
                         i128::from(character.speed().subunits_per_tick()),
                     ),
-                    MovementState::Navigating { .. } => {
+                    MovementState::Navigating { .. } | MovementState::Wandering { .. } => {
                         self.advance_navigation_one_tick(id)?;
                         continue;
                     }
@@ -3636,6 +3834,9 @@ impl Simulation {
             .characters
             .iter()
             .filter_map(|(id, character)| {
+                if !matches!(character.movement(), MovementState::Navigating { .. }) {
+                    return None;
+                }
                 character.navigation_route().and_then(|route| {
                     (route.waypoints.is_empty() && character.position() != route.destination)
                         .then_some((*id, route.destination))
@@ -3651,7 +3852,7 @@ impl Simulation {
     }
 
     fn advance_navigation_one_tick(&mut self, id: EntityId) -> Result<(), SimulationError> {
-        let (mut position, mut remaining, mut route) = {
+        let (mut position, mut remaining, mut route, wandering) = {
             let character = self
                 .characters
                 .get(&id)
@@ -3663,6 +3864,7 @@ impl Simulation {
                     .navigation_route()
                     .cloned()
                     .expect("navigating characters have a route"),
+                matches!(character.movement(), MovementState::Wandering { .. }),
             )
         };
         let mut trace = vec![position];
@@ -3679,6 +3881,8 @@ impl Simulation {
                 character.set_position(position);
                 if position == route.destination {
                     character.set_movement(MovementState::Idle);
+                } else if wandering {
+                    character.set_wandering_route(route);
                 } else {
                     character.set_navigation_route(route);
                 }
@@ -3712,6 +3916,8 @@ impl Simulation {
         character.set_position(position);
         if route.waypoints.is_empty() && position == route.destination {
             character.set_movement(MovementState::Idle);
+        } else if wandering {
+            character.set_wandering_route(route);
         } else {
             character.set_navigation_route(route);
         }
@@ -3882,6 +4088,27 @@ fn is_production_zone_neighbour(center: WorldCell, cell: WorldCell) -> bool {
     let dx = i128::from(cell.x()) - i128::from(center.x());
     let dy = i128::from(cell.y()) - i128::from(center.y());
     dx.abs() <= 1 && dy.abs() <= 1 && (dx != 0 || dy != 0)
+}
+
+fn idle_cell_within_anchor(anchor: WorldCell, cell: WorldCell) -> bool {
+    let dx = (i128::from(anchor.x()) - i128::from(cell.x())).unsigned_abs();
+    let dy = (i128::from(anchor.y()) - i128::from(cell.y())).unsigned_abs();
+    dx + dy <= IDLE_WANDER_RADIUS_CELLS as u128
+}
+
+fn idle_entropy(seed: u64, character_id: u64, cycle: u64) -> u64 {
+    mix_idle_entropy(
+        seed ^ character_id.wrapping_mul(0xD6E8_FEB8_6659_FD93)
+            ^ cycle.wrapping_mul(0xA076_1D64_78BD_642F),
+    )
+}
+
+fn mix_idle_entropy(mut value: u64) -> u64 {
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
 }
 
 fn cell_manhattan_distance(first: WorldCell, second: WorldCell) -> u128 {
@@ -4548,6 +4775,100 @@ mod tests {
     }
 
     #[test]
+    fn idle_characters_wander_deterministically_inside_their_local_anchor() {
+        let mut first = Simulation::new(WorldSeed::new(0)).unwrap();
+        let mut second = Simulation::new(WorldSeed::new(0)).unwrap();
+        let initial_anchors = first
+            .characters()
+            .map(|character| (character.id(), character.idle_anchor()))
+            .collect::<BTreeMap<_, _>>();
+        let mut saw_wandering = false;
+
+        for _ in 0..96 {
+            first.advance_ticks(1).unwrap();
+            second.advance_ticks(1).unwrap();
+            for character in first.characters() {
+                let anchor = initial_anchors[&character.id()];
+                assert_eq!(character.idle_anchor(), anchor);
+                assert!(idle_cell_within_anchor(
+                    anchor,
+                    character.position().containing_cell()
+                ));
+                if let MovementState::Wandering { destination } = character.movement() {
+                    saw_wandering = true;
+                    assert!(first.is_explored(destination.containing_cell()));
+                    assert!(idle_cell_within_anchor(
+                        anchor,
+                        destination.containing_cell()
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            saw_wandering,
+            "idle settlement should visibly move without player orders"
+        );
+        let first_state = first
+            .characters()
+            .map(|character| {
+                (
+                    character.id(),
+                    character.position(),
+                    character.movement(),
+                    character.idle_anchor(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let second_state = second
+            .characters()
+            .map(|character| {
+                (
+                    character.id(),
+                    character.position(),
+                    character.movement(),
+                    character.idle_anchor(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(first_state, second_state);
+    }
+
+    #[test]
+    fn real_work_preempts_idle_wandering() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let cora = cora();
+        let route = (0..128)
+            .find_map(|entropy| simulation.plan_idle_wander_route(cora, entropy).unwrap())
+            .expect("seed 0 should provide a local idle route for Cora");
+        simulation
+            .characters
+            .get_mut(&cora)
+            .unwrap()
+            .set_wandering_route(route);
+        for id in [1_u64, 2, 4, 5].map(|id| EntityId::new(id).unwrap()) {
+            simulation.characters.get_mut(&id).unwrap().set_movement(
+                MovementState::ManualDirectional {
+                    direction: Direction::East,
+                },
+            );
+        }
+
+        let (source, _) = harvest_fixture(&simulation);
+        let job_id = simulation.designate_harvest(source).unwrap();
+        simulation.try_assign_harvest(job_id, source).unwrap();
+
+        assert_eq!(
+            simulation.job_world.get(job_id).unwrap().state().worker(),
+            Some(cora)
+        );
+        assert!(matches!(
+            character(&simulation, cora).movement(),
+            MovementState::Navigating { .. }
+        ));
+    }
+
+    #[test]
     fn satiety_decays_only_on_the_global_interval() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         let cora = cora();
@@ -4771,16 +5092,20 @@ mod tests {
         simulation.advance_ticks(1).unwrap();
         assert!(!simulation.is_explored(destination));
 
-        simulation
-            .move_to(cora, WorldPosition::from_cell_center(destination).unwrap())
-            .unwrap();
-        simulation.advance_ticks(100).unwrap();
+        let destination_position = WorldPosition::from_cell_center(destination).unwrap();
+        simulation.move_to(cora, destination_position).unwrap();
+        for _ in 0..160 {
+            simulation.advance_ticks(1).unwrap();
+            if character(&simulation, cora).position() == destination_position {
+                break;
+            }
+        }
 
         assert_eq!(
             character(&simulation, cora).position(),
-            WorldPosition::from_cell_center(destination).unwrap()
+            destination_position
         );
-        assert_eq!(character(&simulation, cora).movement(), MovementState::Idle);
+        assert!(character(&simulation, cora).is_available_for_work());
         assert!(simulation.is_explored(destination));
     }
 
@@ -4810,13 +5135,16 @@ mod tests {
         simulation
             .move_to(cora, WorldPosition::from_cell_center(destination).unwrap())
             .unwrap();
-        simulation.advance_ticks(100).unwrap();
+        let closest = WorldPosition::from_cell_center(WorldCell::new(19, 0)).unwrap();
+        for _ in 0..160 {
+            simulation.advance_ticks(1).unwrap();
+            if character(&simulation, cora).position() == closest {
+                break;
+            }
+        }
 
-        assert_eq!(
-            character(&simulation, cora).position(),
-            WorldPosition::from_cell_center(WorldCell::new(19, 0)).unwrap()
-        );
-        assert_eq!(character(&simulation, cora).movement(), MovementState::Idle);
+        assert_eq!(character(&simulation, cora).position(), closest);
+        assert!(character(&simulation, cora).is_available_for_work());
     }
 
     #[test]

@@ -26,6 +26,7 @@ pub enum MovementState {
     Idle,
     ManualDirectional { direction: Direction },
     Navigating { destination: WorldPosition },
+    Wandering { destination: WorldPosition },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -76,6 +77,7 @@ pub(crate) struct CharacterRestoreState {
     pub(crate) speed: MovementSpeed,
     pub(crate) interaction_radius: InteractionRadius,
     pub(crate) satiety: u8,
+    pub(crate) idle_anchor: WorldCell,
     pub(crate) movement: MovementState,
     pub(crate) route: Option<NavigationRoute>,
 }
@@ -88,6 +90,7 @@ pub struct Character {
     speed: MovementSpeed,
     interaction_radius: InteractionRadius,
     satiety: u8,
+    idle_anchor: WorldCell,
     movement: MovementState,
     route: Option<NavigationRoute>,
     last_tick_motion_trace: Vec<WorldPosition>,
@@ -102,6 +105,7 @@ impl Character {
             speed: DEFAULT_CHARACTER_SPEED,
             interaction_radius: DEFAULT_CHARACTER_INTERACTION_RADIUS,
             satiety: MAX_SATIETY,
+            idle_anchor: position.containing_cell(),
             movement: MovementState::Idle,
             route: None,
             last_tick_motion_trace: vec![position],
@@ -121,6 +125,7 @@ impl Character {
             speed: state.speed,
             interaction_radius: state.interaction_radius,
             satiety: state.satiety,
+            idle_anchor: state.idle_anchor,
             movement: state.movement,
             route: state.route,
             last_tick_motion_trace: vec![position],
@@ -171,6 +176,17 @@ impl Character {
         self.movement
     }
 
+    pub const fn idle_anchor(&self) -> WorldCell {
+        self.idle_anchor
+    }
+
+    pub const fn is_available_for_work(&self) -> bool {
+        matches!(
+            self.movement,
+            MovementState::Idle | MovementState::Wandering { .. }
+        )
+    }
+
     pub(crate) fn navigation_route(&self) -> Option<&NavigationRoute> {
         self.route.as_ref()
     }
@@ -199,14 +215,29 @@ impl Character {
     }
 
     pub(crate) fn set_movement(&mut self, movement: MovementState) {
+        if movement == MovementState::Idle
+            && !matches!(self.movement, MovementState::Wandering { .. })
+        {
+            self.idle_anchor = self.position.containing_cell();
+        }
         self.movement = movement;
-        if !matches!(movement, MovementState::Navigating { .. }) {
+        if !matches!(
+            movement,
+            MovementState::Navigating { .. } | MovementState::Wandering { .. }
+        ) {
             self.route = None;
         }
     }
 
     pub(crate) fn set_navigation_route(&mut self, route: NavigationRoute) {
         self.movement = MovementState::Navigating {
+            destination: route.destination,
+        };
+        self.route = Some(route);
+    }
+
+    pub(crate) fn set_wandering_route(&mut self, route: NavigationRoute) {
+        self.movement = MovementState::Wandering {
             destination: route.destination,
         };
         self.route = Some(route);

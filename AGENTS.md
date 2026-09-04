@@ -17,7 +17,7 @@ Project documentation is part of the specification, not optional background mate
 
 ## 2. Current development target
 
-The current target is **Prototype 01 — Continuous World**.
+The current target is **Prototype 02 — Sustainable Settlement**.
 
 Do not implement future systems merely because they appear in the Design Bible.
 

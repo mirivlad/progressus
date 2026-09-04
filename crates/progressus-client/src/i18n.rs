@@ -199,9 +199,11 @@ impl Locale {
             (Language::Ru, MovementState::Idle) => "стоит",
             (Language::Ru, MovementState::ManualDirectional { .. }) => "идёт",
             (Language::Ru, MovementState::Navigating { .. }) => "идёт к цели",
+            (Language::Ru, MovementState::Wandering { .. }) => "гуляет",
             (Language::En, MovementState::Idle) => "idle",
             (Language::En, MovementState::ManualDirectional { .. }) => "moving",
             (Language::En, MovementState::Navigating { .. }) => "navigating",
+            (Language::En, MovementState::Wandering { .. }) => "wandering",
         }
     }
 

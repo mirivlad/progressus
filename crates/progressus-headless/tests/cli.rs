@@ -4,6 +4,14 @@ fn headless_command() -> Command {
     Command::new(env!("CARGO_BIN_EXE_progressus-headless"))
 }
 
+fn numeric_field(stdout: &str, prefix: &str) -> u64 {
+    stdout
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix(prefix))
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| panic!("missing numeric field {prefix}"))
+}
+
 #[test]
 fn long_run_prints_deterministic_client_summary() {
     let output = headless_command()
@@ -14,13 +22,15 @@ fn long_run_prints_deterministic_client_summary() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains(
-        "seed=42 tick=100000 worldgen_version=2 chunks=2 characters=5 resident_chunks=9"
+        "seed=42 tick=100000 worldgen_version=2 chunks=2 characters=5 resident_chunks=12"
     ));
+    assert!(
+        stdout.contains(
+            "character id=1 name=Ada position_subunits=(512, -512) containing_cell=(0, -1)"
+        )
+    );
     assert!(stdout.contains(
-        "character id=1 name=Ada position_subunits=(512, -1792) containing_cell=(0, -2)"
-    ));
-    assert!(stdout.contains(
-        "character id=5 name=Elin position_subunits=(1280, -2560) containing_cell=(1, -3)"
+        "character id=5 name=Elin position_subunits=(-512, -1536) containing_cell=(-1, -2)"
     ));
     assert!(stdout.contains("terrain grass="));
     assert!(stdout.contains(" water="));
@@ -118,7 +128,16 @@ fn activity_smoke_exercises_physical_work_save_load_and_bounded_residency() {
     assert!(stdout.contains("tools=13"));
     assert!(stdout.contains("structures=3"));
     assert!(stdout.contains("save_reload_while_carrying=true"));
-    assert!(stdout.contains("resident_chunks=9"));
+    let resident = numeric_field(&stdout, "resident_chunks=");
+    let max_resident = numeric_field(&stdout, "max_resident_chunks=");
+    assert!(
+        resident <= 45,
+        "five radius-one character neighborhoods must stay bounded"
+    );
+    assert!(
+        max_resident <= 45,
+        "activity smoke exceeded bounded raw residency"
+    );
 }
 
 #[test]

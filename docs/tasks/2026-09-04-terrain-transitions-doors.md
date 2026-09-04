@@ -1,6 +1,6 @@
 # Task: terrain transitions and doors
 
-Status: **Implemented; owner-PC visual/client validation pending**
+Status: **Implemented and owner-PC validated**
 Date: 2026-09-04
 
 ## Goal

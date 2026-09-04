@@ -619,7 +619,7 @@ pub(crate) fn sync_character_inspector(
             locale.movement_name(character.movement),
             locale.direction_name(direction)
         ),
-        MovementState::Navigating { destination } => {
+        MovementState::Navigating { destination } | MovementState::Wandering { destination } => {
             let cell = destination.containing_cell();
             format!(
                 "{} -> ({}, {})",

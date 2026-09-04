@@ -441,6 +441,7 @@ enum MovementSave {
     Idle,
     ManualDirectional { direction: DirectionSave },
     Navigating { destination: PositionSave },
+    Wandering { destination: PositionSave },
 }
 
 impl From<MovementState> for MovementSave {
@@ -451,6 +452,9 @@ impl From<MovementState> for MovementSave {
                 direction: direction.into(),
             },
             MovementState::Navigating { destination } => Self::Navigating {
+                destination: destination.into(),
+            },
+            MovementState::Wandering { destination } => Self::Wandering {
                 destination: destination.into(),
             },
         }
@@ -465,6 +469,9 @@ impl MovementSave {
                 direction: direction.into(),
             },
             Self::Navigating { destination } => MovementState::Navigating {
+                destination: destination.into_position()?,
+            },
+            Self::Wandering { destination } => MovementState::Wandering {
                 destination: destination.into_position()?,
             },
         })
@@ -506,6 +513,8 @@ struct CharacterSave {
     interaction_radius_subunits: u32,
     #[serde(default = "default_satiety")]
     satiety: u8,
+    #[serde(default)]
+    idle_anchor: Option<CellSave>,
     movement: MovementSave,
     navigation: Option<NavigationSave>,
 }
@@ -523,6 +532,7 @@ impl CharacterSave {
             speed_subunits_per_tick: character.speed().subunits_per_tick(),
             interaction_radius_subunits: character.interaction_radius().subunits(),
             satiety: character.satiety(),
+            idle_anchor: Some(character.idle_anchor().into()),
             movement: character.movement().into(),
             navigation: character.navigation_route().map(NavigationSave::from_route),
         }
@@ -542,6 +552,10 @@ impl CharacterSave {
                 MAX_SATIETY
             ));
         }
+        let idle_anchor = self
+            .idle_anchor
+            .map(CellSave::into_cell)
+            .unwrap_or_else(|| position.containing_cell());
         let movement = self.movement.into_movement()?;
         let route = self
             .navigation
@@ -549,10 +563,11 @@ impl CharacterSave {
             .transpose()?;
         match (movement, route.as_ref()) {
             (MovementState::Navigating { destination }, Some(route))
+            | (MovementState::Wandering { destination }, Some(route))
                 if route.destination == destination && !route.waypoints.is_empty() => {}
-            (MovementState::Navigating { .. }, _) => {
+            (MovementState::Navigating { .. } | MovementState::Wandering { .. }, _) => {
                 return invalid(format!(
-                    "navigating character {} has no matching non-empty route",
+                    "moving character {} has no matching non-empty route",
                     id.value()
                 ));
             }
@@ -572,6 +587,7 @@ impl CharacterSave {
                 speed,
                 interaction_radius: InteractionRadius::new(self.interaction_radius_subunits),
                 satiety: self.satiety,
+                idle_anchor,
                 movement,
                 route,
             },
@@ -2107,6 +2123,36 @@ mod tests {
                 .characters()
                 .all(|character| character.last_tick_motion_trace() == [character.position()])
         );
+    }
+
+    #[test]
+    fn active_idle_wandering_and_anchor_continue_deterministically_after_load() {
+        let mut original = Simulation::new(WorldSeed::new(0)).unwrap();
+        for _ in 0..96 {
+            original.advance_ticks(1).unwrap();
+            if original
+                .characters()
+                .any(|character| matches!(character.movement(), MovementState::Wandering { .. }))
+            {
+                break;
+            }
+        }
+        assert!(
+            original
+                .characters()
+                .any(|character| matches!(character.movement(), MovementState::Wandering { .. })),
+            "fixture must save an active idle walk"
+        );
+
+        let encoded = original.save_json().unwrap();
+        let mut restored = Simulation::load_json(&encoded).unwrap();
+        assert_eq!(restored.save_json().unwrap(), encoded);
+
+        for _ in 0..32 {
+            original.advance_ticks(1).unwrap();
+            restored.advance_ticks(1).unwrap();
+        }
+        assert_eq!(restored.save_json().unwrap(), original.save_json().unwrap());
     }
 
     #[test]

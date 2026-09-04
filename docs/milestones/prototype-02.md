@@ -99,11 +99,17 @@ Prototype 02 needs only enough research/knowledge to prove that a capability can
 
 ## 8. Cross-cutting client usability pass
 
-Status: **Complete (visual validation on owner PC pending)**
+Status: **Complete**
 
-Before continuing the settlement systems, the Prototype 01/02 client received a usability pass: the flat toolbar became an icon-first HUD with Orders/Zones/Build palettes and localized hover help; middle-mouse drag pans the camera with grab-style inverted deltas; player move intent can continue into unexplored terrain without revealing it; stockpile zones render as a toggleable translucent layer and can be selected/configured; and stockpiles persist typed item acceptance filters that ordinary physical Haul obeys. A follow-up playtest pass made selection independent from the active tool (existing workstations/characters win a plain click without cancelling Build/Orders), fixed non-overlapping stockpile paint to create independent IDs/policies, moved tooltips beside/above the hovered HUD control, allowed Door designation to replace planned/completed StoneWall cells, and changed Water/Rock transition sprites to alpha-rounded overlays over a Grass underlay.
+Before continuing the settlement systems, the Prototype 01/02 client received a usability pass: the flat toolbar became an icon-first HUD with Orders/Zones/Build palettes and localized hover help; middle-mouse drag pans the camera with grab-style inverted deltas; player move intent can continue into unexplored terrain without revealing it; stockpile zones render as a toggleable translucent layer and can be selected/configured; and stockpiles persist typed item acceptance filters that ordinary physical Haul obeys. A follow-up playtest pass made selection independent from the active tool (existing workstations/characters win a plain click without cancelling Build/Orders), fixed non-overlapping stockpile paint to create independent IDs/policies, moved tooltips beside/above the hovered HUD control, allowed Door designation to replace planned/completed StoneWall cells, and changed Water/Rock transition sprites to alpha-rounded overlays over a Grass underlay. Owner-PC visual validation of the terrain/door/HUD pass was completed on 2026-09-04.
 
-## 9. Persistence and determinism
+## 9. Minimal idle life pass
+
+Status: **Complete (owner-PC visual validation pending)**
+
+Characters who have no job and no urgent need now exhibit deterministic low-priority life rather than standing forever. Idle people periodically take short authoritative `Wandering` routes through explored walkable cells, and occasionally approach another nearby idle person. Wandering is not a job: real work, hunger and player orders may preempt it. Each character keeps a persistent local idle anchor and every idle route stays within Manhattan radius three of that anchor, so repeated wandering cannot become autonomous migration/scouting. See [`ADR-0017`](../adr/0017-bounded-deterministic-idle-behavior.md).
+
+## 10. Persistence and determinism
 
 Every new authoritative state introduced by Prototype 02 must either:
 
@@ -112,7 +118,7 @@ Every new authoritative state introduced by Prototype 02 must either:
 
 Save/load during an active need-satisfaction job must continue deterministically. Global stable-ID uniqueness and physical quantity conservation remain mandatory.
 
-## 10. Headless acceptance
+## 11. Headless acceptance
 
 Add a `prototype-02` activity scenario that exercises at least food, sleep, skills, and metallurgy for a long run. It must verify:
 
@@ -124,7 +130,7 @@ Add a `prototype-02` activity scenario that exercises at least food, sleep, skil
 - save/load can occur while a need job is active;
 - the settlement can reach a stable repeating loop under sufficient resources.
 
-## 11. Non-goals
+## 12. Non-goals
 
 Prototype 02 does not require:
 
@@ -139,7 +145,7 @@ Prototype 02 does not require:
 - multi-settlement Simulation LOD;
 - a large research tree.
 
-## 12. Definition of done
+## 13. Definition of done
 
 - [x] nutrition and autonomous physical eating work;
 - [ ] renewable physical food can sustain the five-character settlement;

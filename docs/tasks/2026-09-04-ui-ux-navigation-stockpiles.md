@@ -1,6 +1,6 @@
 # Task: UI/UX pass, exploration orders, stockpile policies
 
-Status: **Implemented; owner-PC visual validation pending**
+Status: **Implemented and owner-PC validated**
 Date: 2026-09-04
 
 ## Goal
