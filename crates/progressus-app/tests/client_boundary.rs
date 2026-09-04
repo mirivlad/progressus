@@ -277,6 +277,71 @@ fn harvest_designation_and_cancellation_cross_the_public_application_boundary() 
 }
 
 #[test]
+fn distinct_stockpiles_keep_distinct_ids_and_item_policies() {
+    let mut application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(0),
+    })
+    .unwrap();
+    let first_cell = WorldCell::new(0, 0);
+    let second_cell = WorldCell::new(1, 0);
+    application
+        .execute(Command::CreateStockpile { cell: first_cell })
+        .unwrap();
+    application
+        .execute(Command::CreateStockpile { cell: second_cell })
+        .unwrap();
+    let created = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert_eq!(created.stockpiles.len(), 2);
+    let first = created
+        .stockpiles
+        .iter()
+        .find(|stockpile| stockpile.cells == vec![first_cell])
+        .unwrap();
+    let second = created
+        .stockpiles
+        .iter()
+        .find(|stockpile| stockpile.cells == vec![second_cell])
+        .unwrap();
+    assert_ne!(first.id, second.id);
+    let first_id = first.id;
+    let second_id = second.id;
+
+    application
+        .execute(Command::SetStockpileItemAllowed {
+            stockpile_id: first_id,
+            kind: ItemKind::Wood,
+            allowed: false,
+        })
+        .unwrap();
+    application
+        .execute(Command::SetStockpileItemAllowed {
+            stockpile_id: second_id,
+            kind: ItemKind::Berries,
+            allowed: false,
+        })
+        .unwrap();
+    let filtered = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert_eq!(
+        filtered
+            .stockpiles
+            .iter()
+            .find(|stockpile| stockpile.id == first_id)
+            .unwrap()
+            .disallowed_items,
+        vec![ItemKind::Wood]
+    );
+    assert_eq!(
+        filtered
+            .stockpiles
+            .iter()
+            .find(|stockpile| stockpile.id == second_id)
+            .unwrap()
+            .disallowed_items,
+        vec![ItemKind::Berries]
+    );
+}
+
+#[test]
 fn stockpile_and_haul_cycle_cross_the_public_application_boundary() {
     let mut application = Application::new_game(NewGameOptions {
         seed: WorldSeed::new(0),
@@ -718,6 +783,64 @@ fn physical_wall_construction_crosses_the_public_application_boundary() {
                 .all(|waypoint| waypoint.containing_cell() != cell)
         );
     }
+}
+
+#[test]
+fn door_designation_replaces_completed_wall_through_public_application_boundary() {
+    let mut application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(0),
+    })
+    .unwrap();
+    let cell = WorldCell::new(0, 1);
+    application
+        .execute(Command::DesignateConstruction {
+            kind: StructureKind::StoneWall,
+            cell,
+        })
+        .unwrap();
+
+    for _ in 0..768 {
+        application
+            .execute(Command::AdvanceTicks { count: 1 })
+            .unwrap();
+        if application
+            .snapshot(SnapshotQuery::default())
+            .unwrap()
+            .structures
+            .iter()
+            .any(|structure| structure.cell == cell)
+        {
+            break;
+        }
+    }
+    assert!(
+        application
+            .snapshot(SnapshotQuery::default())
+            .unwrap()
+            .structures
+            .iter()
+            .any(|structure| structure.cell == cell && structure.kind == StructureKind::StoneWall)
+    );
+
+    application
+        .execute(Command::DesignateConstruction {
+            kind: StructureKind::Door,
+            cell,
+        })
+        .unwrap();
+    let replaced = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert!(
+        replaced
+            .structures
+            .iter()
+            .all(|structure| structure.cell != cell)
+    );
+    assert!(
+        replaced
+            .construction_sites
+            .iter()
+            .any(|site| site.cell == cell && site.kind == StructureKind::Door)
+    );
 }
 
 #[test]

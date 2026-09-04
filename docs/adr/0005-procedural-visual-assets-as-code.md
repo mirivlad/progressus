@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-02
-- Amended: 2026-09-04 (derived terrain transition topology)
+- Amended: 2026-09-04 (derived terrain transition topology and alpha-corner overlays)
 
 ## Context
 
@@ -16,7 +16,7 @@ Procedural visual definitions live as Rust source under the repository-level `as
 
 Procedural art remains presentation-only. Simulation, world generation, application read models, pathfinding, and gameplay decisions must not depend on generated pixels or Bevy image handles.
 
-A world cell or stable Progressus entity ID may deterministically select a visual variant. Presentation may also derive a bounded neighbour-topology key from already published authoritative cells. Water/Rock terrain now use an eight-neighbour mask to draw coast/foothill transitions; unknown neighbours are deliberately treated as continuous so raster selection cannot become a terrain-discovery side channel. Variant/topology spaces must be bounded so a large or unbounded world cannot create one GPU texture per cell or entity. Generated images are cached and reused.
+A world cell or stable Progressus entity ID may deterministically select a visual variant. Presentation may also derive a bounded neighbour-topology key from already published authoritative cells. Water/Rock terrain use an eight-neighbour mask to draw coast/foothill transitions; unknown neighbours are deliberately treated as continuous so raster selection cannot become a terrain-discovery side channel. Known non-Grass cells are rendered over a deterministic Grass underlay, allowing Water/Rock procedural overlays to use transparent convex/diagonal corner pixels for rounded silhouettes without exposing the world clear colour or changing authoritative terrain. Variant/topology spaces must be bounded so a large or unbounded world cannot create one GPU texture per cell or entity. Generated images are cached and reused.
 
 PNG and other authored assets remain allowed when they provide clear value, but generated PNG files are not the canonical source for procedural assets.
 

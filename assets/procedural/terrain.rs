@@ -139,11 +139,63 @@ fn shoreline_corner(
     let second_open = connections & second == 0;
     let diagonal_open = connections & diagonal == 0;
     if first_open && second_open {
-        canvas.circle(x, y, 5, shore);
-        canvas.circle(x, y, 3, light);
+        rounded_external_corner(canvas, x, y, shore, light);
     } else if diagonal_open && !first_open && !second_open {
-        canvas.circle(x, y, 3, shore);
-        canvas.circle(x, y, 1, light);
+        rounded_diagonal_notch(canvas, x, y, shore, light);
+    }
+}
+
+fn rounded_external_corner(
+    canvas: &mut Canvas,
+    corner_x: i32,
+    corner_y: i32,
+    edge: Rgba8,
+    inner: Rgba8,
+) {
+    let center_x = if corner_x == 0 { 5 } else { 10 };
+    let center_y = if corner_y == 0 { 5 } else { 10 };
+    let x_range = if corner_x == 0 { 0..=5 } else { 10..=15 };
+    let y_range = if corner_y == 0 { 0..=5 } else { 10..=15 };
+    const TRANSPARENT: Rgba8 = Rgba8::rgba(0, 0, 0, 0);
+    for py in y_range {
+        for px in x_range.clone() {
+            let dx = px - center_x;
+            let dy = py - center_y;
+            let distance = dx * dx + dy * dy;
+            if distance > 25 {
+                canvas.pixel(px, py, TRANSPARENT);
+            } else if distance >= 16 {
+                canvas.pixel(px, py, edge);
+            } else if distance >= 9 {
+                canvas.pixel(px, py, inner);
+            }
+        }
+    }
+}
+
+fn rounded_diagonal_notch(
+    canvas: &mut Canvas,
+    corner_x: i32,
+    corner_y: i32,
+    edge: Rgba8,
+    inner: Rgba8,
+) {
+    const TRANSPARENT: Rgba8 = Rgba8::rgba(0, 0, 0, 0);
+    let x_range = if corner_x == 0 { 0..=4 } else { 11..=15 };
+    let y_range = if corner_y == 0 { 0..=4 } else { 11..=15 };
+    for py in y_range {
+        for px in x_range.clone() {
+            let dx = px - corner_x;
+            let dy = py - corner_y;
+            let distance = dx * dx + dy * dy;
+            if distance <= 4 {
+                canvas.pixel(px, py, TRANSPARENT);
+            } else if distance <= 10 {
+                canvas.pixel(px, py, edge);
+            } else if distance <= 16 {
+                canvas.pixel(px, py, inner);
+            }
+        }
     }
 }
 
@@ -189,6 +241,7 @@ pub(super) fn rock(canvas: &mut Canvas, variant: u8, connections: u8) {
         NORTH_WEST,
         0,
         0,
+        TALUS,
         SOIL,
         MOSS,
     );
@@ -200,6 +253,7 @@ pub(super) fn rock(canvas: &mut Canvas, variant: u8, connections: u8) {
         NORTH_EAST,
         15,
         0,
+        TALUS,
         SOIL,
         MOSS,
     );
@@ -211,6 +265,7 @@ pub(super) fn rock(canvas: &mut Canvas, variant: u8, connections: u8) {
         SOUTH_EAST,
         15,
         15,
+        TALUS,
         SOIL,
         MOSS,
     );
@@ -222,6 +277,7 @@ pub(super) fn rock(canvas: &mut Canvas, variant: u8, connections: u8) {
         SOUTH_WEST,
         0,
         15,
+        TALUS,
         SOIL,
         MOSS,
     );
@@ -264,6 +320,7 @@ fn foothill_corner(
     diagonal: u8,
     x: i32,
     y: i32,
+    talus: Rgba8,
     soil: Rgba8,
     moss: Rgba8,
 ) {
@@ -271,10 +328,14 @@ fn foothill_corner(
     let second_open = connections & second == 0;
     let diagonal_open = connections & diagonal == 0;
     if first_open && second_open {
-        canvas.circle(x, y, 5, soil);
-        canvas.circle(x, y, 2, moss);
+        rounded_external_corner(canvas, x, y, soil, talus);
+        let inner_x = if x == 0 { 4 } else { 11 };
+        let inner_y = if y == 0 { 4 } else { 11 };
+        canvas.pixel(inner_x, inner_y, moss);
     } else if diagonal_open && !first_open && !second_open {
-        canvas.circle(x, y, 3, soil);
-        canvas.pixel(x, y, moss);
+        rounded_diagonal_notch(canvas, x, y, soil, talus);
+        let moss_x = if x == 0 { 3 } else { 12 };
+        let moss_y = if y == 0 { 3 } else { 12 };
+        canvas.pixel(moss_x, moss_y, moss);
     }
 }

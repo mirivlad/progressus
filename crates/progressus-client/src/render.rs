@@ -349,13 +349,38 @@ fn spawn_terrain(
     root.with_children(|parent| {
         for (&world_cell, &terrain) in &known {
             let connections = TerrainConnections::from_known(world_cell, terrain, &known);
+            if terrain != progressus_app::Terrain::Grass {
+                // Water and rock use transparent rounded corners. A deterministic
+                // Grass underlay keeps those pixels part of the explored terrain
+                // instead of exposing the world clear colour.
+                parent.spawn((
+                    procedural_assets.sprite(
+                        images,
+                        terrain_asset(
+                            progressus_app::Terrain::Grass,
+                            world_cell,
+                            TerrainConnections::default(),
+                        ),
+                        Vec2::splat(CELL_SIZE),
+                    ),
+                    Transform::from_translation(world_translation(world_cell, origin, TERRAIN_Z)),
+                ));
+            }
             parent.spawn((
                 procedural_assets.sprite(
                     images,
                     terrain_asset(terrain, world_cell, connections),
                     Vec2::splat(CELL_SIZE),
                 ),
-                Transform::from_translation(world_translation(world_cell, origin, TERRAIN_Z)),
+                Transform::from_translation(world_translation(
+                    world_cell,
+                    origin,
+                    if terrain == progressus_app::Terrain::Grass {
+                        TERRAIN_Z
+                    } else {
+                        TERRAIN_Z + 0.1
+                    },
+                )),
             ));
         }
     });
@@ -391,7 +416,7 @@ fn sync_stockpile_zones(
                 .spawn((
                     Sprite::from_color(
                         Color::srgba(0.20, 0.78, 0.55, 0.30),
-                        Vec2::splat(CELL_SIZE * 0.98),
+                        Vec2::splat(CELL_SIZE),
                     ),
                     Transform::from_translation(world_translation(cell, origin, TERRAIN_Z + 1.0)),
                     StockpileZoneVisual,
@@ -1202,7 +1227,7 @@ pub(crate) fn camera_controls(
         if let Projection::Orthographic(orthographic) = &mut *projection {
             if buttons.pressed(MouseButton::Middle) && !tool.pointer_over_ui {
                 transform.translation +=
-                    Vec3::new(mouse_drag.x, -mouse_drag.y, 0.0) * orthographic.scale;
+                    Vec3::new(-mouse_drag.x, mouse_drag.y, 0.0) * orthographic.scale;
             }
             orthographic.scale = (orthographic.scale * 0.9_f32.powf(scroll))
                 .clamp(MIN_CAMERA_SCALE, MAX_CAMERA_SCALE);

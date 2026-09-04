@@ -101,7 +101,7 @@ Prototype 02 needs only enough research/knowledge to prove that a capability can
 
 Status: **Complete (visual validation on owner PC pending)**
 
-Before continuing the settlement systems, the Prototype 01/02 client received a usability pass: the flat toolbar became an icon-first HUD with Orders/Zones/Build palettes and localized hover help; middle-mouse drag pans the camera; player move intent can continue into unexplored terrain without revealing it; stockpile zones render as a toggleable translucent layer and can be selected/configured; and stockpiles now persist typed item acceptance filters that ordinary physical Haul obeys.
+Before continuing the settlement systems, the Prototype 01/02 client received a usability pass: the flat toolbar became an icon-first HUD with Orders/Zones/Build palettes and localized hover help; middle-mouse drag pans the camera with grab-style inverted deltas; player move intent can continue into unexplored terrain without revealing it; stockpile zones render as a toggleable translucent layer and can be selected/configured; and stockpiles persist typed item acceptance filters that ordinary physical Haul obeys. A follow-up playtest pass made selection independent from the active tool (existing workstations/characters win a plain click without cancelling Build/Orders), fixed non-overlapping stockpile paint to create independent IDs/policies, moved tooltips beside/above the hovered HUD control, allowed Door designation to replace planned/completed StoneWall cells, and changed Water/Rock transition sprites to alpha-rounded overlays over a Grass underlay.
 
 ## 9. Persistence and determinism
 

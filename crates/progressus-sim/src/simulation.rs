@@ -1183,6 +1183,27 @@ impl Simulation {
         kind: StructureKind,
         cell: WorldCell,
     ) -> Result<EntityId, SimulationError> {
+        if kind == StructureKind::Door {
+            if let Some(site_id) = self.construction_world.site_at(cell)
+                && self
+                    .construction_world
+                    .site(site_id)
+                    .is_some_and(|site| site.kind() == StructureKind::StoneWall)
+            {
+                self.cancel_construction(site_id)?;
+            }
+            if let Some(structure_id) = self.construction_world.structure_at(cell)
+                && self
+                    .construction_world
+                    .structure(structure_id)
+                    .is_some_and(|structure| structure.kind() == StructureKind::StoneWall)
+            {
+                self.construction_world
+                    .remove_structure(structure_id)
+                    .map_err(SimulationError::from_construction_world)?;
+            }
+        }
+
         self.validate_construction_cell(cell)?;
         if self.construction_world.site_at(cell).is_some()
             || self.construction_world.structure_at(cell).is_some()
@@ -6951,6 +6972,65 @@ mod tests {
         assert!(simulation.construction_world.indexes_are_consistent());
         assert!(simulation.job_world.indexes_are_consistent());
         assert!(simulation.item_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn door_designation_replaces_planned_stone_wall_without_leaving_old_site() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let cell = empty_stockpile_cells(&simulation, 1)[0];
+        let wall_id = simulation
+            .designate_construction(StructureKind::StoneWall, cell)
+            .unwrap();
+        assert_eq!(simulation.construction_site_at(cell), Some(wall_id));
+
+        let door_id = simulation
+            .designate_construction(StructureKind::Door, cell)
+            .unwrap();
+        assert_ne!(door_id, wall_id);
+        assert!(simulation.construction_world.site(wall_id).is_none());
+        assert_eq!(simulation.construction_site_at(cell), Some(door_id));
+        assert_eq!(
+            simulation.construction_world.site(door_id).unwrap().kind(),
+            StructureKind::Door
+        );
+        assert!(simulation.construction_world.indexes_are_consistent());
+        assert!(simulation.job_world.indexes_are_consistent());
+        assert!(simulation.item_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn door_designation_replaces_completed_stone_wall_with_new_door_site() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let cell = empty_stockpile_cells(&simulation, 1)[0];
+        let wall_id = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .construction_world
+            .insert_site(ConstructionSite::new(
+                wall_id,
+                StructureKind::StoneWall,
+                cell,
+            ))
+            .unwrap();
+        simulation
+            .construction_world
+            .complete_site(wall_id)
+            .unwrap();
+        assert_eq!(simulation.structure_at(cell), Some(wall_id));
+        assert!(!simulation.is_walkable(cell).unwrap());
+
+        let door_id = simulation
+            .designate_construction(StructureKind::Door, cell)
+            .unwrap();
+        assert_ne!(door_id, wall_id);
+        assert!(simulation.construction_world.structure(wall_id).is_none());
+        assert_eq!(simulation.structure_at(cell), None);
+        assert_eq!(simulation.construction_site_at(cell), Some(door_id));
+        assert_eq!(
+            simulation.construction_world.site(door_id).unwrap().kind(),
+            StructureKind::Door
+        );
+        assert!(simulation.is_walkable(cell).unwrap());
+        assert!(simulation.construction_world.indexes_are_consistent());
     }
 
     #[test]

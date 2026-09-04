@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use progressus_app::{JobState, MAX_SATIETY, MovementState};
 
 use crate::i18n::{Language, Locale, TextKey};
@@ -162,7 +163,7 @@ pub(crate) fn setup_toolbar(
             Node {
                 position_type: PositionType::Absolute,
                 left: px(12),
-                bottom: px(76),
+                top: px(12),
                 width: px(360),
                 padding: UiRect::all(px(9)),
                 border: UiRect::all(px(1)),
@@ -893,23 +894,42 @@ pub(crate) fn sync_hud_tooltip(
     locale: Res<Locale>,
     scheduler: Res<TickScheduler>,
     zones: Res<ZoneVisibility>,
+    windows: Query<&Window, With<PrimaryWindow>>,
     sources: Query<(&Interaction, &HudTooltipSource)>,
-    mut panels: Query<&mut Visibility, With<HudTooltipPanel>>,
+    mut panels: Query<(&mut Visibility, &mut Node), With<HudTooltipPanel>>,
     mut texts: Query<&mut Text, With<HudTooltipText>>,
 ) {
     let hovered = sources
         .iter()
         .find(|(interaction, _)| **interaction == Interaction::Hovered)
         .map(|(_, source)| source.0);
-    let Ok(mut visibility) = panels.single_mut() else {
+    let Ok((mut visibility, mut node)) = panels.single_mut() else {
         return;
     };
     let Some(kind) = hovered else {
         *visibility = Visibility::Hidden;
         return;
     };
+
     if let Ok(mut text) = texts.single_mut() {
         **text = hud_tooltip_text(*locale, kind, scheduler.is_paused(), zones.visible);
+    }
+    if let Ok(window) = windows.single()
+        && let Some(cursor) = window.cursor_position()
+    {
+        const TOOLTIP_WIDTH: f32 = 360.0;
+        const POINTER_GAP: f32 = 16.0;
+        const ABOVE_OFFSET: f32 = 88.0;
+        let max_left = (window.width() - TOOLTIP_WIDTH - 8.0).max(8.0);
+        let left = (cursor.x + POINTER_GAP).clamp(8.0, max_left);
+        let top = if cursor.y >= ABOVE_OFFSET + 8.0 {
+            cursor.y - ABOVE_OFFSET
+        } else {
+            cursor.y + POINTER_GAP
+        };
+        node.left = px(left);
+        node.top = px(top.clamp(8.0, (window.height() - 72.0).max(8.0)));
+        node.bottom = Val::Auto;
     }
     *visibility = Visibility::Visible;
 }

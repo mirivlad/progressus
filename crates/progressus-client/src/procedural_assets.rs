@@ -407,7 +407,7 @@ impl Canvas {
 #[cfg(test)]
 mod tests {
     use bevy::prelude::{Assets, Vec2};
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use progressus_app::{DoorState, EntityId, StructureKind, Terrain, WorldCell};
 
@@ -472,6 +472,27 @@ mod tests {
     }
 
     #[test]
+    fn water_and_rock_convex_corners_are_transparent_overlays() {
+        let center = WorldCell::new(0, 0);
+        for terrain in [Terrain::Water, Terrain::Rock] {
+            let known = [
+                (center, terrain),
+                (WorldCell::new(0, 1), Terrain::Grass),
+                (WorldCell::new(-1, 0), Terrain::Grass),
+            ]
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+            let image = render_image(terrain_asset(
+                terrain,
+                center,
+                TerrainConnections::from_known(center, terrain, &known),
+            ));
+            assert_eq!(alpha_at(&image, 0, 0), 0);
+            assert_ne!(alpha_at(&image, 8, 8), 0);
+        }
+    }
+
+    #[test]
     fn wall_raster_reaches_only_the_requested_cardinal_edges() {
         let center = WorldCell::new(0, 0);
         let north_cells = [center, WorldCell::new(0, 1)]
@@ -495,6 +516,27 @@ mod tests {
         ));
         assert_ne!(alpha_at(&west, 0, 8), 0);
         assert_eq!(alpha_at(&west, 15, 8), 0);
+    }
+
+    #[test]
+    fn open_door_leaf_stays_vertical_for_horizontal_and_vertical_wall_runs() {
+        let center = WorldCell::new(0, 0);
+        let horizontal_cells = [center, WorldCell::new(-1, 0), WorldCell::new(1, 0)]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let vertical_cells = [center, WorldCell::new(0, -1), WorldCell::new(0, 1)]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        for cells in [&horizontal_cells, &vertical_cells] {
+            let image = render_image(structure_asset(
+                StructureKind::Door,
+                CardinalConnections::from_cells(center, cells),
+                Some(DoorState::Open),
+            ));
+            let data = image.data.as_deref().unwrap();
+            let offset = (8 * 16 + 5) * 4;
+            assert_eq!(&data[offset..offset + 4], &[132, 86, 48, 255]);
+        }
     }
 
     #[test]

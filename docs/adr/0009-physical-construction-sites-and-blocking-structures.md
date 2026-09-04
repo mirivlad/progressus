@@ -2,7 +2,7 @@
 
 Status: Accepted
 
-Amended: 2026-09-04 (passable automatic doors)
+Amended: 2026-09-04 (passable automatic doors; wall-to-door replacement)
 
 ## Context
 
@@ -22,7 +22,7 @@ Completed structures are authoritative world occupancy, separate from base terra
 
 Door open/closed state is authoritative but automatic: a character occupying the door cell opens it, and it stays open for a short deterministic hold interval after the cell is vacated. This state is exposed through detached snapshots and persisted as an additive optional v1 save field. It does not introduce locking, access control, or an inventory.
 
-Construction sites do not block movement while unfinished. Placement is limited to explored, walkable, unoccupied cells and cannot be designated under a character.
+Construction sites do not block movement while unfinished. Ordinary placement is limited to explored, walkable, unoccupied cells and cannot be designated under a character. Door designation has one explicit replacement exception: a planned StoneWall is cancelled through the normal construction-cancellation path, or a completed StoneWall is removed from structure occupancy, before the Door site is created on the same cell. Replacing a completed wall does not introduce salvage in this pass.
 
 Cancelling a site removes its child jobs and reservations. If material is currently carried, it is first dropped at the worker's current exact position; no material is silently deleted.
 
@@ -32,5 +32,5 @@ Cancelling a site removes its child jobs and reservations. If material is curren
 - Camera/world discovery remains unchanged; structures do not reveal terrain.
 - A line of walls can be designated with the client rectangle tool, but builders still require an accessible adjacent work position.
 - Dense enclosed construction layouts may become unreachable and intentionally remain unfinished rather than teleporting workers/materials.
-- Demolition, door locking/access policy, multi-material recipes, stack splitting, and construction priorities remain future work.
+- General demolition/salvage, door locking/access policy, multi-material recipes, stack splitting, and construction priorities remain future work.
 - Workbench placement remains an explicit Prototype 01 bootstrap exception and is still instantaneous.

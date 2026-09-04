@@ -6,7 +6,8 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use progressus_app::{
     Application, ApplicationError, ChunkCoord, ClientSnapshot, Command, EntityId, JobKind,
-    NewGameOptions, SnapshotQuery, StructureKind, WorkstationKind, WorldCell, WorldSeed,
+    NewGameOptions, SnapshotQuery, StructureKind, WorkstationKind, WorldCell, WorldPosition,
+    WorldSeed,
 };
 
 use crate::i18n::Locale;
@@ -208,6 +209,40 @@ pub(crate) fn pointer_navigation(
         return;
     };
 
+    let modified_left = keys.any_pressed([
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+        KeyCode::ShiftLeft,
+        KeyCode::ShiftRight,
+    ]);
+    if buttons.just_pressed(MouseButton::Left) && !modified_left {
+        // Selectable physical objects have priority over the current tool. The
+        // tool remains active so the player can inspect something and then
+        // immediately continue the previous designation/build action. Zone
+        // editing keeps direct access to stockpile cells, but characters and
+        // workstations still win over the zone tool.
+        let allow_stockpile_selection = !matches!(
+            tool.mode,
+            ToolMode::StockpileAdd | ToolMode::StockpileRemove
+        );
+        if handle_selectable_click(
+            authoritative.snapshot(),
+            target,
+            time.elapsed_secs(),
+            &mut selected,
+            &mut selected_stockpile,
+            &mut stockpile_click,
+            &mut modal,
+            allow_stockpile_selection,
+        ) {
+            tool.cancel_drag();
+            if let Err(error) = authoritative.refresh_lightweight_snapshot(selected.0) {
+                error!("authoritative snapshot failed after selection: {error}");
+            }
+            return;
+        }
+    }
+
     if tool_active {
         let cell = target.containing_cell();
         if !area_tool {
@@ -237,6 +272,27 @@ pub(crate) fn pointer_navigation(
                 return;
             };
             let mode = tool.mode;
+            if first == last
+                && matches!(mode, ToolMode::StockpileAdd | ToolMode::StockpileRemove)
+                && stockpile_at(authoritative.snapshot(), last).is_some()
+            {
+                tool.cancel_drag();
+                if handle_selectable_click(
+                    authoritative.snapshot(),
+                    target,
+                    time.elapsed_secs(),
+                    &mut selected,
+                    &mut selected_stockpile,
+                    &mut stockpile_click,
+                    &mut modal,
+                    true,
+                ) {
+                    if let Err(error) = authoritative.refresh_lightweight_snapshot(selected.0) {
+                        error!("authoritative snapshot failed after stockpile selection: {error}");
+                    }
+                    return;
+                }
+            }
             tool.cancel_drag();
             match apply_tool_area(&mut authoritative, mode, first, last) {
                 Ok(()) => {
@@ -260,13 +316,10 @@ pub(crate) fn pointer_navigation(
                 cell,
                 enabled: false,
             }
-        } else if let Some(stockpile) = authoritative.snapshot().stockpiles.first() {
-            Command::SetStockpileCell {
-                stockpile_id: stockpile.id,
-                cell,
-                enabled: true,
-            }
         } else {
+            // The single-cell shortcut creates an independent stockpile on an
+            // empty cell. It must never silently attach the cell to an
+            // unrelated global stockpile with a different item policy.
             Command::CreateStockpile { cell }
         };
         match authoritative.application.execute(command) {
@@ -300,47 +353,11 @@ pub(crate) fn pointer_navigation(
     }
 
     if buttons.just_pressed(MouseButton::Left) {
-        // Physical objects keep pointer priority over zones. A stockpile is
-        // selected only when the click did not hit a workstation or pawn.
-        if let Some(workstation_id) =
-            workstation_at(authoritative.snapshot(), target.containing_cell())
-        {
-            selected.0 = None;
-            selected_stockpile.0 = None;
-            stockpile_click.last = None;
-            modal.open_workstation(workstation_id);
-        } else if let Some(character_id) = select_nearest(
-            authoritative
-                .snapshot()
-                .characters
-                .iter()
-                .map(|character| (character.id, character.position)),
-            target,
-            progressus_app::SUBUNITS_PER_CELL / 2,
-        ) {
-            selected.0 = Some(character_id);
-            selected_stockpile.0 = None;
-            stockpile_click.last = None;
-        } else if let Some(stockpile_id) =
-            stockpile_at(authoritative.snapshot(), target.containing_cell())
-        {
-            selected.0 = None;
-            selected_stockpile.0 = Some(stockpile_id);
-            let now = time.elapsed_secs();
-            let double_click = stockpile_click
-                .last
-                .is_some_and(|(id, at)| id == stockpile_id && now - at <= 0.35);
-            stockpile_click.last = Some((stockpile_id, now));
-            if double_click {
-                modal.open_stockpile(stockpile_id);
-            }
-        } else {
-            selected.0 = None;
-            selected_stockpile.0 = None;
-            stockpile_click.last = None;
-        }
+        selected.0 = None;
+        selected_stockpile.0 = None;
+        stockpile_click.last = None;
         if let Err(error) = authoritative.refresh_lightweight_snapshot(selected.0) {
-            error!("authoritative snapshot failed after selection: {error}");
+            error!("authoritative snapshot failed after selection clear: {error}");
         }
         return;
     }
@@ -436,10 +453,26 @@ fn apply_tool_area(
                         .copied()
                 })
                 .collect::<BTreeSet<_>>();
-            let mut stockpile_id = area_snapshot
+            let owner_by_cell = area_snapshot
                 .stockpiles
-                .first()
-                .map(|stockpile| stockpile.id);
+                .iter()
+                .flat_map(|stockpile| {
+                    stockpile
+                        .cells
+                        .iter()
+                        .copied()
+                        .map(move |cell| (cell, stockpile.id))
+                })
+                .collect::<BTreeMap<_, _>>();
+            let overlapping = cells
+                .iter()
+                .filter_map(|cell| owner_by_cell.get(cell).copied())
+                .collect::<BTreeSet<_>>();
+            // Extend only one stockpile that the painted rectangle actually
+            // overlaps. A fresh region gets a new ID, and painting across
+            // multiple existing stockpiles never merges their policies.
+            let mut stockpile_id = (overlapping.len() == 1)
+                .then(|| *overlapping.first().expect("one overlap has one id"));
             for cell in cells {
                 if known_terrain_at(&area_snapshot, cell) != Some(progressus_app::Terrain::Grass)
                     || resource_cells.contains(&cell)
@@ -447,10 +480,7 @@ fn apply_tool_area(
                 {
                     continue;
                 }
-                if let Some(owner) = stockpile_at(&area_snapshot, cell) {
-                    if stockpile_id.is_none() {
-                        stockpile_id = Some(owner);
-                    }
+                if owner_by_cell.contains_key(&cell) {
                     continue;
                 }
                 if let Some(id) = stockpile_id {
@@ -661,6 +691,53 @@ fn harvest_job_at(snapshot: &ClientSnapshot, source: WorldCell) -> Option<Entity
         JobKind::Harvest { source: job_source } if job_source == source => Some(job.id),
         _ => None,
     })
+}
+
+fn handle_selectable_click(
+    snapshot: &ClientSnapshot,
+    target: WorldPosition,
+    now: f32,
+    selected: &mut SelectedCharacter,
+    selected_stockpile: &mut SelectedStockpile,
+    stockpile_click: &mut StockpileClickState,
+    modal: &mut ModalState,
+    allow_stockpile_selection: bool,
+) -> bool {
+    if let Some(workstation_id) = workstation_at(snapshot, target.containing_cell()) {
+        selected.0 = None;
+        selected_stockpile.0 = None;
+        stockpile_click.last = None;
+        modal.open_workstation(workstation_id);
+        return true;
+    }
+    if let Some(character_id) = select_nearest(
+        snapshot
+            .characters
+            .iter()
+            .map(|character| (character.id, character.position)),
+        target,
+        progressus_app::SUBUNITS_PER_CELL / 2,
+    ) {
+        selected.0 = Some(character_id);
+        selected_stockpile.0 = None;
+        stockpile_click.last = None;
+        return true;
+    }
+    if allow_stockpile_selection
+        && let Some(stockpile_id) = stockpile_at(snapshot, target.containing_cell())
+    {
+        selected.0 = None;
+        selected_stockpile.0 = Some(stockpile_id);
+        let double_click = stockpile_click
+            .last
+            .is_some_and(|(id, at)| id == stockpile_id && now - at <= 0.35);
+        stockpile_click.last = Some((stockpile_id, now));
+        if double_click {
+            modal.open_stockpile(stockpile_id);
+        }
+        return true;
+    }
+    false
 }
 
 fn workstation_at(snapshot: &ClientSnapshot, cell: WorldCell) -> Option<EntityId> {

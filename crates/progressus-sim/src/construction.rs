@@ -335,6 +335,21 @@ impl ConstructionWorld {
         Ok(structure)
     }
 
+    pub(crate) fn remove_structure(
+        &mut self,
+        structure_id: EntityId,
+    ) -> Result<Structure, ConstructionWorldError> {
+        let structure = self
+            .structures
+            .remove(&structure_id)
+            .ok_or(ConstructionWorldError::UnknownStructure(structure_id))?;
+        if self.structure_by_cell.remove(&structure.cell()) != Some(structure_id) {
+            return Err(ConstructionWorldError::IndexCorruption);
+        }
+        self.bump_revision()?;
+        Ok(structure)
+    }
+
     pub(crate) fn set_door_open_until(
         &mut self,
         structure_id: EntityId,
