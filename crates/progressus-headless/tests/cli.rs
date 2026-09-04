@@ -36,7 +36,7 @@ fn missing_tick_count_is_rejected() {
 
     assert!(!output.status.success());
     assert!(String::from_utf8(output.stderr).unwrap().contains(
-        "usage: progressus-headless --seed <u64> (--ticks <u64> | --travel-chunks <positive u64>)"
+        "usage: progressus-headless --seed <u64> (--ticks <u64> | --travel-chunks <positive u64> | --activity-smoke)"
     ));
 }
 
@@ -104,6 +104,38 @@ fn travel_chunks_crosses_many_boundaries_deterministically() {
     assert!(stdout.contains("steps=2239"));
     assert!(stdout.contains("resident_chunks="));
     assert!(stdout.contains("max_resident_chunks="));
+}
+
+#[test]
+fn activity_smoke_exercises_physical_work_save_load_and_bounded_residency() {
+    let output = headless_command()
+        .args(["--seed", "0", "--activity-smoke"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("activity seed=0 tick=100000"));
+    assert!(stdout.contains("designated_resources=28"));
+    assert!(stdout.contains("tools=13"));
+    assert!(stdout.contains("structures=3"));
+    assert!(stdout.contains("save_reload_while_carrying=true"));
+    assert!(stdout.contains("resident_chunks=12"));
+}
+
+#[test]
+fn activity_smoke_is_mutually_exclusive_with_other_scenarios() {
+    let output = headless_command()
+        .args(["--seed", "0", "--activity-smoke", "--ticks", "1"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("choose exactly one of --ticks, --travel-chunks, or --activity-smoke")
+    );
 }
 
 #[test]

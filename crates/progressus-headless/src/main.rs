@@ -2,16 +2,21 @@ use std::env;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::process::ExitCode;
-use std::{cmp::Ordering, collections::BTreeMap};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use progressus_app::{
     Application, ChunkCoord, ClientSnapshot, Command, DEFAULT_CHARACTER_SPEED, Direction, EntityId,
-    NewGameOptions, RESIDENT_CHUNKS_PER_CENTER, SUBUNITS_PER_CELL, SnapshotQuery, Terrain,
-    WorldCell, WorldPosition, WorldSeed,
+    ItemKind, KnownTerrain, LocalCell, NewGameOptions, ProductionTarget,
+    RESIDENT_CHUNKS_PER_CENTER, RecipeId, SUBUNITS_PER_CELL, SnapshotQuery, StructureKind, Terrain,
+    WorkstationKind, WorldCell, WorldPosition, WorldSeed,
 };
 
-const USAGE: &str =
-    "usage: progressus-headless --seed <u64> (--ticks <u64> | --travel-chunks <positive u64>)";
+const USAGE: &str = "usage: progressus-headless --seed <u64> (--ticks <u64> | --travel-chunks <positive u64> | --activity-smoke)";
+const ACTIVITY_SMOKE_TICKS: u64 = 100_000;
+const ACTIVITY_BOOTSTRAP_LIMIT: u64 = 1_024;
 const WALKER_CHARACTER_ID: EntityId = match EntityId::new(3) {
     Some(id) => id,
     None => panic!("walker character ID must be non-zero"),
@@ -33,6 +38,7 @@ struct Config {
 enum Scenario {
     AdvanceTicks(u64),
     TravelChunks(u64),
+    ActivitySmoke,
 }
 
 #[derive(Debug)]
@@ -67,6 +73,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         Scenario::TravelChunks(requested_boundaries) => {
             run_travel(&mut application, config.seed, requested_boundaries)?;
         }
+        Scenario::ActivitySmoke => run_activity_smoke(&mut application, config.seed)?,
     }
 
     Ok(())
@@ -271,6 +278,304 @@ fn run_travel(
     )))
 }
 
+fn run_activity_smoke(application: &mut Application, seed: u64) -> Result<(), Box<dyn Error>> {
+    let designated_resources = setup_activity_world(application)?;
+    let chunks = activity_chunks();
+    let mut snapshot = application.snapshot(SnapshotQuery {
+        chunks: chunks.clone(),
+        ..SnapshotQuery::default()
+    })?;
+    validate_activity_snapshot(&snapshot)?;
+
+    let mut max_jobs = snapshot.jobs.len();
+    let mut max_carried = snapshot.carried_items.len();
+    let mut max_resident_chunks = snapshot.resident_chunks.len();
+    let mut reloaded_while_carrying = false;
+    let mut elapsed = 0_u64;
+
+    while elapsed < ACTIVITY_SMOKE_TICKS {
+        let remaining = ACTIVITY_SMOKE_TICKS - elapsed;
+        let step = if reloaded_while_carrying {
+            remaining.min(128)
+        } else {
+            1
+        };
+        application.execute(Command::AdvanceTicks { count: step })?;
+        elapsed += step;
+        snapshot = application.snapshot(SnapshotQuery {
+            chunks: chunks.clone(),
+            ..SnapshotQuery::default()
+        })?;
+        validate_activity_snapshot(&snapshot)?;
+        max_jobs = max_jobs.max(snapshot.jobs.len());
+        max_carried = max_carried.max(snapshot.carried_items.len());
+        max_resident_chunks = max_resident_chunks.max(snapshot.resident_chunks.len());
+
+        if !reloaded_while_carrying && !snapshot.carried_items.is_empty() {
+            let encoded = application.save_json()?;
+            *application = Application::from_save_json(&encoded)?;
+            let restored = application.snapshot(SnapshotQuery {
+                chunks: chunks.clone(),
+                ..SnapshotQuery::default()
+            })?;
+            validate_activity_snapshot(&restored)?;
+            if restored.carried_items.is_empty() {
+                return Err(Box::new(CliError(
+                    "activity save/load lost the in-flight carried item".to_owned(),
+                )));
+            }
+            reloaded_while_carrying = true;
+        }
+
+        if !reloaded_while_carrying && elapsed >= ACTIVITY_BOOTSTRAP_LIMIT {
+            return Err(Box::new(CliError(format!(
+                "activity smoke did not reach physical carrying within {ACTIVITY_BOOTSTRAP_LIMIT} ticks"
+            ))));
+        }
+    }
+
+    if !reloaded_while_carrying {
+        return Err(Box::new(CliError(
+            "activity smoke never exercised save/load during physical transport".to_owned(),
+        )));
+    }
+
+    let tools = snapshot
+        .ground_items
+        .iter()
+        .filter(|item| item.kind == ItemKind::PrimitiveTool)
+        .map(|item| u64::from(item.quantity))
+        .sum::<u64>()
+        + snapshot
+            .carried_items
+            .iter()
+            .filter(|item| item.kind == ItemKind::PrimitiveTool)
+            .map(|item| u64::from(item.quantity))
+            .sum::<u64>();
+    if tools == 0 {
+        return Err(Box::new(CliError(
+            "activity smoke produced no PrimitiveTool output".to_owned(),
+        )));
+    }
+    if snapshot.structures.len() < 3 {
+        return Err(Box::new(CliError(format!(
+            "activity smoke completed only {} of 3 StoneWall structures",
+            snapshot.structures.len()
+        ))));
+    }
+
+    println!(
+        "activity seed={} tick={} designated_resources={} tools={} structures={} max_jobs={} max_carried={} resident_chunks={} max_resident_chunks={} save_reload_while_carrying=true",
+        seed,
+        snapshot.tick.value(),
+        designated_resources,
+        tools,
+        snapshot.structures.len(),
+        max_jobs,
+        max_carried,
+        snapshot.resident_chunks.len(),
+        max_resident_chunks
+    );
+    Ok(())
+}
+
+fn setup_activity_world(application: &mut Application) -> Result<usize, Box<dyn Error>> {
+    application.execute(Command::PlaceWorkstation {
+        kind: WorkstationKind::Workbench,
+        cell: WorldCell::new(0, 1),
+    })?;
+    let workstation_id = application
+        .snapshot(SnapshotQuery::default())?
+        .workstations
+        .first()
+        .ok_or_else(|| CliError("activity workbench was not published".to_owned()))?
+        .id;
+
+    application.execute(Command::CreateStockpile {
+        cell: WorldCell::new(-2, 0),
+    })?;
+    let stockpile_id = application
+        .snapshot(SnapshotQuery::default())?
+        .stockpiles
+        .first()
+        .ok_or_else(|| CliError("activity stockpile was not published".to_owned()))?
+        .id;
+    for cell in [WorldCell::new(-3, 0), WorldCell::new(2, 0)] {
+        application.execute(Command::SetStockpileCell {
+            stockpile_id,
+            cell,
+            enabled: true,
+        })?;
+    }
+
+    application.execute(Command::AddProductionOrder {
+        workstation_id,
+        recipe_id: RecipeId::PrimitiveTool,
+        target: ProductionTarget::Infinite,
+    })?;
+
+    let discovery = application.snapshot(SnapshotQuery {
+        chunks: activity_chunks(),
+        ..SnapshotQuery::default()
+    })?;
+    for cell in activity_construction_cells(&discovery, 3)? {
+        application.execute(Command::DesignateConstruction {
+            kind: StructureKind::StoneWall,
+            cell,
+        })?;
+    }
+
+    let resource_cells = discovery
+        .natural_resources
+        .iter()
+        .map(|resource| resource.cell)
+        .collect::<Vec<_>>();
+    for source in &resource_cells {
+        application.execute(Command::DesignateHarvest { source: *source })?;
+    }
+    Ok(resource_cells.len())
+}
+
+fn activity_construction_cells(
+    snapshot: &ClientSnapshot,
+    count: usize,
+) -> Result<Vec<WorldCell>, CliError> {
+    let mut occupied = BTreeSet::new();
+    occupied.extend(snapshot.natural_resources.iter().map(|entry| entry.cell));
+    occupied.extend(
+        snapshot
+            .characters
+            .iter()
+            .map(|entry| entry.containing_cell),
+    );
+    occupied.extend(
+        snapshot
+            .ground_items
+            .iter()
+            .map(|entry| entry.position.containing_cell()),
+    );
+    for stockpile in &snapshot.stockpiles {
+        occupied.extend(stockpile.cells.iter().copied());
+    }
+    occupied.extend(snapshot.workstations.iter().map(|entry| entry.cell));
+    for logistics in &snapshot.production_logistics {
+        occupied.extend(logistics.input_cells.iter().copied());
+        occupied.extend(logistics.output_cells.iter().copied());
+    }
+    occupied.extend(snapshot.construction_sites.iter().map(|entry| entry.cell));
+    occupied.extend(snapshot.structures.iter().map(|entry| entry.cell));
+
+    let mut candidates = Vec::new();
+    for chunk in &snapshot.chunks {
+        for y in 0..chunk.side {
+            for x in 0..chunk.side {
+                let local = LocalCell::new(x, y);
+                if chunk.terrain_at(local) != Some(KnownTerrain::Known(Terrain::Grass)) {
+                    continue;
+                }
+                let Some(cell) = chunk.coordinate.world_cell(local) else {
+                    continue;
+                };
+                if !occupied.contains(&cell) {
+                    candidates.push(cell);
+                }
+            }
+        }
+    }
+    candidates.sort_by_key(|cell| {
+        (
+            i128::from(cell.x()).abs() + i128::from(cell.y()).abs(),
+            cell.x(),
+            cell.y(),
+        )
+    });
+    candidates.truncate(count);
+    if candidates.len() != count {
+        return Err(CliError(format!(
+            "activity smoke found only {} free explored construction cells; need {count}",
+            candidates.len()
+        )));
+    }
+    Ok(candidates)
+}
+
+fn activity_chunks() -> Vec<ChunkCoord> {
+    vec![
+        ChunkCoord::new(-1, -1),
+        ChunkCoord::new(-1, 0),
+        ChunkCoord::new(0, -1),
+        ChunkCoord::new(0, 0),
+    ]
+}
+
+fn validate_activity_snapshot(snapshot: &ClientSnapshot) -> Result<(), CliError> {
+    validate_residency(snapshot)?;
+    let mut owned_ids = BTreeSet::new();
+    for (id, label) in snapshot
+        .characters
+        .iter()
+        .map(|entry| (entry.id, "character"))
+        .chain(
+            snapshot
+                .ground_items
+                .iter()
+                .map(|entry| (entry.id, "ground item")),
+        )
+        .chain(
+            snapshot
+                .carried_items
+                .iter()
+                .map(|entry| (entry.id, "carried item")),
+        )
+        .chain(snapshot.jobs.iter().map(|entry| (entry.id, "job")))
+        .chain(
+            snapshot
+                .stockpiles
+                .iter()
+                .map(|entry| (entry.id, "stockpile")),
+        )
+        .chain(
+            snapshot
+                .workstations
+                .iter()
+                .map(|entry| (entry.id, "workstation")),
+        )
+        .chain(
+            snapshot
+                .production_orders
+                .iter()
+                .map(|entry| (entry.id, "production order")),
+        )
+        .chain(
+            snapshot
+                .construction_sites
+                .iter()
+                .map(|entry| (entry.id, "construction site")),
+        )
+        .chain(
+            snapshot
+                .structures
+                .iter()
+                .map(|entry| (entry.id, "structure")),
+        )
+    {
+        if !owned_ids.insert(id) {
+            return Err(CliError(format!(
+                "activity snapshot contains duplicate globally-owned entity ID {} at {label}",
+                id.value()
+            )));
+        }
+    }
+    if snapshot.ground_items.iter().any(|item| item.quantity == 0)
+        || snapshot.carried_items.iter().any(|item| item.quantity == 0)
+    {
+        return Err(CliError(
+            "activity snapshot contains a zero-quantity physical item stack".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 fn select_direction(
     application: &Application,
     position: WorldCell,
@@ -367,6 +672,7 @@ fn parse_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Config
     let mut seed = None;
     let mut ticks = None;
     let mut travel_chunks = None;
+    let mut activity_smoke = false;
 
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -405,17 +711,24 @@ fn parse_arguments(arguments: impl IntoIterator<Item = String>) -> Result<Config
                 }
                 travel_chunks = Some(count);
             }
+            "--activity-smoke" => {
+                if activity_smoke {
+                    return Err(CliError("duplicate --activity-smoke argument".to_owned()));
+                }
+                activity_smoke = true;
+            }
             unknown => return Err(CliError(format!("unknown argument '{unknown}'"))),
         }
     }
 
-    let scenario = match (ticks, travel_chunks) {
-        (Some(count), None) => Scenario::AdvanceTicks(count),
-        (None, Some(count)) => Scenario::TravelChunks(count),
-        (None, None) => return Err(CliError(USAGE.to_owned())),
-        (Some(_), Some(_)) => {
+    let scenario = match (ticks, travel_chunks, activity_smoke) {
+        (Some(count), None, false) => Scenario::AdvanceTicks(count),
+        (None, Some(count), false) => Scenario::TravelChunks(count),
+        (None, None, true) => Scenario::ActivitySmoke,
+        (None, None, false) => return Err(CliError(USAGE.to_owned())),
+        _ => {
             return Err(CliError(
-                "choose either --ticks or --travel-chunks, not both".to_owned(),
+                "choose exactly one of --ticks, --travel-chunks, or --activity-smoke".to_owned(),
             ));
         }
     };

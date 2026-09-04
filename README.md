@@ -80,11 +80,13 @@ See [`docs/milestones/prototype-01.md`](docs/milestones/prototype-01.md).
 
 ## Development
 
-Run the complete automated suite:
+Run the Prototype 01 acceptance gate (formatting, Clippy, authoritative/headless tests, client test compilation, dependency boundaries, 100k idle, travel64, and 100k activity smoke):
 
 ```bash
-cargo test --workspace
+./scripts/check-prototype-01.sh
 ```
+
+The server-safe default does not link the heavy Bevy client test binary. On a machine with enough memory, execute the same gate with `PROGRESSUS_RUN_CLIENT_TESTS=1` to run those client tests as well.
 
 Run a deterministic headless scenario:
 
@@ -96,6 +98,12 @@ Run the bounded external traversal proof (seed 0 under worldgen v2 crosses 64 po
 
 ```bash
 cargo run -p progressus-headless -- --seed 0 --travel-chunks 64
+```
+
+Run the activity-heavy acceptance scenario. It harvests the explored start area, stockpiles physical items, runs an infinite Workbench order, builds three StoneWalls, performs save/load while an item is physically carried, and validates global owned-ID uniqueness plus residency for 100,000 ticks:
+
+```bash
+cargo run -p progressus-headless -- --seed 0 --activity-smoke
 ```
 
 Run the native visual bootstrap (requires a local display and GPU for the manual graphical smoke check):

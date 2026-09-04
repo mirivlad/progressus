@@ -238,7 +238,7 @@ Run the simulation headlessly for a large number of ticks with basic activity an
 - bounded loaded-chunk count under the chosen policy;
 - no obvious runaway job/resource duplication.
 
-The current headless smoke advances 100,000 ticks and validates the residency bound through `progressus-app`; travel64 additionally checks the bound during 8,956 movement ticks. A future activity-heavy long-run scenario should add sustained production/construction load.
+Implemented. The idle headless smoke advances 100,000 ticks and validates the residency bound through `progressus-app`; travel64 additionally checks the bound during 8,956 movement ticks. `--activity-smoke` runs another 100,000 authoritative ticks after designating all 28 visible seed-0 natural resources, creating a three-cell physical stockpile, an infinite PrimitiveTool order, and three StoneWall sites. It validates globally owned stable-ID uniqueness on every sampled snapshot, reaches up to 33 concurrent jobs and 3 carried stacks, performs save/load while an item is physically in transit, completes 3 walls and 13 tools, and remains at 12 resident chunks.
 
 ## 9. UI requirements
 
@@ -314,20 +314,20 @@ Numbers are evidence for later architecture decisions, not pass/fail targets unl
 
 Prototype 01 is complete when all of the following are true:
 
-- [ ] one command can run the automated test suite;
-- [ ] one command can run a headless simulation scenario;
+- [x] one command can run the automated test suite (`./scripts/check-prototype-01.sh`);
+- [x] one command can run a headless simulation scenario;
 - [ ] a playable client can create a world from a seed;
-- [ ] five characters exist as stable persistent entities;
-- [ ] resource collection and hauling work;
-- [ ] physical stockpiling works;
+- [x] five characters exist as stable persistent entities;
+- [x] resource collection and hauling work;
+- [x] physical stockpiling works;
 - [x] construction consumes delivered physical inputs;
-- [ ] crafting consumes inputs and creates an output;
+- [x] crafting consumes inputs and creates an output;
 - [x] characters can traverse far enough to prove chunk streaming;
 - [x] distant chunks can unload and reload;
 - [x] save/load round trip preserves authoritative state;
 - [x] worldgen determinism/order-independence tests pass;
-- [ ] no known item duplication bug exists;
-- [ ] long-run headless smoke test passes;
+- [x] no known item duplication bug exists under the current ownership/regression and activity-smoke coverage;
+- [x] long-run headless smoke test passes;
 - [ ] baseline performance measurements are documented;
 - [ ] architecture documentation matches the implementation.
 
