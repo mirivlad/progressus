@@ -11,4 +11,4 @@ mod tile_connectivity;
 mod ui;
 mod ui_font;
 
-pub use runtime::{ClientError, run};
+pub use runtime::{ClientError, run, run_with_seed};

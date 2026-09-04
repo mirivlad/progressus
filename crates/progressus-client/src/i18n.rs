@@ -1,5 +1,7 @@
 use bevy::prelude::Resource;
-use progressus_app::{RecipeId, WorkstationKind};
+use progressus_app::{
+    Direction, ItemKind, JobKind, JobState, MovementState, RecipeId, WorkstationKind,
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
 pub(crate) struct Locale {
@@ -44,10 +46,6 @@ pub(crate) enum TextKey {
     NoOrders,
     RemoveWorkstation,
     Logistics,
-    InputZoneAdd,
-    InputZoneRemove,
-    OutputZoneAdd,
-    OutputZoneRemove,
     InputPorts,
     RotateInputs,
     OutputPorts,
@@ -63,6 +61,13 @@ pub(crate) enum TextKey {
     LoadedSlot,
     SaveError,
     LoadError,
+    Character,
+    Identifier,
+    Cell,
+    Movement,
+    Work,
+    Carrying,
+    NoneValue,
 }
 
 impl Locale {
@@ -88,10 +93,6 @@ impl Locale {
             (Language::Ru, TextKey::NoOrders) => "Заданий пока нет",
             (Language::Ru, TextKey::RemoveWorkstation) => "Убрать верстак",
             (Language::Ru, TextKey::Logistics) => "Логистика",
-            (Language::Ru, TextKey::InputZoneAdd) => "Вход +",
-            (Language::Ru, TextKey::InputZoneRemove) => "Вход -",
-            (Language::Ru, TextKey::OutputZoneAdd) => "Выход +",
-            (Language::Ru, TextKey::OutputZoneRemove) => "Выход -",
             (Language::Ru, TextKey::InputPorts) => "Входы сырья",
             (Language::Ru, TextKey::RotateInputs) => "Повернуть входы",
             (Language::Ru, TextKey::OutputPorts) => "Выходы продукции",
@@ -107,6 +108,13 @@ impl Locale {
             (Language::Ru, TextKey::LoadedSlot) => "Загружен слот",
             (Language::Ru, TextKey::SaveError) => "Ошибка сохранения",
             (Language::Ru, TextKey::LoadError) => "Ошибка загрузки",
+            (Language::Ru, TextKey::Character) => "Персонаж",
+            (Language::Ru, TextKey::Identifier) => "ID",
+            (Language::Ru, TextKey::Cell) => "Клетка",
+            (Language::Ru, TextKey::Movement) => "Движение",
+            (Language::Ru, TextKey::Work) => "Работа",
+            (Language::Ru, TextKey::Carrying) => "Несёт",
+            (Language::Ru, TextKey::NoneValue) => "нет",
             (Language::En, TextKey::Select) => "Select",
             (Language::En, TextKey::StockpileAdd) => "Stockpile +",
             (Language::En, TextKey::StockpileRemove) => "Stockpile -",
@@ -127,10 +135,6 @@ impl Locale {
             (Language::En, TextKey::NoOrders) => "No orders yet",
             (Language::En, TextKey::RemoveWorkstation) => "Remove workbench",
             (Language::En, TextKey::Logistics) => "Logistics",
-            (Language::En, TextKey::InputZoneAdd) => "Input +",
-            (Language::En, TextKey::InputZoneRemove) => "Input -",
-            (Language::En, TextKey::OutputZoneAdd) => "Output +",
-            (Language::En, TextKey::OutputZoneRemove) => "Output -",
             (Language::En, TextKey::InputPorts) => "Material inputs",
             (Language::En, TextKey::RotateInputs) => "Rotate inputs",
             (Language::En, TextKey::OutputPorts) => "Product outputs",
@@ -146,6 +150,13 @@ impl Locale {
             (Language::En, TextKey::LoadedSlot) => "Loaded slot",
             (Language::En, TextKey::SaveError) => "Save error",
             (Language::En, TextKey::LoadError) => "Load error",
+            (Language::En, TextKey::Character) => "Character",
+            (Language::En, TextKey::Identifier) => "ID",
+            (Language::En, TextKey::Cell) => "Cell",
+            (Language::En, TextKey::Movement) => "Movement",
+            (Language::En, TextKey::Work) => "Work",
+            (Language::En, TextKey::Carrying) => "Carrying",
+            (Language::En, TextKey::NoneValue) => "none",
         }
     }
 
@@ -158,6 +169,71 @@ impl Locale {
     pub(crate) const fn workstation_name(self, kind: WorkstationKind) -> &'static str {
         match kind {
             WorkstationKind::Workbench => self.tr(TextKey::Workbench),
+        }
+    }
+
+    pub(crate) const fn direction_name(self, direction: Direction) -> &'static str {
+        match (self.language, direction) {
+            (Language::Ru, Direction::North) => "север",
+            (Language::Ru, Direction::East) => "восток",
+            (Language::Ru, Direction::South) => "юг",
+            (Language::Ru, Direction::West) => "запад",
+            (Language::En, Direction::North) => "north",
+            (Language::En, Direction::East) => "east",
+            (Language::En, Direction::South) => "south",
+            (Language::En, Direction::West) => "west",
+        }
+    }
+
+    pub(crate) const fn movement_name(self, movement: MovementState) -> &'static str {
+        match (self.language, movement) {
+            (Language::Ru, MovementState::Idle) => "стоит",
+            (Language::Ru, MovementState::ManualDirectional { .. }) => "идёт",
+            (Language::Ru, MovementState::Navigating { .. }) => "идёт к цели",
+            (Language::En, MovementState::Idle) => "idle",
+            (Language::En, MovementState::ManualDirectional { .. }) => "moving",
+            (Language::En, MovementState::Navigating { .. }) => "navigating",
+        }
+    }
+
+    pub(crate) const fn item_name(self, kind: ItemKind) -> &'static str {
+        match (self.language, kind) {
+            (Language::Ru, ItemKind::Wood) => "Дерево",
+            (Language::Ru, ItemKind::Stone) => "Камень",
+            (Language::Ru, ItemKind::PrimitiveTool) => "Примитивный инструмент",
+            (Language::En, ItemKind::Wood) => "Wood",
+            (Language::En, ItemKind::Stone) => "Stone",
+            (Language::En, ItemKind::PrimitiveTool) => "Primitive tool",
+        }
+    }
+
+    pub(crate) const fn job_kind_name(self, kind: JobKind) -> &'static str {
+        match (self.language, kind) {
+            (Language::Ru, JobKind::Harvest { .. }) => "добыча",
+            (Language::Ru, JobKind::Haul { .. }) => "перенос на склад",
+            (Language::Ru, JobKind::Craft { .. }) => "производство",
+            (Language::Ru, JobKind::SupplyProduction { .. }) => "подача сырья",
+            (Language::Ru, JobKind::DeliverConstruction { .. }) => "доставка на стройку",
+            (Language::Ru, JobKind::Construct { .. }) => "строительство",
+            (Language::En, JobKind::Harvest { .. }) => "harvest",
+            (Language::En, JobKind::Haul { .. }) => "haul",
+            (Language::En, JobKind::Craft { .. }) => "craft",
+            (Language::En, JobKind::SupplyProduction { .. }) => "production supply",
+            (Language::En, JobKind::DeliverConstruction { .. }) => "construction delivery",
+            (Language::En, JobKind::Construct { .. }) => "construction",
+        }
+    }
+
+    pub(crate) const fn job_state_name(self, state: JobState) -> &'static str {
+        match (self.language, state) {
+            (Language::Ru, JobState::Available) => "ожидает",
+            (Language::Ru, JobState::Reserved { .. }) => "назначено",
+            (Language::Ru, JobState::Transporting { .. }) => "несёт",
+            (Language::Ru, JobState::Working { .. }) => "работает",
+            (Language::En, JobState::Available) => "available",
+            (Language::En, JobState::Reserved { .. }) => "reserved",
+            (Language::En, JobState::Transporting { .. }) => "transporting",
+            (Language::En, JobState::Working { .. }) => "working",
         }
     }
 }

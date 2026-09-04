@@ -6,8 +6,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use progressus_app::{
     Application, ApplicationError, ChunkCoord, ClientSnapshot, Command, EntityId, JobKind,
-    NewGameOptions, ProductionZoneKind, SnapshotQuery, StructureKind, WorkstationKind, WorldCell,
-    WorldSeed,
+    NewGameOptions, SnapshotQuery, StructureKind, WorkstationKind, WorldCell, WorldSeed,
 };
 
 use crate::i18n::Locale;
@@ -21,14 +20,14 @@ use crate::presentation::PresentationError;
 use crate::procedural_assets::ProceduralAssetRegistry;
 use crate::render::{
     NavigationDebug, PresentationCache, camera_controls, draw_job_designations,
-    draw_production_zones, draw_selected_character, draw_selected_navigation, draw_stockpiles,
-    draw_tool_drag, setup_camera, sync_presentation,
+    draw_selected_character, draw_selected_navigation, draw_stockpiles, draw_tool_drag,
+    setup_camera, sync_presentation,
 };
 use crate::save_slots::SaveStore;
 use crate::ui::{
     ToolMode, ToolState, language_toggle_interaction, pause_toggle_interaction,
-    refresh_toolbar_localization, save_menu_interaction, setup_toolbar, toolbar_interaction,
-    update_ui_capture,
+    refresh_toolbar_localization, save_menu_interaction, setup_character_inspector, setup_toolbar,
+    sync_character_inspector, toolbar_interaction, update_ui_capture,
 };
 use crate::ui_font::setup_ui_font;
 
@@ -43,10 +42,13 @@ pub(crate) struct AuthoritativeClient {
 }
 
 impl AuthoritativeClient {
+    #[cfg(test)]
     pub(crate) fn new() -> Result<Self, ClientError> {
-        let application = Application::new_game(NewGameOptions {
-            seed: WorldSeed::new(0),
-        })?;
+        Self::new_with_seed(WorldSeed::new(0))
+    }
+
+    pub(crate) fn new_with_seed(seed: WorldSeed) -> Result<Self, ClientError> {
+        let application = Application::new_game(NewGameOptions { seed })?;
         let snapshot = application.snapshot(SnapshotQuery::default())?;
         Ok(Self {
             application,
@@ -355,8 +357,6 @@ fn apply_point_tool(
         | ToolMode::StockpileRemove
         | ToolMode::Harvest
         | ToolMode::Wall
-        | ToolMode::ProductionZoneAdd { .. }
-        | ToolMode::ProductionZoneRemove { .. }
         | ToolMode::CancelJobs => {}
     }
     Ok(())
@@ -554,125 +554,6 @@ fn apply_tool_area(
             }
         }
         ToolMode::Workbench => {}
-        ToolMode::ProductionZoneAdd {
-            workstation_id,
-            kind,
-        } => {
-            let Some(workstation) = area_snapshot
-                .workstations
-                .iter()
-                .find(|workstation| workstation.id == workstation_id)
-                .copied()
-            else {
-                return Ok(());
-            };
-            let workstation_cell = workstation.cell;
-            let resource_cells = area_snapshot
-                .natural_resources
-                .iter()
-                .map(|resource| resource.cell)
-                .collect::<BTreeSet<_>>();
-            let stockpile_cells = area_snapshot
-                .stockpiles
-                .iter()
-                .flat_map(|stockpile| stockpile.cells.iter().copied())
-                .collect::<BTreeSet<_>>();
-            let workstation_cells = area_snapshot
-                .workstations
-                .iter()
-                .map(|workstation| workstation.cell)
-                .collect::<BTreeSet<_>>();
-            let item_cells = area_snapshot
-                .ground_items
-                .iter()
-                .map(|item| item.position.containing_cell())
-                .collect::<BTreeSet<_>>();
-            let construction_cells = area_snapshot
-                .construction_sites
-                .iter()
-                .map(|site| site.cell)
-                .chain(
-                    area_snapshot
-                        .structures
-                        .iter()
-                        .map(|structure| structure.cell),
-                )
-                .collect::<BTreeSet<_>>();
-            let zone_cells = area_snapshot
-                .production_logistics
-                .iter()
-                .flat_map(|logistics| {
-                    logistics
-                        .input_cells
-                        .iter()
-                        .chain(logistics.output_cells.iter())
-                        .copied()
-                })
-                .collect::<BTreeSet<_>>();
-            for cell in cells {
-                let in_range = match kind {
-                    ProductionZoneKind::Input => false,
-                    ProductionZoneKind::Output => {
-                        is_diagonal_production_neighbour(workstation_cell, cell)
-                    }
-                };
-                if !in_range
-                    || known_terrain_at(&area_snapshot, cell)
-                        != Some(progressus_app::Terrain::Grass)
-                    || resource_cells.contains(&cell)
-                    || stockpile_cells.contains(&cell)
-                    || workstation_cells.contains(&cell)
-                    || item_cells.contains(&cell)
-                    || construction_cells.contains(&cell)
-                    || zone_cells.contains(&cell)
-                {
-                    continue;
-                }
-                authoritative
-                    .application
-                    .execute(Command::SetProductionZoneCell {
-                        workstation_id,
-                        kind,
-                        cell,
-                        enabled: true,
-                    })?;
-            }
-        }
-        ToolMode::ProductionZoneRemove {
-            workstation_id,
-            kind,
-        } => {
-            let owned = area_snapshot
-                .production_logistics
-                .iter()
-                .find(|logistics| logistics.workstation_id == workstation_id)
-                .map(|logistics| match kind {
-                    ProductionZoneKind::Input => logistics
-                        .input_cells
-                        .iter()
-                        .copied()
-                        .collect::<BTreeSet<_>>(),
-                    ProductionZoneKind::Output => logistics
-                        .output_cells
-                        .iter()
-                        .copied()
-                        .collect::<BTreeSet<_>>(),
-                })
-                .unwrap_or_default();
-            for cell in cells {
-                if !owned.contains(&cell) {
-                    continue;
-                }
-                authoritative
-                    .application
-                    .execute(Command::SetProductionZoneCell {
-                        workstation_id,
-                        kind,
-                        cell,
-                        enabled: false,
-                    })?;
-            }
-        }
         ToolMode::CancelJobs => {
             let selected = cells.into_iter().collect::<BTreeSet<_>>();
             let jobs = area_snapshot
@@ -707,12 +588,6 @@ fn apply_tool_area(
         }
     }
     Ok(())
-}
-
-fn is_diagonal_production_neighbour(center: WorldCell, cell: WorldCell) -> bool {
-    let dx = i128::from(cell.x()) - i128::from(center.x());
-    let dy = i128::from(cell.y()) - i128::from(center.y());
-    dx.abs() == 1 && dy.abs() == 1
 }
 
 fn rectangle_cells(first: WorldCell, last: WorldCell) -> Option<Vec<WorldCell>> {
@@ -822,8 +697,12 @@ impl Display for PresentationError {
 impl Error for PresentationError {}
 
 pub fn run() -> Result<(), ClientError> {
+    run_with_seed(0)
+}
+
+pub fn run_with_seed(seed: u64) -> Result<(), ClientError> {
     App::new()
-        .insert_resource(AuthoritativeClient::new()?)
+        .insert_resource(AuthoritativeClient::new_with_seed(WorldSeed::new(seed))?)
         .insert_resource(TickScheduler::default())
         .insert_resource(PresentationCache::default())
         .insert_resource(ProceduralAssetRegistry::default())
@@ -837,14 +716,20 @@ pub fn run() -> Result<(), ClientError> {
         .insert_resource(SaveStore::default())
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Progressus — Prototype 01".to_owned(),
+                title: format!("Progressus — Prototype 01 — seed {seed}"),
                 ..default()
             }),
             ..default()
         }))
         .add_systems(
             Startup,
-            (setup_ui_font, setup_camera, setup_toolbar).chain(),
+            (
+                setup_ui_font,
+                setup_camera,
+                setup_toolbar,
+                setup_character_inspector,
+            )
+                .chain(),
         )
         .add_systems(
             Update,
@@ -866,13 +751,13 @@ pub fn run() -> Result<(), ClientError> {
                 (
                     advance_authority,
                     sync_presentation,
+                    sync_character_inspector,
                     crate::render::interpolate_character_visuals,
                     draw_selected_character,
                     draw_selected_navigation,
                     crate::render::draw_navigation_debug,
                     draw_tool_drag,
                     draw_job_designations,
-                    draw_production_zones,
                     draw_stockpiles,
                     camera_controls,
                 )

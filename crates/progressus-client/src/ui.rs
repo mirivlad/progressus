@@ -1,9 +1,11 @@
 use bevy::prelude::*;
-use progressus_app::{EntityId, ProductionZoneKind};
+use progressus_app::{JobState, MovementState};
 
 use crate::i18n::{Language, Locale, TextKey};
 use crate::interaction::TickScheduler;
 use crate::modal::ModalState;
+use crate::navigation::SelectedCharacter;
+use crate::runtime::AuthoritativeClient;
 use crate::save_slots::SaveStore;
 use crate::ui_font::UiFont;
 
@@ -16,14 +18,6 @@ pub(crate) enum ToolMode {
     Harvest,
     Wall,
     Workbench,
-    ProductionZoneAdd {
-        workstation_id: EntityId,
-        kind: ProductionZoneKind,
-    },
-    ProductionZoneRemove {
-        workstation_id: EntityId,
-        kind: ProductionZoneKind,
-    },
     CancelJobs,
 }
 
@@ -36,22 +30,6 @@ impl ToolMode {
             Self::Harvest => TextKey::Harvest,
             Self::Wall => TextKey::StoneWall,
             Self::Workbench => TextKey::Workbench,
-            Self::ProductionZoneAdd {
-                kind: ProductionZoneKind::Input,
-                ..
-            } => TextKey::InputZoneAdd,
-            Self::ProductionZoneRemove {
-                kind: ProductionZoneKind::Input,
-                ..
-            } => TextKey::InputZoneRemove,
-            Self::ProductionZoneAdd {
-                kind: ProductionZoneKind::Output,
-                ..
-            } => TextKey::OutputZoneAdd,
-            Self::ProductionZoneRemove {
-                kind: ProductionZoneKind::Output,
-                ..
-            } => TextKey::OutputZoneRemove,
             Self::CancelJobs => TextKey::CancelJobs,
         }
     }
@@ -63,8 +41,6 @@ impl ToolMode {
                 | Self::StockpileRemove
                 | Self::Harvest
                 | Self::Wall
-                | Self::ProductionZoneAdd { .. }
-                | Self::ProductionZoneRemove { .. }
                 | Self::CancelJobs
         )
     }
@@ -105,6 +81,10 @@ pub(crate) struct LanguageToggle;
 pub(crate) struct LanguageToggleLabel;
 #[derive(Component)]
 pub(crate) struct UiCapture;
+#[derive(Component)]
+pub(crate) struct CharacterInspector;
+#[derive(Component)]
+pub(crate) struct CharacterInspectorText;
 
 const NORMAL_BUTTON: Color = Color::srgb(0.12, 0.14, 0.15);
 const HOVERED_BUTTON: Color = Color::srgb(0.20, 0.24, 0.26);
@@ -279,6 +259,141 @@ pub(crate) fn setup_toolbar(
                     ));
                 });
         });
+}
+
+pub(crate) fn setup_character_inspector(mut commands: Commands, font: Res<UiFont>) {
+    commands
+        .spawn((
+            CharacterInspector,
+            UiCapture,
+            Interaction::default(),
+            Visibility::Hidden,
+            Node {
+                position_type: PositionType::Absolute,
+                right: px(12),
+                top: px(12),
+                width: px(286),
+                padding: UiRect::all(px(12)),
+                border: UiRect::all(px(1)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.045, 0.055, 0.06, 0.94)),
+            BorderColor::all(Color::srgb(0.28, 0.34, 0.36)),
+        ))
+        .with_children(|panel| {
+            panel.spawn((
+                Text::new(""),
+                TextFont {
+                    font: font.0.clone(),
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.91, 0.93, 0.94)),
+                CharacterInspectorText,
+            ));
+        });
+}
+
+pub(crate) fn sync_character_inspector(
+    locale: Res<Locale>,
+    selected: Res<SelectedCharacter>,
+    authoritative: Res<AuthoritativeClient>,
+    mut panels: Query<&mut Visibility, With<CharacterInspector>>,
+    mut texts: Query<&mut Text, With<CharacterInspectorText>>,
+) {
+    let Some(character_id) = selected.0 else {
+        if let Ok(mut visibility) = panels.single_mut() {
+            *visibility = Visibility::Hidden;
+        }
+        return;
+    };
+    let snapshot = authoritative.snapshot();
+    let Some(character) = snapshot
+        .characters
+        .iter()
+        .find(|character| character.id == character_id)
+    else {
+        if let Ok(mut visibility) = panels.single_mut() {
+            *visibility = Visibility::Hidden;
+        }
+        return;
+    };
+
+    let movement = match character.movement {
+        MovementState::Idle => locale.movement_name(character.movement).to_owned(),
+        MovementState::ManualDirectional { direction } => format!(
+            "{} ({})",
+            locale.movement_name(character.movement),
+            locale.direction_name(direction)
+        ),
+        MovementState::Navigating { destination } => {
+            let cell = destination.containing_cell();
+            format!(
+                "{} -> ({}, {})",
+                locale.movement_name(character.movement),
+                cell.x(),
+                cell.y()
+            )
+        }
+    };
+
+    let work = snapshot
+        .jobs
+        .iter()
+        .find(|job| job.state.worker() == Some(character_id))
+        .map(|job| {
+            let suffix = match job.state {
+                JobState::Working {
+                    remaining_ticks, ..
+                } => match locale.language {
+                    Language::Ru => format!(" ({remaining_ticks} т.)"),
+                    Language::En => format!(" ({remaining_ticks} ticks)"),
+                },
+                _ => String::new(),
+            };
+            format!(
+                "{} - {}{}",
+                locale.job_kind_name(job.kind),
+                locale.job_state_name(job.state),
+                suffix
+            )
+        })
+        .unwrap_or_else(|| locale.tr(TextKey::NoneValue).to_owned());
+
+    let carrying = snapshot
+        .carried_items
+        .iter()
+        .filter(|item| item.character_id == character_id)
+        .map(|item| format!("{} x{}", locale.item_name(item.kind), item.quantity))
+        .collect::<Vec<_>>();
+    let carrying = if carrying.is_empty() {
+        locale.tr(TextKey::NoneValue).to_owned()
+    } else {
+        carrying.join(", ")
+    };
+
+    let text = format!(
+        "{}: {}\n{}: {}\n{}: ({}, {})\n{}: {}\n{}: {}\n{}: {}",
+        locale.tr(TextKey::Character),
+        character.name,
+        locale.tr(TextKey::Identifier),
+        character.id.value(),
+        locale.tr(TextKey::Cell),
+        character.containing_cell.x(),
+        character.containing_cell.y(),
+        locale.tr(TextKey::Movement),
+        movement,
+        locale.tr(TextKey::Work),
+        work,
+        locale.tr(TextKey::Carrying),
+        carrying
+    );
+    if let Ok(mut output) = texts.single_mut() {
+        **output = text;
+    }
+    if let Ok(mut visibility) = panels.single_mut() {
+        *visibility = Visibility::Visible;
+    }
 }
 
 fn tool_button_node() -> Node {

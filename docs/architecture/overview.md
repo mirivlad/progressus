@@ -1,6 +1,6 @@
-# Architecture Overview v0.2
+# Architecture Overview v0.3
 
-Status: **Accepted for Prototype 01**
+Status: **Accepted and implemented for Prototype 01**
 
 The implementation boundary is fixed by [`ADR-0002`](../adr/0002-rust-core-bevy-client.md): the authoritative simulation is pure Rust and does not depend on Bevy; Bevy is the initial client/rendering framework. Renderer details, authoritative storage layout, chunk dimensions, persistence technology, and other lower-level choices remain separate decisions unless explicitly accepted elsewhere.
 
@@ -68,14 +68,15 @@ Later systems such as education, power, advanced transport, markets, social inst
 
 The client should not mutate core state directly.
 
-Player intent should enter through explicit commands, for example:
+Player intent enters through explicit commands. Prototype 01 currently includes commands such as:
 
 ```text
-DesignateHarvest(area)
-CreateStockpile(area, filters)
-PlaceConstruction(definition, position)
-SetRecipe(workshop, recipe)
-SetJobPriority(character, job_type, priority)
+SetMovementDirection / MoveTo / StopMovement
+DesignateHarvest / CancelJob
+CreateStockpile / SetStockpileCell
+PlaceWorkstation / AddProductionOrder
+CycleWorkstationInputs / CycleWorkstationOutputs
+DesignateConstruction / CancelConstruction
 ```
 
 The UI reads state through queries/read models.
@@ -83,12 +84,12 @@ The UI reads state through queries/read models.
 The current movement bootstrap makes this boundary concrete with:
 
 - `SetMovementDirection { character_id, direction }` and `StopMovement { character_id }` application commands;
-- authoritative `MovementState::{Idle, Moving { direction }}` on characters;
+- authoritative `MovementState::{Idle, ManualDirectional { direction }, Navigating { destination }}` on characters;
 - exact authoritative `WorldPosition` values with signed integer `1024`-subunit cells, plus derived containing cells in detached snapshots;
 - cardinal bootstrap movement at `256` subunits per tick; every coarse transition is checked against effective terrain, and water, rock, or the representable-world edge cause a normal exact-boundary idle stop;
 - a headless-only least-visited walker that queries neighboring terrain through snapshots, submits ordinary commands, advances four default-speed ticks to the chosen center, and observes a fresh snapshot before selecting again.
 
-The walker is an external deterministic test driver, not authoritative navigation: it stores no route, does not run BFS/Dijkstra/A*, and does not alter simulation or world-generation state. This bootstrap does not yet provide general obstacle navigation, jobs/AI movement policy, speed/collision, chunk residency, or persistence.
+The travel64 walker is an external deterministic test driver rather than authoritative navigation: it stores no route and chooses the next explored grass cell through public queries. Player/job navigation itself uses bounded deterministic cardinal A* over explored effective terrain and finished-structure occupancy, with exact fixed-point waypoints. Prototype 01 still does not provide diagonal or hierarchical routing, auto-repath, generalized job priorities, speed modifiers, or pawn collision.
 
 This creates a useful seam for:
 
@@ -104,7 +105,7 @@ Prototype 01 does not require a network protocol or event-sourcing framework.
 
 Simulation time should be discrete and deterministic.
 
-The exact tick rate is not fixed here. It must be chosen through measurement.
+The authoritative model remains tick-count based. The Prototype 01 Bevy scheduler currently requests at most one tick every 250 ms (nominal 4 Hz), while headless callers may advance ticks as fast as possible.
 
 Rules:
 
@@ -242,14 +243,7 @@ Not every physical unit must be a separate runtime entity. Stacks, bulk resource
 
 Do not search the entire entity population to answer local spatial questions.
 
-Prototype 01 should have a chunk-aware spatial index sufficient for:
-
-- locating nearby resources;
-- finding occupants/items in a cell or area;
-- pathfinding queries;
-- loading/unloading decisions.
-
-Its implementation can begin simple and be replaced after profiling.
+Prototype 01 uses purpose-specific spatial indexes rather than one global ECS/grid index: ground items are indexed by chunk, carried items by character, stockpiles/workstations/construction have cell-owner indexes, and jobs maintain source/destination/worker reservation indexes. Natural resources remain deterministic worldgen plus sparse depletion, while pathfinding queries effective terrain/structure occupancy directly. Raw chunk loading/unloading is handled by the character-centered residency cache. A more general spatial index is deferred until population/structure scale measurements justify it.
 
 ## 13. Jobs and work
 
@@ -324,7 +318,7 @@ Large-scale aggregation is a later concern and must conserve quantities when int
 
 `progressus-app` exposes only explored ground items in requested chunks as detached `GroundItemSnapshot` values plus an item revision. Natural-resource snapshots are likewise chunk-scoped and contain only explored source cells; a separate resource revision is reserved for authoritative depletion changes. Carried stacks are published as detached carrier-linked snapshots. The Bevy client reconciles disposable ground-item entities by stable Progressus ID and converts their exact positions relative to the nearby render origin, just like characters.
 
-Harvested resources create ordinary physical ground stacks, and the haul bootstrap can move those stacks through the canonical `Carried` state into designated stockpile cells. A stockpile is intentionally not a container: delivered stacks remain `Ground` at exact positions inside the stockpile area, as recorded by [`ADR-0006`](../adr/0006-stockpiles-remain-physical-ground.md). Haul uses a merge-first destination policy: a compatible underfilled same-kind stack is preferred over an empty stockpile cell when the combined quantity is at most 1,024. Underfilled stacks already inside the same stockpile are also valid Haul sources and consolidate toward a lower stable-ID target, preventing ping-pong; the destination stack keeps its stable ID and the emptied source stack is removed. Exact internal stack splitting now exists for production supply, but there is still no player-directed/general-purpose splitting UI, real container/storage location, or residency; physical stacks and active logistics now round-trip through save format v1. Crafting and StoneWall construction now provide explicit quantity-consumption paths over physical stacks.
+Harvested resources create ordinary physical ground stacks, and the haul bootstrap can move those stacks through the canonical `Carried` state into designated stockpile cells. A stockpile is intentionally not a container: delivered stacks remain `Ground` at exact positions inside the stockpile area, as recorded by [`ADR-0006`](../adr/0006-stockpiles-remain-physical-ground.md). Haul uses a merge-first destination policy: a compatible underfilled same-kind stack is preferred over an empty stockpile cell when the combined quantity is at most 1,024. Underfilled stacks already inside the same stockpile are also valid Haul sources and consolidate toward a lower stable-ID target, preventing ping-pong; the destination stack keeps its stable ID and the emptied source stack is removed. Exact internal stack splitting now exists for production supply, but there is still no player-directed/general-purpose splitting UI or real container/storage location; physical stacks and active logistics round-trip through save format v1, while raw generated chunks use bounded derived residency. Crafting and StoneWall construction now provide explicit quantity-consumption paths over physical stacks.
 
 ### Procedural presentation assets
 
@@ -363,13 +357,9 @@ Game content should be data-driven where practical:
 
 ## 17. Pathfinding
 
-Prototype 01 only needs correct local movement over generated terrain.
+Prototype 01 implements deterministic bounded cardinal A* over `WorldCell` positions. The search reads effective terrain, completed structure occupancy, and (for player `MoveTo`) the monotonically explored-world boundary; it never requires a finite global map. Equal-cost tie breaking is deterministic and regression-tested, and resulting cell paths are converted to exact fixed-point waypoints owned by character navigation state. Every movement transition is revalidated, so a newly blocked cell stops the character at the canonical boundary rather than allowing stale-route penetration.
 
-However, the pathfinding API must not assume the entire future world is represented by one finite in-memory grid.
-
-Long-distance hierarchical routing, roads, rail networks, and regional logistics are later milestones.
-
-Early pathfinding should therefore be encapsulated behind a service/interface boundary rather than embedded in character logic.
+The search budget is deliberately local/bounded. There is no diagonal search, hierarchical long-distance routing, road/rail graph routing, or automatic repath yet. Those belong to later milestones and can replace/compose above this encapsulated pathfinding service without changing authoritative character identity or the application command boundary.
 
 ## 18. Headless mode
 
@@ -384,13 +374,7 @@ Required uses:
 - performance qualification;
 - long-span and population-scale experiments.
 
-A useful target shape is conceptually:
-
-```text
-progressus-test run scenario.json --ticks 100000
-```
-
-The exact executable layout is not mandated.
+The implemented executable is `progressus-headless`, with deterministic `--ticks`, `--travel-chunks`, and `--activity-smoke` scenarios. `scripts/check-prototype-01.sh` runs the complete server-safe acceptance gate and the activity smoke performs save/load during physical logistics.
 
 ## 19. Observability
 
@@ -457,11 +441,12 @@ Bevy is the selected initial client framework.
 
 The client is responsible for:
 
+- deterministic world launch selection (`--seed`, default `0`);
 - camera;
 - rendering;
 - selection;
 - placement previews;
-- UI panels;
+- UI panels and the selected-character inspector;
 - input mapping;
 - sound and animation;
 - procedural visual generation and caching.
@@ -562,10 +547,10 @@ progressus-client --> Bevy
 ```
 
 - `progressus-worldgen` owns deterministic versioned terrain generation and coordinate types.
-- `progressus-sim` owns authoritative time, stable identities, characters, physical item stacks and their chunk/carrier indexes, base-world identity, and sparse modified-world state.
+- `progressus-sim` owns authoritative time, stable identities, characters/navigation, jobs/reservations, physical items and stockpiles, workstations/production logistics, construction, sparse world modifications, persistence DTOs, and the derived raw-chunk residency cache.
 - `progressus-app` is the command/query boundary and returns detached read models.
 - `progressus-headless` proves that the application can run and be inspected without a renderer.
-- `progressus-client` is a native Bevy presentation consumer. Its only direct dependencies are Bevy and `progressus-app`; it must not directly depend on `progressus-sim` or `progressus-worldgen`.
+- `progressus-client` is a native Bevy presentation consumer. It launches seed `0` by default or a requested `--seed`, owns pause timing/save-slot files/localization/selection/inspectors, and renders only detached application read models. Its only direct dependencies are Bevy and `progressus-app`; it must not directly depend on `progressus-sim` or `progressus-worldgen`.
 
 The headless application chain is Bevy-free. The boundary guard scans that complete chain and verifies the client's direct-dependency rule. The Bevy client converts `ClientSnapshot` data into disposable entities mapped from stable Progressus IDs; those mappings are derived presentation caches, never authoritative or persistent state.
 
@@ -575,4 +560,4 @@ The client first requests a lightweight character snapshot, establishes a dispos
 
 The presentation scheduler is non-authoritative: it requests at most one simulation tick every approximately 250 ms (nominally 4 Hz) and discards a long-frame backlog rather than catching up. Rendering frame time never becomes simulation input.
 
-This bootstrap proves rendering, tool-based rectangle/point designation, snapshot-driven mapping, camera-driven explored-terrain refresh, effective-terrain snapshots, deterministic sub-cell living positions, and a bounded deterministic `MoveTo` route through the application boundary required by [`ADR-0004`](../adr/0004-grid-world-continuous-living-movement.md). A* remains cardinal and cell-topological. Exact route waypoints remain presentation-readable only for an explicitly requested character, while every lightweight `CharacterSnapshot` carries only its detached last-tick motion trace so all visible characters can interpolate smoothly between authoritative ticks. A trace is the path completed in that authoritative tick, including a one-point trace while idle, so presentation cannot replay stale arrival motion after a later snapshot. It does not implement diagonal or hierarchical navigation, auto-repath, generalized jobs/AI priorities, speed modifiers or collision, chunk residency, demolition/doors, autosaves, or save migration beyond explicit v1 rejection. Harvest, Haul, Craft, and physical StoneWall construction are the first complete job bootstraps: Wood/Stone/PrimitiveTool stacks remain physical across starting supplies, harvested outputs, carrying, stockpile delivery, same-kind stack merging up to the 1,024-unit capacity, local recipe consumption, and crafted output. The selected-character route and selection bracket are normal presentation; F3 only adds the technical authoritative-position marker. Coordinates and provisional chunk geometry remain specified by [`ADR-0003`](../adr/0003-bootstrap-world-coordinates.md).
+This bootstrap proves rendering, tool-based rectangle/point designation, snapshot-driven mapping, camera-driven explored-terrain refresh, effective-terrain snapshots, deterministic sub-cell living positions, and a bounded deterministic `MoveTo` route through the application boundary required by [`ADR-0004`](../adr/0004-grid-world-continuous-living-movement.md). A* remains cardinal and cell-topological. Exact route waypoints remain presentation-readable only for an explicitly requested character, while every lightweight `CharacterSnapshot` carries only its detached last-tick motion trace so all visible characters can interpolate smoothly between authoritative ticks. A trace is the path completed in that authoritative tick, including a one-point trace while idle, so presentation cannot replay stale arrival motion after a later snapshot. It does not implement diagonal or hierarchical navigation, auto-repath, generalized jobs/AI priorities, speed modifiers or pawn collision, demolition/doors, autosaves, entity sleeping/Simulation LOD, or save migration beyond explicit v1 rejection. Raw deterministic chunk residency and manual versioned save/load are implemented. Harvest, Haul, Craft, and physical StoneWall construction are the first complete job bootstraps: Wood/Stone/PrimitiveTool stacks remain physical across starting supplies, harvested outputs, carrying, stockpile delivery, same-kind stack merging up to the 1,024-unit capacity, local recipe consumption, and crafted output. The selected-character route, selection bracket, and localized character-state inspector are normal presentation; F3 adds resident-chunk outlines and the selected character's technical authoritative-position marker. Coordinates and provisional chunk geometry remain specified by [`ADR-0003`](../adr/0003-bootstrap-world-coordinates.md).

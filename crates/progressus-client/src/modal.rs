@@ -2,7 +2,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use progressus_app::{
     ClientSnapshot, Command, EntityId, MAX_PRODUCTION_ORDER_RUNS, ProductionOrderSnapshot,
-    ProductionTarget, ProductionZoneKind, RecipeId, WorkstationKind,
+    ProductionTarget, RecipeId, WorkstationKind,
 };
 
 use crate::i18n::{Locale, TextKey};
@@ -100,13 +100,6 @@ pub(crate) struct RotateWorkbenchOutputsButton {
     workstation_id: EntityId,
 }
 
-#[derive(Component)]
-pub(crate) struct EditProductionZoneButton {
-    workstation_id: EntityId,
-    kind: ProductionZoneKind,
-    enabled: bool,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SaveSlotAction {
     Save,
@@ -171,12 +164,6 @@ pub(crate) struct ModalInteractionQueries<'w, 's> {
         'w,
         's,
         (&'static Interaction, &'static RotateWorkbenchOutputsButton),
-        Changed<Interaction>,
-    >,
-    edit_zone: Query<
-        'w,
-        's,
-        (&'static Interaction, &'static EditProductionZoneButton),
         Changed<Interaction>,
     >,
 }
@@ -1011,7 +998,6 @@ fn spawn_footer(
 pub(crate) fn modal_interaction(
     mut authoritative: ResMut<AuthoritativeClient>,
     mut state: ResMut<ModalState>,
-    mut tool: ResMut<ToolState>,
     interactions: ModalInteractionQueries,
 ) {
     let ModalInteractionQueries {
@@ -1024,7 +1010,6 @@ pub(crate) fn modal_interaction(
         remove,
         rotate_inputs,
         rotate_outputs,
-        edit_zone,
     } = interactions;
     if close
         .iter()
@@ -1194,26 +1179,6 @@ pub(crate) fn modal_interaction(
             refresh(&mut authoritative);
             state.dirty = true;
         }
-    }
-
-    for (interaction, button) in &edit_zone {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-        tool.mode = if button.enabled {
-            ToolMode::ProductionZoneAdd {
-                workstation_id: button.workstation_id,
-                kind: button.kind,
-            }
-        } else {
-            ToolMode::ProductionZoneRemove {
-                workstation_id: button.workstation_id,
-                kind: button.kind,
-            }
-        };
-        tool.cancel_drag();
-        state.close();
-        return;
     }
 
     for (interaction, button) in &remove {
