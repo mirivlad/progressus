@@ -88,6 +88,14 @@ Run the Prototype 01 acceptance gate (formatting, Clippy, authoritative/headless
 
 The server-safe default does not link the heavy Bevy client test binary. On a machine with enough memory, execute the same gate with `PROGRESSUS_RUN_CLIENT_TESTS=1` to run those client tests as well.
 
+Record the Prototype 01 release-mode performance baseline without linking Bevy:
+
+```bash
+./scripts/benchmark-prototype-01.sh
+```
+
+The current reference measurements are documented in [`docs/performance/prototype-01-baseline.md`](docs/performance/prototype-01-baseline.md).
+
 Run a deterministic headless scenario:
 
 ```bash

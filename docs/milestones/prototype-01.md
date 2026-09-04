@@ -310,6 +310,8 @@ Record at minimum:
 
 Numbers are evidence for later architecture decisions, not pass/fail targets unless a catastrophic bottleneck makes the prototype unusable.
 
+The reproducible release-mode harness is `./scripts/benchmark-prototype-01.sh`; the reference i3-2120 measurements are recorded in [`../performance/prototype-01-baseline.md`](../performance/prototype-01-baseline.md). The current baseline covers all measurements listed above.
+
 ## 12. Definition of done
 
 Prototype 01 is complete when all of the following are true:
@@ -328,7 +330,7 @@ Prototype 01 is complete when all of the following are true:
 - [x] worldgen determinism/order-independence tests pass;
 - [x] no known item duplication bug exists under the current ownership/regression and activity-smoke coverage;
 - [x] long-run headless smoke test passes;
-- [ ] baseline performance measurements are documented;
+- [x] baseline performance measurements are documented;
 - [ ] architecture documentation matches the implementation.
 
 ## 13. What comes next
