@@ -1,33 +1,57 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{EntityId, ItemKind, WorldCell};
+use crate::{EntityId, ItemKind, SimulationTick, WorldCell};
 
 pub const CONSTRUCT_WORK_TICKS: u32 = 8;
 pub const STONE_WALL_COST: u32 = 2;
+pub const DOOR_COST: u32 = 2;
+pub const DOOR_WORK_TICKS: u32 = 6;
+pub const DOOR_HOLD_OPEN_TICKS: u64 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum StructureKind {
     StoneWall,
+    Door,
 }
 
 impl StructureKind {
     pub const fn material_kind(self) -> ItemKind {
         match self {
             Self::StoneWall => ItemKind::Stone,
+            Self::Door => ItemKind::Wood,
         }
     }
 
     pub const fn material_quantity(self) -> u32 {
         match self {
             Self::StoneWall => STONE_WALL_COST,
+            Self::Door => DOOR_COST,
         }
     }
 
     pub const fn work_ticks(self) -> u32 {
         match self {
             Self::StoneWall => CONSTRUCT_WORK_TICKS,
+            Self::Door => DOOR_WORK_TICKS,
         }
     }
+
+    pub const fn navigation_cost(self) -> Option<usize> {
+        match self {
+            Self::StoneWall => None,
+            Self::Door => Some(2),
+        }
+    }
+
+    pub const fn connects_to_wall_network(self) -> bool {
+        matches!(self, Self::StoneWall | Self::Door)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum DoorState {
+    Closed,
+    Open,
 }
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ConstructionMaterialState {
@@ -80,11 +104,17 @@ pub struct Structure {
     id: EntityId,
     kind: StructureKind,
     cell: WorldCell,
+    door_open_until: Option<SimulationTick>,
 }
 
 impl Structure {
     pub(crate) const fn new(id: EntityId, kind: StructureKind, cell: WorldCell) -> Self {
-        Self { id, kind, cell }
+        Self {
+            id,
+            kind,
+            cell,
+            door_open_until: None,
+        }
     }
 
     pub const fn id(&self) -> EntityId {
@@ -97,6 +127,21 @@ impl Structure {
 
     pub const fn cell(&self) -> WorldCell {
         self.cell
+    }
+
+    pub const fn door_state(&self) -> Option<DoorState> {
+        match self.kind {
+            StructureKind::Door => Some(if self.door_open_until.is_some() {
+                DoorState::Open
+            } else {
+                DoorState::Closed
+            }),
+            StructureKind::StoneWall => None,
+        }
+    }
+
+    pub const fn door_open_until(&self) -> Option<SimulationTick> {
+        self.door_open_until
     }
 }
 
@@ -132,6 +177,16 @@ impl ConstructionWorld {
 
     pub(crate) fn structure_at(&self, cell: WorldCell) -> Option<EntityId> {
         self.structure_by_cell.get(&cell).copied()
+    }
+
+    pub(crate) fn structure(&self, id: EntityId) -> Option<&Structure> {
+        self.structures.get(&id)
+    }
+
+    pub(crate) fn structure_kind_at(&self, cell: WorldCell) -> Option<StructureKind> {
+        self.structure_at(cell)
+            .and_then(|id| self.structure(id))
+            .map(Structure::kind)
     }
 
     pub(crate) fn site_for_material(&self, item_id: EntityId) -> Option<EntityId> {
@@ -280,6 +335,57 @@ impl ConstructionWorld {
         Ok(structure)
     }
 
+    pub(crate) fn set_door_open_until(
+        &mut self,
+        structure_id: EntityId,
+        open_until: Option<SimulationTick>,
+    ) -> Result<(), ConstructionWorldError> {
+        let structure = self
+            .structures
+            .get_mut(&structure_id)
+            .ok_or(ConstructionWorldError::UnknownStructure(structure_id))?;
+        if structure.kind() != StructureKind::Door {
+            if open_until.is_some() {
+                return Err(ConstructionWorldError::NotADoor(structure_id));
+            }
+            return Ok(());
+        }
+        let was_open = structure.door_open_until.is_some();
+        structure.door_open_until = open_until;
+        if was_open != structure.door_open_until.is_some() {
+            self.bump_revision()?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn maintain_doors(
+        &mut self,
+        tick: SimulationTick,
+        occupied_cells: &BTreeSet<WorldCell>,
+    ) -> Result<(), ConstructionWorldError> {
+        let hold_until = SimulationTick::new(tick.value().saturating_add(DOOR_HOLD_OPEN_TICKS));
+        let mut visual_state_changed = false;
+        for structure in self.structures.values_mut() {
+            if structure.kind() != StructureKind::Door {
+                continue;
+            }
+            let was_open = structure.door_open_until.is_some();
+            if occupied_cells.contains(&structure.cell()) {
+                structure.door_open_until = Some(hold_until);
+            } else if structure
+                .door_open_until
+                .is_some_and(|open_until| open_until <= tick)
+            {
+                structure.door_open_until = None;
+            }
+            visual_state_changed |= was_open != structure.door_open_until.is_some();
+        }
+        if visual_state_changed {
+            self.bump_revision()?;
+        }
+        Ok(())
+    }
+
     fn bump_revision(&mut self) -> Result<(), ConstructionWorldError> {
         self.revision = self
             .revision
@@ -310,6 +416,8 @@ impl ConstructionWorld {
 pub(crate) enum ConstructionWorldError {
     DuplicateConstructionId(EntityId),
     UnknownSite(EntityId),
+    UnknownStructure(EntityId),
+    NotADoor(EntityId),
     CellAlreadyOccupied(WorldCell),
     SiteAlreadyHasMaterial(EntityId),
     MaterialAlreadyReserved {

@@ -6,10 +6,11 @@ use bevy::image::ImageSampler;
 use bevy::prelude::{Assets, Handle, Image, ResMut, Resource, Sprite, Vec2};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use progressus_app::{
-    EntityId, ItemKind, NaturalResourceKind, StructureKind, Terrain, WorkstationKind, WorldCell,
+    DoorState, EntityId, ItemKind, NaturalResourceKind, StructureKind, Terrain, WorkstationKind,
+    WorldCell,
 };
 
-use crate::tile_connectivity::CardinalConnections;
+use crate::tile_connectivity::{CardinalConnections, TerrainConnections};
 
 const ART_PIXELS: u32 = 16;
 const VARIANT_COUNT: u8 = 8;
@@ -31,6 +32,9 @@ pub(crate) enum ProceduralAssetKind {
     Workbench,
     StoneWallBlueprint,
     StoneWall,
+    DoorBlueprint,
+    DoorClosed,
+    DoorOpen,
     Tree,
     StoneOutcrop,
 }
@@ -39,6 +43,7 @@ pub(crate) enum ProceduralAssetKind {
 pub(crate) struct ProceduralAssetKey {
     kind: ProceduralAssetKind,
     variant: u8,
+    topology: u8,
 }
 
 impl ProceduralAssetKey {
@@ -46,13 +51,27 @@ impl ProceduralAssetKey {
         Self {
             kind,
             variant: variant % VARIANT_COUNT,
+            topology: 0,
         }
     }
 
     const fn topology(kind: ProceduralAssetKind, connections: CardinalConnections) -> Self {
         Self {
             kind,
-            variant: connections.bits() & 0x0f,
+            variant: 0,
+            topology: connections.bits() & 0x0f,
+        }
+    }
+
+    const fn terrain(
+        kind: ProceduralAssetKind,
+        variant: u8,
+        connections: TerrainConnections,
+    ) -> Self {
+        Self {
+            kind,
+            variant: variant % VARIANT_COUNT,
+            topology: connections.bits(),
         }
     }
 }
@@ -128,13 +147,22 @@ impl ProceduralAssetRegistry {
     }
 }
 
-pub(crate) fn terrain_asset(terrain: Terrain, cell: WorldCell) -> ProceduralAssetKey {
+pub(crate) fn terrain_asset(
+    terrain: Terrain,
+    cell: WorldCell,
+    connections: TerrainConnections,
+) -> ProceduralAssetKey {
     let kind = match terrain {
         Terrain::Grass => ProceduralAssetKind::Grass,
         Terrain::Water => ProceduralAssetKind::Water,
         Terrain::Rock => ProceduralAssetKind::Rock,
     };
-    ProceduralAssetKey::new(kind, variant_for_cell(cell))
+    match terrain {
+        Terrain::Grass => ProceduralAssetKey::new(kind, variant_for_cell(cell)),
+        Terrain::Water | Terrain::Rock => {
+            ProceduralAssetKey::terrain(kind, variant_for_cell(cell), connections)
+        }
+    }
 }
 
 pub(crate) fn character_asset(id: EntityId) -> ProceduralAssetKey {
@@ -164,6 +192,7 @@ pub(crate) fn construction_site_asset(
 ) -> ProceduralAssetKey {
     let kind = match kind {
         StructureKind::StoneWall => ProceduralAssetKind::StoneWallBlueprint,
+        StructureKind::Door => ProceduralAssetKind::DoorBlueprint,
     };
     ProceduralAssetKey::topology(kind, connections)
 }
@@ -171,9 +200,14 @@ pub(crate) fn construction_site_asset(
 pub(crate) fn structure_asset(
     kind: StructureKind,
     connections: CardinalConnections,
+    door_state: Option<DoorState>,
 ) -> ProceduralAssetKey {
     let kind = match kind {
         StructureKind::StoneWall => ProceduralAssetKind::StoneWall,
+        StructureKind::Door => match door_state.unwrap_or(DoorState::Closed) {
+            DoorState::Closed => ProceduralAssetKind::DoorClosed,
+            DoorState::Open => ProceduralAssetKind::DoorOpen,
+        },
     };
     ProceduralAssetKey::topology(kind, connections)
 }
@@ -213,8 +247,8 @@ fn render_image(key: ProceduralAssetKey) -> Image {
     let mut canvas = Canvas::new(ART_PIXELS, ART_PIXELS);
     match key.kind {
         ProceduralAssetKind::Grass => asset_code::grass(&mut canvas, key.variant),
-        ProceduralAssetKind::Water => asset_code::water(&mut canvas, key.variant),
-        ProceduralAssetKind::Rock => asset_code::rock(&mut canvas, key.variant),
+        ProceduralAssetKind::Water => asset_code::water(&mut canvas, key.variant, key.topology),
+        ProceduralAssetKind::Rock => asset_code::rock(&mut canvas, key.variant, key.topology),
         ProceduralAssetKind::Human => asset_code::human(&mut canvas, key.variant),
         ProceduralAssetKind::WoodStack => asset_code::wood_stack(&mut canvas, key.variant),
         ProceduralAssetKind::StoneStack => asset_code::stone_stack(&mut canvas, key.variant),
@@ -222,9 +256,12 @@ fn render_image(key: ProceduralAssetKey) -> Image {
         ProceduralAssetKind::BerriesStack => asset_code::berries_stack(&mut canvas, key.variant),
         ProceduralAssetKind::Workbench => asset_code::workbench(&mut canvas, key.variant),
         ProceduralAssetKind::StoneWallBlueprint => {
-            asset_code::stone_wall_blueprint(&mut canvas, key.variant)
+            asset_code::stone_wall_blueprint(&mut canvas, key.topology)
         }
-        ProceduralAssetKind::StoneWall => asset_code::stone_wall(&mut canvas, key.variant),
+        ProceduralAssetKind::StoneWall => asset_code::stone_wall(&mut canvas, key.topology),
+        ProceduralAssetKind::DoorBlueprint => asset_code::door_blueprint(&mut canvas, key.topology),
+        ProceduralAssetKind::DoorClosed => asset_code::door(&mut canvas, key.topology, false),
+        ProceduralAssetKind::DoorOpen => asset_code::door(&mut canvas, key.topology, true),
         ProceduralAssetKind::Tree => asset_code::tree(&mut canvas, key.variant),
         ProceduralAssetKind::StoneOutcrop => asset_code::stone_outcrop(&mut canvas, key.variant),
     }
@@ -372,9 +409,9 @@ mod tests {
     use bevy::prelude::{Assets, Vec2};
     use std::collections::BTreeSet;
 
-    use progressus_app::{EntityId, StructureKind, Terrain, WorldCell};
+    use progressus_app::{DoorState, EntityId, StructureKind, Terrain, WorldCell};
 
-    use crate::tile_connectivity::CardinalConnections;
+    use crate::tile_connectivity::{CardinalConnections, TerrainConnections};
 
     use super::{ProceduralAssetRegistry, render_image, structure_asset, terrain_asset};
 
@@ -391,13 +428,21 @@ mod tests {
 
     #[test]
     fn procedural_rasterization_is_deterministic_and_variant_bounded() {
-        let key = terrain_asset(Terrain::Grass, WorldCell::new(-17, 29));
+        let key = terrain_asset(
+            Terrain::Grass,
+            WorldCell::new(-17, 29),
+            TerrainConnections::default(),
+        );
         assert_eq!(
             image_hash(&render_image(key)),
             image_hash(&render_image(key))
         );
         for x in -100..100 {
-            let key = terrain_asset(Terrain::Water, WorldCell::new(x, x * 3));
+            let key = terrain_asset(
+                Terrain::Water,
+                WorldCell::new(x, x * 3),
+                TerrainConnections::default(),
+            );
             assert!(key.variant < 8);
         }
     }
@@ -406,7 +451,11 @@ mod tests {
     fn registry_reuses_generated_images_for_same_recipe_variant() {
         let mut registry = ProceduralAssetRegistry::default();
         let mut images = Assets::default();
-        let key = terrain_asset(Terrain::Rock, WorldCell::new(4, 7));
+        let key = terrain_asset(
+            Terrain::Rock,
+            WorldCell::new(4, 7),
+            TerrainConnections::default(),
+        );
         let first = registry.sprite(&mut images, key, Vec2::splat(12.0));
         let second = registry.sprite(&mut images, key, Vec2::splat(12.0));
         assert_eq!(first.image.id(), second.image.id());
@@ -431,6 +480,7 @@ mod tests {
         let north = render_image(structure_asset(
             StructureKind::StoneWall,
             CardinalConnections::from_cells(center, &north_cells),
+            None,
         ));
         assert_ne!(alpha_at(&north, 8, 0), 0);
         assert_eq!(alpha_at(&north, 8, 15), 0);
@@ -441,8 +491,29 @@ mod tests {
         let west = render_image(structure_asset(
             StructureKind::StoneWall,
             CardinalConnections::from_cells(center, &west_cells),
+            None,
         ));
         assert_ne!(alpha_at(&west, 0, 8), 0);
         assert_eq!(alpha_at(&west, 15, 8), 0);
+    }
+
+    #[test]
+    fn door_open_and_closed_assets_are_distinct_and_share_wall_topology() {
+        let center = WorldCell::new(0, 0);
+        let cells = [center, WorldCell::new(-1, 0), WorldCell::new(1, 0)]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let connections = CardinalConnections::from_cells(center, &cells);
+        let closed = render_image(structure_asset(
+            StructureKind::Door,
+            connections,
+            Some(DoorState::Closed),
+        ));
+        let open = render_image(structure_asset(
+            StructureKind::Door,
+            connections,
+            Some(DoorState::Open),
+        ));
+        assert_ne!(image_hash(&closed), image_hash(&open));
     }
 }

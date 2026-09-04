@@ -20,7 +20,7 @@ use crate::procedural_assets::{
 };
 
 use crate::runtime::AuthoritativeClient;
-use crate::tile_connectivity::CardinalConnections;
+use crate::tile_connectivity::{CardinalConnections, TerrainConnections};
 use crate::ui::{SelectedStockpile, ToolMode, ToolState, ZoneVisibility};
 
 const CELL_SIZE: f32 = 12.0;
@@ -327,32 +327,36 @@ fn spawn_terrain(
     images: &mut Assets<Image>,
     procedural_assets: &mut ProceduralAssetRegistry,
 ) -> Entity {
+    let mut known = BTreeMap::<WorldCell, progressus_app::Terrain>::new();
+    for chunk in chunks {
+        for local_y in 0..CHUNK_SIDE {
+            for local_x in 0..CHUNK_SIDE {
+                let local = LocalCell::new(local_x, local_y);
+                let Some(terrain) = chunk.known_terrain_at(local) else {
+                    continue;
+                };
+                let world_cell = chunk
+                    .coordinate
+                    .world_cell(local)
+                    .expect("a successfully generated chunk contains valid world cells");
+                known.insert(world_cell, terrain);
+            }
+        }
+    }
+
     let mut root = commands.spawn((TerrainRoot, Transform::default(), Visibility::default()));
     let root_id = root.id();
     root.with_children(|parent| {
-        for chunk in chunks {
-            for local_y in 0..CHUNK_SIDE {
-                for local_x in 0..CHUNK_SIDE {
-                    let local = LocalCell::new(local_x, local_y);
-                    let world_cell = chunk
-                        .coordinate
-                        .world_cell(local)
-                        .expect("a successfully generated chunk contains valid world cells");
-                    let Some(terrain) = chunk.known_terrain_at(local) else {
-                        continue;
-                    };
-                    parent.spawn((
-                        procedural_assets.sprite(
-                            images,
-                            terrain_asset(terrain, world_cell),
-                            Vec2::splat(CELL_SIZE),
-                        ),
-                        Transform::from_translation(world_translation(
-                            world_cell, origin, TERRAIN_Z,
-                        )),
-                    ));
-                }
-            }
+        for (&world_cell, &terrain) in &known {
+            let connections = TerrainConnections::from_known(world_cell, terrain, &known);
+            parent.spawn((
+                procedural_assets.sprite(
+                    images,
+                    terrain_asset(terrain, world_cell, connections),
+                    Vec2::splat(CELL_SIZE),
+                ),
+                Transform::from_translation(world_translation(world_cell, origin, TERRAIN_Z)),
+            ));
         }
     });
     root_id
@@ -506,30 +510,27 @@ fn sync_construction(
     images: &mut Assets<Image>,
     procedural_assets: &mut ProceduralAssetRegistry,
 ) {
-    let mut connected_cells = BTreeMap::<StructureKind, BTreeSet<WorldCell>>::new();
-    for site in sites {
-        connected_cells
-            .entry(site.kind)
-            .or_default()
-            .insert(site.cell);
-    }
-    for structure in structures {
-        connected_cells
-            .entry(structure.kind)
-            .or_default()
-            .insert(structure.cell);
-    }
+    let wall_network_cells = sites
+        .iter()
+        .filter(|site| site.kind.connects_to_wall_network())
+        .map(|site| site.cell)
+        .chain(
+            structures
+                .iter()
+                .filter(|structure| structure.kind.connects_to_wall_network())
+                .map(|structure| structure.cell),
+        )
+        .collect::<BTreeSet<_>>();
     let authoritative_sites = sites
         .iter()
         .map(|site| (site.id, *site))
         .collect::<BTreeMap<_, _>>();
     for (id, site) in &authoritative_sites {
-        let connections = CardinalConnections::from_cells(
-            site.cell,
-            connected_cells
-                .get(&site.kind)
-                .expect("the site contributes to its connectivity set"),
-        );
+        let connections = if site.kind.connects_to_wall_network() {
+            CardinalConnections::from_cells(site.cell, &wall_network_cells)
+        } else {
+            CardinalConnections::default()
+        };
         let sprite = procedural_assets.sprite(
             images,
             construction_site_asset(site.kind, connections),
@@ -563,15 +564,14 @@ fn sync_construction(
         .map(|structure| (structure.id, *structure))
         .collect::<BTreeMap<_, _>>();
     for (id, structure) in &authoritative_structures {
-        let connections = CardinalConnections::from_cells(
-            structure.cell,
-            connected_cells
-                .get(&structure.kind)
-                .expect("the structure contributes to its connectivity set"),
-        );
+        let connections = if structure.kind.connects_to_wall_network() {
+            CardinalConnections::from_cells(structure.cell, &wall_network_cells)
+        } else {
+            CardinalConnections::default()
+        };
         let sprite = procedural_assets.sprite(
             images,
-            structure_asset(structure.kind, connections),
+            structure_asset(structure.kind, connections, structure.door_state),
             Vec2::splat(CELL_SIZE),
         );
         let transform =
@@ -858,7 +858,7 @@ pub(crate) fn draw_tool_drag(
         return;
     }
     let color = match tool.mode {
-        ToolMode::Select | ToolMode::Workbench => return,
+        ToolMode::Select | ToolMode::Door | ToolMode::Workbench => return,
         ToolMode::StockpileAdd => Color::srgba(0.25, 1.0, 0.72, 0.9),
         ToolMode::StockpileRemove => Color::srgba(1.0, 0.35, 0.32, 0.9),
         ToolMode::Harvest => Color::srgba(1.0, 0.72, 0.18, 0.9),

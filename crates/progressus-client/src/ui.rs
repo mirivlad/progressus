@@ -17,6 +17,7 @@ pub(crate) enum ToolMode {
     StockpileRemove,
     Harvest,
     Wall,
+    Door,
     Workbench,
     CancelJobs,
 }
@@ -29,6 +30,7 @@ impl ToolMode {
             Self::StockpileRemove => TextKey::StockpileRemove,
             Self::Harvest => TextKey::Harvest,
             Self::Wall => TextKey::StoneWall,
+            Self::Door => TextKey::Door,
             Self::Workbench => TextKey::Workbench,
             Self::CancelJobs => TextKey::CancelJobs,
         }
@@ -198,7 +200,11 @@ pub(crate) fn setup_toolbar(
         &mut commands,
         HudPalette::Build,
         150.0,
-        &[(ToolMode::Wall, "W"), (ToolMode::Workbench, "T")],
+        &[
+            (ToolMode::Wall, "W"),
+            (ToolMode::Door, "D"),
+            (ToolMode::Workbench, "T"),
+        ],
         &font,
     );
 
@@ -941,6 +947,11 @@ fn hud_tooltip_text(
             "Запланировать строительство каменной стены.",
             None,
         ),
+        (Language::Ru, HudTooltipKind::Tool(ToolMode::Door)) => (
+            "Дверь",
+            "Поставить автоматически открывающуюся дверь в проходе стены.",
+            None,
+        ),
         (Language::Ru, HudTooltipKind::Tool(ToolMode::Workbench)) => {
             ("Верстак", "Поставить производственный верстак.", None)
         }
@@ -1001,6 +1012,11 @@ fn hud_tooltip_text(
         (Language::En, HudTooltipKind::Tool(ToolMode::Wall)) => {
             ("Stone wall", "Designate stone wall construction.", None)
         }
+        (Language::En, HudTooltipKind::Tool(ToolMode::Door)) => (
+            "Door",
+            "Place an automatically opening door in a wall passage.",
+            None,
+        ),
         (Language::En, HudTooltipKind::Tool(ToolMode::Workbench)) => {
             ("Workbench", "Place a production workbench.", None)
         }

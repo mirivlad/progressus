@@ -49,6 +49,78 @@ pub(super) fn stone_wall(canvas: &mut Canvas, connections: u8) {
     canvas.line(5, 4, 10, 4, LIGHT);
 }
 
+pub(super) fn door_blueprint(canvas: &mut Canvas, connections: u8) {
+    const LINE: Rgba8 = Rgba8::rgba(84, 220, 238, 225);
+    const FAINT: Rgba8 = Rgba8::rgba(84, 220, 238, 72);
+    let horizontal = door_is_horizontal(connections);
+    if horizontal {
+        canvas.rect(0, 4, 16, 8, FAINT);
+        canvas.rect(5, 3, 6, 10, LINE);
+        canvas.line(6, 4, 10, 12, LINE);
+    } else {
+        canvas.rect(4, 0, 8, 16, FAINT);
+        canvas.rect(3, 5, 10, 6, LINE);
+        canvas.line(4, 6, 12, 10, LINE);
+    }
+}
+
+pub(super) fn door(canvas: &mut Canvas, connections: u8, open: bool) {
+    const FRAME_DARK: Rgba8 = Rgba8::rgb(58, 61, 63);
+    const FRAME: Rgba8 = Rgba8::rgb(143, 147, 145);
+    const WOOD: Rgba8 = Rgba8::rgb(132, 86, 48);
+    const WOOD_LIGHT: Rgba8 = Rgba8::rgb(171, 116, 64);
+    const HANDLE: Rgba8 = Rgba8::rgb(216, 188, 96);
+
+    let horizontal = door_is_horizontal(connections);
+    if horizontal {
+        if connections & WEST != 0 {
+            canvas.rect(0, 3, 6, 10, FRAME_DARK);
+            canvas.rect(0, 4, 6, 8, FRAME);
+        }
+        if connections & EAST != 0 {
+            canvas.rect(10, 3, 6, 10, FRAME_DARK);
+            canvas.rect(10, 4, 6, 8, FRAME);
+        }
+        canvas.rect(4, 2, 2, 12, FRAME_DARK);
+        canvas.rect(10, 2, 2, 12, FRAME_DARK);
+        if open {
+            canvas.rect(5, 3, 2, 10, WOOD);
+            canvas.line(6, 4, 6, 11, WOOD_LIGHT);
+            canvas.pixel(6, 8, HANDLE);
+        } else {
+            canvas.rect(6, 4, 4, 8, WOOD);
+            canvas.line(7, 5, 7, 10, WOOD_LIGHT);
+            canvas.pixel(9, 8, HANDLE);
+        }
+    } else {
+        if connections & NORTH != 0 {
+            canvas.rect(3, 0, 10, 6, FRAME_DARK);
+            canvas.rect(4, 0, 8, 6, FRAME);
+        }
+        if connections & SOUTH != 0 {
+            canvas.rect(3, 10, 10, 6, FRAME_DARK);
+            canvas.rect(4, 10, 8, 6, FRAME);
+        }
+        canvas.rect(2, 4, 12, 2, FRAME_DARK);
+        canvas.rect(2, 10, 12, 2, FRAME_DARK);
+        if open {
+            canvas.rect(3, 5, 10, 2, WOOD);
+            canvas.line(4, 6, 11, 6, WOOD_LIGHT);
+            canvas.pixel(8, 6, HANDLE);
+        } else {
+            canvas.rect(4, 6, 8, 4, WOOD);
+            canvas.line(5, 7, 10, 7, WOOD_LIGHT);
+            canvas.pixel(8, 9, HANDLE);
+        }
+    }
+}
+
+fn door_is_horizontal(connections: u8) -> bool {
+    let horizontal = (connections & EAST != 0) as u8 + (connections & WEST != 0) as u8;
+    let vertical = (connections & NORTH != 0) as u8 + (connections & SOUTH != 0) as u8;
+    horizontal >= vertical
+}
+
 fn connected_body(canvas: &mut Canvas, connections: u8, color: Rgba8) {
     canvas.rect(3, 3, 10, 10, color);
     if connections & NORTH != 0 {

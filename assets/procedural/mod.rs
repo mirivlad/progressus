@@ -12,12 +12,12 @@ pub(super) fn grass(canvas: &mut Canvas, variant: u8) {
     terrain::grass(canvas, variant);
 }
 
-pub(super) fn water(canvas: &mut Canvas, variant: u8) {
-    terrain::water(canvas, variant);
+pub(super) fn water(canvas: &mut Canvas, variant: u8, connections: u8) {
+    terrain::water(canvas, variant, connections);
 }
 
-pub(super) fn rock(canvas: &mut Canvas, variant: u8) {
-    terrain::rock(canvas, variant);
+pub(super) fn rock(canvas: &mut Canvas, variant: u8, connections: u8) {
+    terrain::rock(canvas, variant, connections);
 }
 
 pub(super) fn human(canvas: &mut Canvas, variant: u8) {
@@ -66,4 +66,12 @@ pub(super) fn stone_wall_blueprint(canvas: &mut Canvas, variant: u8) {
 
 pub(super) fn stone_wall(canvas: &mut Canvas, variant: u8) {
     structures::stone_wall(canvas, variant);
+}
+
+pub(super) fn door_blueprint(canvas: &mut Canvas, connections: u8) {
+    structures::door_blueprint(canvas, connections);
+}
+
+pub(super) fn door(canvas: &mut Canvas, connections: u8, open: bool) {
+    structures::door(canvas, connections, open);
 }

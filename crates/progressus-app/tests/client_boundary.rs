@@ -1,8 +1,9 @@
 use progressus_app::{
-    Application, CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, Command, Direction, EntityId,
-    ItemKind, JobKind, JobState, KnownTerrain, LocalCell, MovementState, NaturalResourceKind,
-    NewGameOptions, ProductionZoneKind, RESIDENT_CHUNKS_PER_CENTER, RecipeId, SimulationTick,
-    SnapshotQuery, StructureKind, Terrain, WorkstationKind, WorldCell, WorldPosition, WorldSeed,
+    Application, CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, Command, Direction, DoorState,
+    EntityId, ItemKind, JobKind, JobState, KnownTerrain, LocalCell, MovementState,
+    NaturalResourceKind, NewGameOptions, ProductionZoneKind, RESIDENT_CHUNKS_PER_CENTER, RecipeId,
+    SimulationTick, SnapshotQuery, StructureKind, Terrain, WorkstationKind, WorldCell,
+    WorldPosition, WorldSeed,
 };
 
 fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
@@ -717,6 +718,73 @@ fn physical_wall_construction_crosses_the_public_application_boundary() {
                 .all(|waypoint| waypoint.containing_cell() != cell)
         );
     }
+}
+
+#[test]
+fn physical_door_construction_and_open_state_cross_the_public_application_boundary() {
+    let mut application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(0),
+    })
+    .unwrap();
+    let door_cell = WorldCell::new(0, 1);
+    application
+        .execute(Command::DesignateConstruction {
+            kind: StructureKind::Door,
+            cell: door_cell,
+        })
+        .unwrap();
+    let site_id = application
+        .snapshot(SnapshotQuery::default())
+        .unwrap()
+        .construction_sites[0]
+        .id;
+
+    for _ in 0..768 {
+        application
+            .execute(Command::AdvanceTicks { count: 1 })
+            .unwrap();
+        if application
+            .snapshot(SnapshotQuery::default())
+            .unwrap()
+            .structures
+            .iter()
+            .any(|structure| structure.id == site_id)
+        {
+            break;
+        }
+    }
+    let completed = application.snapshot(SnapshotQuery::default()).unwrap();
+    let door = completed
+        .structures
+        .iter()
+        .find(|structure| structure.id == site_id)
+        .unwrap();
+    assert_eq!(door.kind, StructureKind::Door);
+    assert_eq!(door.door_state, Some(DoorState::Closed));
+
+    let cora = EntityId::new(3).unwrap();
+    application
+        .execute(Command::MoveTo {
+            character_id: cora,
+            destination: WorldPosition::from_cell_center(door_cell).unwrap(),
+        })
+        .unwrap();
+    let mut saw_open = false;
+    for _ in 0..32 {
+        application
+            .execute(Command::AdvanceTicks { count: 1 })
+            .unwrap();
+        let snapshot = application.snapshot(SnapshotQuery::default()).unwrap();
+        saw_open |= snapshot
+            .structures
+            .iter()
+            .find(|structure| structure.id == site_id)
+            .is_some_and(|structure| structure.door_state == Some(DoorState::Open));
+        if saw_open {
+            break;
+        }
+    }
+    assert!(saw_open);
 }
 
 #[test]

@@ -17,8 +17,8 @@ mod world_state;
 
 pub use clock::SimulationTick;
 pub use construction::{
-    CONSTRUCT_WORK_TICKS, ConstructionMaterialState, ConstructionSite, STONE_WALL_COST, Structure,
-    StructureKind,
+    CONSTRUCT_WORK_TICKS, ConstructionMaterialState, ConstructionSite, DOOR_COST,
+    DOOR_HOLD_OPEN_TICKS, DOOR_WORK_TICKS, DoorState, STONE_WALL_COST, Structure, StructureKind,
 };
 pub use entity::{
     BERRIES_MEAL_SATIETY, Character, DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED,

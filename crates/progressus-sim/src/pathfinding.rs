@@ -80,10 +80,13 @@ pub(crate) fn find_closest_explored_path(
             let Some(next) = direction.adjacent(node.cell) else {
                 continue;
             };
-            if next == start || !is_walkable(simulation, next, &mut chunks, true)? {
+            if next == start {
                 continue;
             }
-            let next_cost = cost + 1;
+            let Some(step_cost) = traversal_cost(simulation, next, &mut chunks, true)? else {
+                continue;
+            };
+            let next_cost = cost + step_cost;
             if costs.get(&next).is_some_and(|known| *known <= next_cost) {
                 continue;
             }
@@ -113,7 +116,7 @@ fn find_path_with_budget(
     require_explored: bool,
 ) -> Result<Result<Vec<WorldCell>, PathfindingError>, SimulationError> {
     let mut chunks = BTreeMap::<ChunkCoord, EffectiveChunk>::new();
-    if !is_walkable(simulation, goal, &mut chunks, require_explored)? {
+    if traversal_cost(simulation, goal, &mut chunks, require_explored)?.is_none() {
         return Ok(Err(PathfindingError::PathNotFound));
     }
 
@@ -154,10 +157,14 @@ fn find_path_with_budget(
             let Some(next) = direction.adjacent(node.cell) else {
                 continue;
             };
-            if next == start || !is_walkable(simulation, next, &mut chunks, require_explored)? {
+            if next == start {
                 continue;
             }
-            let next_cost = cost + 1;
+            let Some(step_cost) = traversal_cost(simulation, next, &mut chunks, require_explored)?
+            else {
+                continue;
+            };
+            let next_cost = cost + step_cost;
             if costs.get(&next).is_some_and(|known| *known <= next_cost) {
                 continue;
             }
@@ -179,23 +186,27 @@ fn find_path_with_budget(
     Ok(Err(PathfindingError::PathNotFound))
 }
 
-fn is_walkable(
+fn traversal_cost(
     simulation: &Simulation,
     cell: WorldCell,
     chunks: &mut BTreeMap<ChunkCoord, EffectiveChunk>,
     require_explored: bool,
-) -> Result<bool, SimulationError> {
+) -> Result<Option<usize>, SimulationError> {
     if require_explored && !simulation.is_explored(cell) {
-        return Ok(false);
+        return Ok(None);
     }
-    if simulation.structure_at(cell).is_some() {
-        return Ok(false);
-    }
+    let structure_cost = match simulation.structure_kind_at(cell) {
+        Some(kind) => match kind.navigation_cost() {
+            Some(cost) => cost,
+            None => return Ok(None),
+        },
+        None => 1,
+    };
     let (coordinate, local) = cell.split();
     if let Entry::Vacant(entry) = chunks.entry(coordinate) {
         entry.insert(simulation.effective_chunk(coordinate)?);
     }
-    Ok(chunks[&coordinate].terrain_at(local) == Some(Terrain::Grass))
+    Ok((chunks[&coordinate].terrain_at(local) == Some(Terrain::Grass)).then_some(structure_cost))
 }
 
 fn manhattan(first: WorldCell, second: WorldCell) -> u128 {

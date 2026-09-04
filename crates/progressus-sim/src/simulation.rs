@@ -227,10 +227,22 @@ impl Simulation {
             self.maintain_craft_supply_jobs()?;
             self.maintain_haul_jobs()?;
             self.advance_jobs_one_tick()?;
+            self.maintain_doors()?;
             self.reconcile_chunk_residency()?;
         }
 
         Ok(())
+    }
+
+    fn maintain_doors(&mut self) -> Result<(), SimulationError> {
+        let occupied_cells = self
+            .characters
+            .values()
+            .map(|character| character.position().containing_cell())
+            .collect::<BTreeSet<_>>();
+        self.construction_world
+            .maintain_doors(self.clock.tick(), &occupied_cells)
+            .map_err(SimulationError::from_construction_world)
     }
 
     fn decay_satiety_if_due(&mut self) {
@@ -1160,6 +1172,10 @@ impl Simulation {
 
     pub fn structure_at(&self, cell: WorldCell) -> Option<EntityId> {
         self.construction_world.structure_at(cell)
+    }
+
+    pub(crate) fn structure_kind_at(&self, cell: WorldCell) -> Option<StructureKind> {
+        self.construction_world.structure_kind_at(cell)
     }
 
     pub fn designate_construction(
@@ -3707,8 +3723,13 @@ impl Simulation {
     }
 
     fn is_walkable(&self, position: WorldCell) -> Result<bool, SimulationError> {
-        Ok(self.effective_terrain_at(position)? == Terrain::Grass
-            && self.construction_world.structure_at(position).is_none())
+        if self.effective_terrain_at(position)? != Terrain::Grass {
+            return Ok(false);
+        }
+        Ok(self
+            .construction_world
+            .structure_kind_at(position)
+            .is_none_or(|kind| kind.navigation_cost().is_some()))
     }
 }
 
@@ -4132,6 +4153,8 @@ impl SimulationError {
             }
             ConstructionWorldError::RevisionOverflow => Self::ConstructionRevisionOverflow,
             ConstructionWorldError::DuplicateConstructionId(_)
+            | ConstructionWorldError::UnknownStructure(_)
+            | ConstructionWorldError::NotADoor(_)
             | ConstructionWorldError::SiteAlreadyHasMaterial(_)
             | ConstructionWorldError::MaterialAlreadyReserved { .. }
             | ConstructionWorldError::MaterialReservationMismatch { .. }
@@ -6928,6 +6951,120 @@ mod tests {
         assert!(simulation.construction_world.indexes_are_consistent());
         assert!(simulation.job_world.indexes_are_consistent());
         assert!(simulation.item_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn door_is_passable_opens_for_a_character_and_closes_after_the_hold_window() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let start = WorldCell::new(0, 1);
+        let door_cell = WorldCell::new(1, 1);
+        let goal = WorldCell::new(2, 1);
+        for cell in [start, door_cell, goal] {
+            simulation
+                .set_terrain_override(cell, Terrain::Grass)
+                .unwrap();
+        }
+        let door_id = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .construction_world
+            .insert_site(ConstructionSite::new(
+                door_id,
+                StructureKind::Door,
+                door_cell,
+            ))
+            .unwrap();
+        simulation
+            .construction_world
+            .complete_site(door_id)
+            .unwrap();
+
+        assert!(simulation.is_walkable(door_cell).unwrap());
+        assert_eq!(
+            simulation
+                .construction_world
+                .structure(door_id)
+                .unwrap()
+                .door_state(),
+            Some(crate::DoorState::Closed)
+        );
+
+        let cora = cora();
+        let cora_state = simulation.characters.get_mut(&cora).unwrap();
+        cora_state.set_position(WorldPosition::from_cell_center(start).unwrap());
+        cora_state.set_movement(MovementState::Idle);
+        simulation
+            .move_to(cora, WorldPosition::from_cell_center(goal).unwrap())
+            .unwrap();
+
+        let mut saw_open = false;
+        for _ in 0..16 {
+            simulation.advance_ticks(1).unwrap();
+            if simulation
+                .construction_world
+                .structure(door_id)
+                .unwrap()
+                .door_state()
+                == Some(crate::DoorState::Open)
+            {
+                saw_open = true;
+            }
+            if character(&simulation, cora).position()
+                == WorldPosition::from_cell_center(goal).unwrap()
+            {
+                break;
+            }
+        }
+        assert!(
+            saw_open,
+            "door must visibly open while a character passes through it"
+        );
+        assert_eq!(
+            character(&simulation, cora).position(),
+            WorldPosition::from_cell_center(goal).unwrap()
+        );
+
+        simulation
+            .advance_ticks(crate::DOOR_HOLD_OPEN_TICKS + 1)
+            .unwrap();
+        assert_eq!(
+            simulation
+                .construction_world
+                .structure(door_id)
+                .unwrap()
+                .door_state(),
+            Some(crate::DoorState::Closed)
+        );
+    }
+
+    #[test]
+    fn pathfinding_treats_doors_as_passable_but_prefers_a_short_door_free_detour() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        for y in 0..=1 {
+            for x in 0..=4 {
+                simulation
+                    .set_terrain_override(WorldCell::new(x, y), Terrain::Grass)
+                    .unwrap();
+            }
+        }
+        for x in 1..=3 {
+            let cell = WorldCell::new(x, 0);
+            let id = simulation.id_allocator.allocate().unwrap();
+            simulation
+                .construction_world
+                .insert_site(ConstructionSite::new(id, StructureKind::Door, cell))
+                .unwrap();
+            simulation.construction_world.complete_site(id).unwrap();
+        }
+
+        let path =
+            crate::pathfinding::find_path(&simulation, WorldCell::new(0, 0), WorldCell::new(4, 0))
+                .unwrap()
+                .unwrap();
+        assert!(path.iter().any(|cell| cell.y() == 1));
+        assert!(
+            path.iter()
+                .all(|cell| simulation.structure_kind_at(*cell) != Some(StructureKind::Door))
+        );
     }
 
     fn clear_all_items(simulation: &mut Simulation) {

@@ -1,6 +1,6 @@
 use progressus_sim::{
-    Character, ConstructionMaterialState, ConstructionSite, ItemKind, ItemStack, Job, JobKind,
-    JobState, MovementState, NaturalResource, NaturalResourceKind, ProductionLogistics,
+    Character, ConstructionMaterialState, ConstructionSite, DoorState, ItemKind, ItemStack, Job,
+    JobKind, JobState, MovementState, NaturalResource, NaturalResourceKind, ProductionLogistics,
     ProductionOrder, ProductionTarget, ProductionZoneKind, RecipeId, Stockpile, Structure,
     StructureKind, Workstation, WorkstationKind, WorldPosition,
 };
@@ -209,6 +209,7 @@ pub struct StructureSnapshot {
     pub id: EntityId,
     pub kind: StructureKind,
     pub cell: WorldCell,
+    pub door_state: Option<DoorState>,
 }
 
 impl From<&Structure> for StructureSnapshot {
@@ -217,6 +218,7 @@ impl From<&Structure> for StructureSnapshot {
             id: structure.id(),
             kind: structure.kind(),
             cell: structure.cell(),
+            door_state: structure.door_state(),
         }
     }
 }

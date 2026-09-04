@@ -854,12 +854,14 @@ impl ProductionLogisticsSave {
 #[serde(rename_all = "snake_case")]
 enum StructureKindSave {
     StoneWall,
+    Door,
 }
 
 impl From<StructureKind> for StructureKindSave {
     fn from(kind: StructureKind) -> Self {
         match kind {
             StructureKind::StoneWall => Self::StoneWall,
+            StructureKind::Door => Self::Door,
         }
     }
 }
@@ -868,6 +870,7 @@ impl From<StructureKindSave> for StructureKind {
     fn from(kind: StructureKindSave) -> Self {
         match kind {
             StructureKindSave::StoneWall => Self::StoneWall,
+            StructureKindSave::Door => Self::Door,
         }
     }
 }
@@ -934,6 +937,8 @@ struct StructureSave {
     id: u64,
     kind: StructureKindSave,
     cell: CellSave,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    door_open_until_tick: Option<u64>,
 }
 
 impl StructureSave {
@@ -942,6 +947,7 @@ impl StructureSave {
             id: structure.id().value(),
             kind: structure.kind().into(),
             cell: structure.cell().into(),
+            door_open_until_tick: structure.door_open_until().map(SimulationTick::value),
         }
     }
 }
@@ -1518,6 +1524,11 @@ fn restore_construction(
         world
             .complete_site(id)
             .map_err(|error| invalid_world_error("structure", error))?;
+        if let Some(open_until_tick) = value.door_open_until_tick {
+            world
+                .set_door_open_until(id, Some(SimulationTick::new(open_until_tick)))
+                .map_err(|error| invalid_world_error("door state", error))?;
+        }
     }
     Ok(world)
 }
@@ -2128,6 +2139,49 @@ mod tests {
             ItemKind::ALL
                 .into_iter()
                 .all(|kind| legacy_stockpile.accepts(kind))
+        );
+    }
+
+    #[test]
+    fn door_open_state_round_trips_and_missing_state_defaults_to_closed() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let id = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .construction_world
+            .insert_site(ConstructionSite::new(
+                id,
+                StructureKind::Door,
+                WorldCell::new(0, 1),
+            ))
+            .unwrap();
+        simulation.construction_world.complete_site(id).unwrap();
+        simulation
+            .construction_world
+            .set_door_open_until(id, Some(SimulationTick::new(7)))
+            .unwrap();
+
+        let encoded = simulation.save_json().unwrap();
+        let restored = Simulation::load_json(&encoded).unwrap();
+        let door = restored
+            .structures()
+            .find(|structure| structure.id() == id)
+            .unwrap();
+        assert_eq!(door.door_state(), Some(crate::DoorState::Open));
+        assert_eq!(door.door_open_until(), Some(SimulationTick::new(7)));
+
+        let mut json: Value = serde_json::from_slice(&encoded).unwrap();
+        json["structures"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("door_open_until_tick");
+        let legacy = Simulation::load_json(&serde_json::to_vec(&json).unwrap()).unwrap();
+        assert_eq!(
+            legacy
+                .structures()
+                .find(|structure| structure.id() == id)
+                .unwrap()
+                .door_state(),
+            Some(crate::DoorState::Closed)
         );
     }
 

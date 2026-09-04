@@ -369,6 +369,14 @@ fn apply_point_tool(
     cell: WorldCell,
 ) -> Result<(), ClientError> {
     match mode {
+        ToolMode::Door => {
+            authoritative
+                .application
+                .execute(Command::DesignateConstruction {
+                    kind: StructureKind::Door,
+                    cell,
+                })?;
+        }
         ToolMode::Workbench => {
             if workstation_at(authoritative.snapshot(), cell).is_none() {
                 authoritative
@@ -581,7 +589,7 @@ fn apply_tool_area(
                     })?;
             }
         }
-        ToolMode::Workbench => {}
+        ToolMode::Door | ToolMode::Workbench => {}
         ToolMode::CancelJobs => {
             let selected = cells.into_iter().collect::<BTreeSet<_>>();
             let jobs = area_snapshot
