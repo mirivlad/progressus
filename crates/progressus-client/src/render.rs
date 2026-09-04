@@ -12,7 +12,10 @@ use progressus_app::{
     WorldPosition,
 };
 
-use crate::client_diagnostics::{PRESENTATION_MS, record_elapsed};
+use crate::client_diagnostics::{
+    ITEM_REFRESH_MS, PRESENTATION_MS, RESOURCE_REFRESH_MS, SPATIAL_SNAPSHOT_MS, TERRAIN_REFRESH_MS,
+    record_elapsed,
+};
 use crate::navigation::{SelectedCharacter, VisualMotion, interpolate_trace};
 use crate::presentation::{
     CharacterSyncAction, GroundItemSyncAction, NaturalResourceSyncAction, VisibleChunkWindow,
@@ -245,6 +248,7 @@ pub(crate) fn sync_presentation(
     let refresh_resources = window_changed || exploration_changed || resource_changed;
 
     if refresh_terrain || refresh_items || refresh_resources {
+        let spatial_started = Instant::now();
         let spatial = match authoritative.spatial_snapshot(
             current_window.coordinates().to_vec(),
             refresh_terrain,
@@ -257,9 +261,11 @@ pub(crate) fn sync_presentation(
                 return;
             }
         };
+        record_elapsed(&mut diagnostics, &SPATIAL_SNAPSHOT_MS, spatial_started);
 
         let render_origin = cache.render_origin.expect("origin was established above");
         if refresh_terrain {
+            let refresh_started = Instant::now();
             let (images, _) = procedural_assets.parts();
             sync_terrain_chunks(
                 &mut commands,
@@ -269,8 +275,10 @@ pub(crate) fn sync_presentation(
                 images,
             );
             position_characters(&mut commands, &authoritative, &cache, render_origin);
+            record_elapsed(&mut diagnostics, &TERRAIN_REFRESH_MS, refresh_started);
         }
         if refresh_resources {
+            let refresh_started = Instant::now();
             let (images, registry) = procedural_assets.parts();
             sync_natural_resources(
                 &mut commands,
@@ -280,8 +288,10 @@ pub(crate) fn sync_presentation(
                 images,
                 registry,
             );
+            record_elapsed(&mut diagnostics, &RESOURCE_REFRESH_MS, refresh_started);
         }
         if refresh_items {
+            let refresh_started = Instant::now();
             let (images, registry) = procedural_assets.parts();
             sync_ground_items(
                 &mut commands,
@@ -291,6 +301,7 @@ pub(crate) fn sync_presentation(
                 images,
                 registry,
             );
+            record_elapsed(&mut diagnostics, &ITEM_REFRESH_MS, refresh_started);
         }
         cache.central_chunk = Some(current_center);
         cache.visible_window = Some(current_window);

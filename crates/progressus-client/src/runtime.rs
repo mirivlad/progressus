@@ -15,8 +15,8 @@ use progressus_app::{
 };
 
 use crate::client_diagnostics::{
-    AUTHORITY_MS, ClientUpdateTimer, ProgressusDiagnosticsPlugin, begin_client_update,
-    end_client_update, record_elapsed,
+    AUTHORITY_MS, AUTHORITY_TICK_MS, ClientUpdateTimer, ProgressusDiagnosticsPlugin,
+    begin_client_update, end_client_update, record_elapsed,
 };
 use crate::i18n::Locale;
 use crate::interaction::{TickScheduler, movement_command};
@@ -155,14 +155,18 @@ pub(crate) fn advance_authority(
         }
     }
     let tick_due = scheduler.advance(time.delta());
-    if tick_due
-        && let Err(error) = authoritative
+    if tick_due {
+        let tick_started = Instant::now();
+        if let Err(error) = authoritative
             .application
             .execute(Command::AdvanceTicks { count: 1 })
-    {
-        error!("authoritative tick failed: {error}");
-        record_elapsed(&mut diagnostics, &AUTHORITY_MS, started);
-        return;
+        {
+            error!("authoritative tick failed: {error}");
+            record_elapsed(&mut diagnostics, &AUTHORITY_TICK_MS, tick_started);
+            record_elapsed(&mut diagnostics, &AUTHORITY_MS, started);
+            return;
+        }
+        record_elapsed(&mut diagnostics, &AUTHORITY_TICK_MS, tick_started);
     }
     if (command_attempted || tick_due)
         && let Err(error) = authoritative.refresh_lightweight_snapshot(selected.0)

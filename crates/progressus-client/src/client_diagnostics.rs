@@ -17,6 +17,16 @@ pub(crate) const AUTHORITY_MS: DiagnosticPath =
     DiagnosticPath::const_new("progressus/authority_ms");
 pub(crate) const PRESENTATION_MS: DiagnosticPath =
     DiagnosticPath::const_new("progressus/presentation_ms");
+pub(crate) const AUTHORITY_TICK_MS: DiagnosticPath =
+    DiagnosticPath::const_new("progressus/authority_tick_ms");
+pub(crate) const SPATIAL_SNAPSHOT_MS: DiagnosticPath =
+    DiagnosticPath::const_new("progressus/spatial_snapshot_ms");
+pub(crate) const TERRAIN_REFRESH_MS: DiagnosticPath =
+    DiagnosticPath::const_new("progressus/terrain_refresh_ms");
+pub(crate) const ITEM_REFRESH_MS: DiagnosticPath =
+    DiagnosticPath::const_new("progressus/item_refresh_ms");
+pub(crate) const RESOURCE_REFRESH_MS: DiagnosticPath =
+    DiagnosticPath::const_new("progressus/resource_refresh_ms");
 pub(crate) const TERRAIN_CHUNKS: DiagnosticPath =
     DiagnosticPath::const_new("progressus/terrain_chunks");
 
@@ -30,6 +40,11 @@ impl Plugin for ProgressusDiagnosticsPlugin {
         app.register_diagnostic(Diagnostic::new(CLIENT_UPDATE_MS).with_suffix("ms"))
             .register_diagnostic(Diagnostic::new(AUTHORITY_MS).with_suffix("ms"))
             .register_diagnostic(Diagnostic::new(PRESENTATION_MS).with_suffix("ms"))
+            .register_diagnostic(Diagnostic::new(AUTHORITY_TICK_MS).with_suffix("ms"))
+            .register_diagnostic(Diagnostic::new(SPATIAL_SNAPSHOT_MS).with_suffix("ms"))
+            .register_diagnostic(Diagnostic::new(TERRAIN_REFRESH_MS).with_suffix("ms"))
+            .register_diagnostic(Diagnostic::new(ITEM_REFRESH_MS).with_suffix("ms"))
+            .register_diagnostic(Diagnostic::new(RESOURCE_REFRESH_MS).with_suffix("ms"))
             .register_diagnostic(Diagnostic::new(TERRAIN_CHUNKS))
             .add_plugins((
                 FrameTimeDiagnosticsPlugin::default(),
