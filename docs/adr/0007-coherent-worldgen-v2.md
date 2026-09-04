@@ -11,7 +11,7 @@ Changing that algorithm in place would make the same `(seed, version, coordinate
 
 ## Decision
 
-`CURRENT_WORLDGEN_VERSION` is version 2. Version 1 remains supported and retains its golden fixtures unchanged.
+At adoption, `CURRENT_WORLDGEN_VERSION` became version 2. Version 1 remains supported and retains its golden fixtures unchanged. The current generator later advances to v3 in ADR-0018 without changing v2 identity.
 
 Worldgen v2 remains stateless and deterministic from `(seed, version, absolute WorldCell)`, but uses deterministic regional feature centers and integer geometry to form connected water/rock bodies and clustered forest regions. Stone outcrops are biased toward rock-region edges. The bootstrap spawn clearing remains walkable and deterministic starter source placement guarantees access to both Wood and Stone around the initial colony without turning the rest of the world into per-cell noise.
 
@@ -19,7 +19,7 @@ Worldgen v2 remains stateless and deterministic from `(seed, version, absolute W
 
 ## Consequences
 
-The current map has larger recognizable terrain/resource regions while preserving chunk-order independence and negative-coordinate behavior. Old v1 worlds remain reproducible when their explicit worldgen version is supplied.
+Worldgen v2 has larger recognizable terrain/resource regions while preserving chunk-order independence and negative-coordinate behavior. Old v1 and v2 worlds remain reproducible when their explicit worldgen version is supplied; ADR-0018 defines the later v3 resource extension.
 
 The headless traversal fixture changes under v2 because the walkable topology changes. Seed 0 currently crosses 64 positive chunk boundaries in 2,239 chosen-cell steps and ends at coarse cell `(2048, 89)`.
 

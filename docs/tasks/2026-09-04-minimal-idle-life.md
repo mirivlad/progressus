@@ -1,6 +1,6 @@
 # Task: minimal idle life
 
-Status: **Implemented; owner-PC visual validation pending**
+Status: **Complete; owner-PC visual validation passed 2026-09-05**
 Date: 2026-09-04
 
 ## Goal
@@ -32,4 +32,4 @@ Make the five-person settlement look inhabited when no explicit job or urgent ma
 
 ## Validation
 
-Headless tests cover deterministic bounded wandering, stable anchors, work preemption and save/load continuation. The graphical client is not built on `tomas`; owner-PC validation is required after pulling.
+Headless tests cover deterministic bounded wandering, stable anchors, work preemption and save/load continuation. Owner-PC validation on 2026-09-05 confirmed that the five characters visibly wander instead of standing like inactive units, while real work still preempts the behavior.

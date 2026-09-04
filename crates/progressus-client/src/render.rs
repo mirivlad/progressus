@@ -107,6 +107,7 @@ pub(crate) fn setup_camera(mut commands: Commands) {
     commands.spawn(Camera2d);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn sync_presentation(
     mut commands: Commands,
     mut authoritative: ResMut<AuthoritativeClient>,
@@ -625,6 +626,7 @@ fn natural_resource_size(kind: NaturalResourceKind) -> Vec2 {
     match kind {
         NaturalResourceKind::Tree => Vec2::splat(CELL_SIZE * 1.25),
         NaturalResourceKind::StoneOutcrop => Vec2::splat(CELL_SIZE * 0.95),
+        NaturalResourceKind::BerryBush => Vec2::splat(CELL_SIZE * 0.88),
     }
 }
 

@@ -105,6 +105,8 @@ struct SaveV1 {
     terrain_overrides: Vec<TerrainOverrideSave>,
     explored_cells: Vec<CellSave>,
     depleted_resources: Vec<CellSave>,
+    #[serde(default)]
+    renewable_resource_regrowth: Vec<RenewableResourceRegrowthSave>,
     items: Vec<ItemSave>,
     stockpiles: Vec<StockpileSave>,
     workstations: Vec<WorkstationSave>,
@@ -150,6 +152,14 @@ impl SaveV1 {
                 .iter()
                 .copied()
                 .map(CellSave::from)
+                .collect(),
+            renewable_resource_regrowth: simulation
+                .renewable_resource_regrowth
+                .iter()
+                .map(|(cell, ready_tick)| RenewableResourceRegrowthSave {
+                    cell: (*cell).into(),
+                    ready_tick: ready_tick.value(),
+                })
                 .collect(),
             items: simulation
                 .item_world
@@ -209,6 +219,11 @@ impl SaveV1 {
         let modified_world = restore_modified_world(&generator, self.terrain_overrides)?;
         let explored_world = restore_exploration(self.explored_cells)?;
         let depleted_resources = restore_depleted_resources(&generator, self.depleted_resources)?;
+        let renewable_resource_regrowth = restore_renewable_resource_regrowth(
+            &generator,
+            SimulationTick::new(self.header.tick),
+            self.renewable_resource_regrowth,
+        )?;
         let item_world = restore_items(&characters, self.items)?;
         let stockpile_world = restore_stockpiles(self.stockpiles)?;
         let workstation_world = restore_workstations(self.workstations)?;
@@ -270,6 +285,7 @@ impl SaveV1 {
             construction_world,
             chunk_residency,
             depleted_resources,
+            renewable_resource_regrowth,
             resource_revision: 0,
             explored_world,
             last_discovery_cells,
@@ -323,6 +339,12 @@ impl CellSave {
     const fn into_cell(self) -> WorldCell {
         WorldCell::new(self.x, self.y)
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct RenewableResourceRegrowthSave {
+    cell: CellSave,
+    ready_tick: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1275,15 +1297,66 @@ fn restore_depleted_resources(
                 cell.y()
             ));
         }
-        if generator.natural_resource_at(cell).is_none() {
+        let Some(resource) = generator.natural_resource_at(cell) else {
             return invalid(format!(
                 "depleted resource cell ({}, {}) has no generated natural resource",
+                cell.x(),
+                cell.y()
+            ));
+        };
+        if resource.kind() == NaturalResourceKind::BerryBush {
+            return invalid(format!(
+                "renewable berry bush at ({}, {}) cannot be permanently depleted",
                 cell.x(),
                 cell.y()
             ));
         }
     }
     Ok(cells)
+}
+
+fn restore_renewable_resource_regrowth(
+    generator: &WorldGenerator,
+    current_tick: SimulationTick,
+    saved: Vec<RenewableResourceRegrowthSave>,
+) -> Result<BTreeMap<WorldCell, SimulationTick>, SaveError> {
+    let mut regrowth = BTreeMap::new();
+    for value in saved {
+        let cell = value.cell.into_cell();
+        if value.ready_tick <= current_tick.value() {
+            return invalid(format!(
+                "renewable resource at ({}, {}) has non-future regrowth tick {}",
+                cell.x(),
+                cell.y(),
+                value.ready_tick
+            ));
+        }
+        let Some(resource) = generator.natural_resource_at(cell) else {
+            return invalid(format!(
+                "renewable resource cell ({}, {}) has no generated natural resource",
+                cell.x(),
+                cell.y()
+            ));
+        };
+        if resource.kind() != NaturalResourceKind::BerryBush {
+            return invalid(format!(
+                "renewable resource cell ({}, {}) is not a berry bush",
+                cell.x(),
+                cell.y()
+            ));
+        }
+        if regrowth
+            .insert(cell, SimulationTick::new(value.ready_tick))
+            .is_some()
+        {
+            return invalid(format!(
+                "duplicate renewable resource cell ({}, {})",
+                cell.x(),
+                cell.y()
+            ));
+        }
+    }
+    Ok(regrowth)
 }
 
 fn restore_items(
@@ -2341,6 +2414,51 @@ mod tests {
     }
 
     #[test]
+    fn active_berry_bush_regrowth_round_trips_and_resumes_deterministically() {
+        let mut original = Simulation::new(WorldSeed::new(0)).unwrap();
+        let source = WorldCell::new(-3, -3);
+        assert_eq!(
+            original
+                .natural_resource_at(source)
+                .unwrap()
+                .unwrap()
+                .kind(),
+            NaturalResourceKind::BerryBush
+        );
+        let job_id = original.designate_harvest(source).unwrap();
+        for _ in 0..256 {
+            original.advance_ticks(1).unwrap();
+            if original.job_world.get(job_id).is_none() {
+                break;
+            }
+        }
+        let ready_tick = original.renewable_resource_regrowth[&source];
+        assert!(ready_tick > original.tick());
+        assert_eq!(original.natural_resource_at(source).unwrap(), None);
+
+        let encoded = original.save_json().unwrap();
+        let mut restored = Simulation::load_json(&encoded).unwrap();
+        assert_eq!(
+            restored.renewable_resource_regrowth,
+            original.renewable_resource_regrowth
+        );
+        assert_eq!(restored.save_json().unwrap(), encoded);
+
+        let remaining = ready_tick.value() - original.tick().value();
+        original.advance_ticks(remaining).unwrap();
+        restored.advance_ticks(remaining).unwrap();
+        assert_eq!(restored.save_json().unwrap(), original.save_json().unwrap());
+        assert_eq!(
+            restored
+                .natural_resource_at(source)
+                .unwrap()
+                .unwrap()
+                .kind(),
+            NaturalResourceKind::BerryBush
+        );
+    }
+
+    #[test]
     fn sparse_distant_override_and_depletion_round_trip_without_chunk_payloads() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         let distant_override = WorldCell::new(50_000, -80_000);
@@ -2354,7 +2472,12 @@ mod tests {
             .unwrap();
         let depleted = (-200..=200)
             .flat_map(|y| (-200..=200).map(move |x| WorldCell::new(x, y)))
-            .find(|cell| simulation.generator.natural_resource_at(*cell).is_some())
+            .find(|cell| {
+                simulation
+                    .generator
+                    .natural_resource_at(*cell)
+                    .is_some_and(|resource| resource.kind() != NaturalResourceKind::BerryBush)
+            })
             .unwrap();
         simulation.depleted_resources.insert(depleted);
         simulation.resource_revision += 1;

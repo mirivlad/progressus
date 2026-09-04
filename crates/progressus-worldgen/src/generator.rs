@@ -3,7 +3,7 @@ use std::fmt::{self, Display, Formatter};
 
 use crate::{CHUNK_SIDE, ChunkCoord, LocalCell, WorldCell};
 
-pub const CURRENT_WORLDGEN_VERSION: WorldgenVersion = WorldgenVersion::new(2);
+pub const CURRENT_WORLDGEN_VERSION: WorldgenVersion = WorldgenVersion::new(3);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct WorldSeed(u64);
@@ -42,6 +42,7 @@ pub enum Terrain {
 pub enum NaturalResourceKind {
     Tree,
     StoneOutcrop,
+    BerryBush,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -104,7 +105,7 @@ pub struct WorldGenerator {
 
 impl WorldGenerator {
     pub fn new(seed: WorldSeed, version: WorldgenVersion) -> Result<Self, WorldgenError> {
-        if !matches!(version.value(), 1 | 2) {
+        if !matches!(version.value(), 1..=3) {
             return Err(WorldgenError::UnsupportedVersion(version));
         }
 
@@ -122,7 +123,7 @@ impl WorldGenerator {
     pub fn terrain_at(self, cell: WorldCell) -> Terrain {
         match self.version.value() {
             1 => terrain_v1(self.seed, self.version, cell),
-            2 => terrain_v2(self.seed, cell),
+            2 | 3 => terrain_v2(self.seed, cell),
             _ => unreachable!("supported worldgen versions are checked at construction"),
         }
     }
@@ -132,6 +133,7 @@ impl WorldGenerator {
         match self.version.value() {
             1 => natural_resource_v1(self.seed, self.version, cell, terrain),
             2 => natural_resource_v2(self.seed, cell, terrain),
+            3 => natural_resource_v3(self.seed, cell, terrain),
             _ => unreachable!("supported worldgen versions are checked at construction"),
         }
     }
@@ -340,6 +342,37 @@ fn natural_resource_v2(
         return Some(NaturalResource::new(
             NaturalResourceKind::Tree,
             4 + ((sample >> 40) % 5) as u32,
+        ));
+    }
+    None
+}
+
+fn natural_resource_v3(
+    seed: WorldSeed,
+    cell: WorldCell,
+    terrain: Terrain,
+) -> Option<NaturalResource> {
+    if terrain != Terrain::Grass || spawn_clearing(cell, 2) {
+        return None;
+    }
+
+    if matches!((cell.x(), cell.y()), (-3, -3) | (3, -3) | (-3, 3) | (3, 3)) {
+        let sample = cell_hash(seed, 0x6265_7272_795f_7633, cell);
+        return Some(NaturalResource::new(
+            NaturalResourceKind::BerryBush,
+            3 + ((sample >> 32) % 3) as u32,
+        ));
+    }
+
+    if let Some(resource) = natural_resource_v2(seed, cell, terrain) {
+        return Some(resource);
+    }
+
+    let sample = cell_hash(seed, 0x6265_7272_795f_7764, cell);
+    if sample % 1000 < 18 {
+        return Some(NaturalResource::new(
+            NaturalResourceKind::BerryBush,
+            3 + ((sample >> 40) % 3) as u32,
         ));
     }
     None

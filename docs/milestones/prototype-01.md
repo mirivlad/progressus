@@ -213,7 +213,7 @@ Generate a set of neighboring chunks in two different orders. Results must match
 
 Move an entity across multiple chunk boundaries and verify final position and identity.
 
-**Advanced bootstrap:** simulation tests cover manual and routed `x=31 -> x=32` and manual `x=0 -> x=-1` with the same `EntityId` at fixed-point resolution; the headless application-boundary scenario drives ID 3 across 64 positive chunk boundaries for seed 0, under current worldgen v2 ending at coarse cell `(2048, 89)` after 2,239 chosen-cell steps (8,956 default-speed ticks). The same run validates that every character remains in a resident chunk and that the resident count stays within the `9 × character_count` policy. Long-distance negative traversal remains future coverage.
+**Advanced bootstrap:** simulation tests cover manual and routed `x=31 -> x=32` and manual `x=0 -> x=-1` with the same `EntityId` at fixed-point resolution; the headless application-boundary scenario drives ID 3 across 64 positive chunk boundaries for seed 0, under worldgen v2 at Prototype 01 completion, ending at coarse cell `(2048, 89)` after 2,239 chosen-cell steps (8,956 default-speed ticks). The same run validates that every character remains in a resident chunk and that the resident count stays within the `9 × character_count` policy. Long-distance negative traversal remains future coverage.
 
 ### TEST-P01-04 — Item ownership invariant
 

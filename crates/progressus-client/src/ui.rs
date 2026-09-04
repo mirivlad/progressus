@@ -765,6 +765,7 @@ pub(crate) fn toolbar_interaction(
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub(crate) fn hud_palette_interaction(
     mut state: ResMut<HudPaletteState>,
     pressed: Query<(&Interaction, &PaletteToggle), (Changed<Interaction>, With<Button>)>,
@@ -798,6 +799,7 @@ pub(crate) fn hud_palette_interaction(
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub(crate) fn zone_visibility_interaction(
     mut zones: ResMut<ZoneVisibility>,
     mut buttons: Query<

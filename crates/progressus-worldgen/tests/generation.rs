@@ -30,6 +30,7 @@ fn resource_digest(chunk: &GeneratedChunk) -> u64 {
                     let kind = match resource.kind() {
                         NaturalResourceKind::Tree => 1_u64,
                         NaturalResourceKind::StoneOutcrop => 2_u64,
+                        NaturalResourceKind::BerryBush => 3_u64,
                     };
                     kind | (u64::from(resource.yield_quantity()) << 8)
                 }
@@ -40,7 +41,11 @@ fn resource_digest(chunk: &GeneratedChunk) -> u64 {
 
 #[test]
 fn point_queries_match_materialized_chunks_for_supported_versions() {
-    for version in [WorldgenVersion::new(1), WorldgenVersion::new(2)] {
+    for version in [
+        WorldgenVersion::new(1),
+        WorldgenVersion::new(2),
+        WorldgenVersion::new(3),
+    ] {
         let generator = WorldGenerator::new(WorldSeed::new(42), version).unwrap();
         for cell in [
             WorldCell::new(-33, -1),
@@ -228,8 +233,7 @@ fn worldgen_v1_natural_resource_golden_fixtures_do_not_drift() {
 
 #[test]
 fn worldgen_v2_creates_coherent_terrain_and_clustered_resources() {
-    assert_eq!(CURRENT_WORLDGEN_VERSION, WorldgenVersion::new(2));
-    let generator = WorldGenerator::new(WorldSeed::new(0), CURRENT_WORLDGEN_VERSION).unwrap();
+    let generator = WorldGenerator::new(WorldSeed::new(0), WorldgenVersion::new(2)).unwrap();
     let chunks = (-2..=1)
         .flat_map(|y| (-2..=1).map(move |x| ChunkCoord::new(x, y)))
         .map(|coordinate| (coordinate, generator.generate(coordinate).unwrap()))
@@ -272,4 +276,43 @@ fn worldgen_v2_creates_coherent_terrain_and_clustered_resources() {
     assert!(same_terrain_neighbors * 100 / neighbor_pairs >= 85);
     assert!(resource_cells > 40);
     assert!(resource_neighbor_pairs * 100 / resource_cells >= 45);
+}
+
+#[test]
+fn worldgen_v3_preserves_v2_terrain_and_v2_has_no_berry_bushes() {
+    for seed in [0, 42, 73] {
+        let v2 = WorldGenerator::new(WorldSeed::new(seed), WorldgenVersion::new(2)).unwrap();
+        let v3 = WorldGenerator::new(WorldSeed::new(seed), WorldgenVersion::new(3)).unwrap();
+        for y in -40..=40 {
+            for x in -40..=40 {
+                let cell = WorldCell::new(x, y);
+                assert_eq!(v3.terrain_at(cell), v2.terrain_at(cell));
+                assert!(
+                    v2.natural_resource_at(cell)
+                        .is_none_or(|resource| resource.kind() != NaturalResourceKind::BerryBush)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn worldgen_v3_includes_guaranteed_berry_bushes_near_spawn() {
+    assert_eq!(CURRENT_WORLDGEN_VERSION, WorldgenVersion::new(3));
+    for seed in [0, 1, 42, 73, u64::MAX] {
+        let generator =
+            WorldGenerator::new(WorldSeed::new(seed), CURRENT_WORLDGEN_VERSION).unwrap();
+        for cell in [
+            WorldCell::new(-3, -3),
+            WorldCell::new(3, -3),
+            WorldCell::new(-3, 3),
+            WorldCell::new(3, 3),
+        ] {
+            let resource = generator
+                .natural_resource_at(cell)
+                .expect("starter berry bush");
+            assert_eq!(resource.kind(), NaturalResourceKind::BerryBush);
+            assert!((3..=5).contains(&resource.yield_quantity()));
+        }
+    }
 }

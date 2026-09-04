@@ -20,13 +20,13 @@ Eating consumes exactly one physical unit only when the Eat job completes. One B
 
 Eat jobs use the ordinary `JobWorld` state machine and worker reservation indexes. They are character-specific: another worker cannot take over an Eat job created for a different person. Free physical food is considered for hunger before new ordinary Haul jobs, but food already being carried by an existing logistics job is not stolen.
 
-Satiety and active Eat jobs are serialized in save format v1. The added `satiety` field defaults to full satiety when loading an older v1 save that predates Prototype 02, preserving existing manual save slots without a format-version bump. Active Eat item/worker references are validated on restore.
+Satiety and active Eat jobs are serialized in save format v1. Active Eat item/worker references are validated on restore. Save compatibility between arbitrary pre-release development builds is not a requirement; unsupported formats still fail explicitly.
 
 `progressus-app` publishes detached satiety and Eat-job state. The Bevy client localizes the need/job/item names, renders Berries procedurally, and shows satiety in the selected-character inspector.
 
 ## Consequences
 
 The simulation now has its first autonomous material demand loop without introducing an abstract food inventory. Large food stacks can feed multiple people concurrently because exact meal portions are split and independently reserved, while total physical quantity remains conserved.
-The current `Berries x700` new-game stack is only a bootstrap reserve for proving consumption and long-run behavior. It is not renewable and therefore does not complete the sustainable-food requirement of Prototype 02; a renewable gatherable/produced source remains P02-N03.
+The new-game `Berries x10` stack is only a small startup buffer. P02-N03 is completed separately by deterministic renewable BerryBush sources and ordinary physical Harvest/Haul logistics as recorded in ADR-0018.
 
 This ADR does not define cooking, nutrition chemistry, preferences, meals with multiple ingredients, health damage from starvation, or mood effects. Those remain later gameplay layers.

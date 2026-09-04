@@ -290,6 +290,12 @@ fn run_activity_smoke(application: &mut Application, seed: u64) -> Result<(), Bo
     let mut max_jobs = snapshot.jobs.len();
     let mut max_carried = snapshot.carried_items.len();
     let mut max_resident_chunks = snapshot.resident_chunks.len();
+    let mut min_satiety = snapshot
+        .characters
+        .iter()
+        .map(|character| character.satiety)
+        .min()
+        .unwrap_or(0);
     let mut reloaded_while_carrying = false;
     let mut elapsed = 0_u64;
 
@@ -310,6 +316,24 @@ fn run_activity_smoke(application: &mut Application, seed: u64) -> Result<(), Bo
         max_jobs = max_jobs.max(snapshot.jobs.len());
         max_carried = max_carried.max(snapshot.carried_items.len());
         max_resident_chunks = max_resident_chunks.max(snapshot.resident_chunks.len());
+        min_satiety = min_satiety.min(
+            snapshot
+                .characters
+                .iter()
+                .map(|character| character.satiety)
+                .min()
+                .unwrap_or(0),
+        );
+        if snapshot
+            .characters
+            .iter()
+            .any(|character| character.satiety == 0)
+        {
+            return Err(Box::new(CliError(format!(
+                "activity smoke starved a character at tick {}",
+                snapshot.tick.value()
+            ))));
+        }
 
         if !reloaded_while_carrying && !snapshot.carried_items.is_empty() {
             let encoded = application.save_json()?;
@@ -365,12 +389,13 @@ fn run_activity_smoke(application: &mut Application, seed: u64) -> Result<(), Bo
     }
 
     println!(
-        "activity seed={} tick={} designated_resources={} tools={} structures={} max_jobs={} max_carried={} resident_chunks={} max_resident_chunks={} save_reload_while_carrying=true",
+        "activity seed={} tick={} designated_resources={} tools={} structures={} min_satiety={} max_jobs={} max_carried={} resident_chunks={} max_resident_chunks={} save_reload_while_carrying=true",
         seed,
         snapshot.tick.value(),
         designated_resources,
         tools,
         snapshot.structures.len(),
+        min_satiety,
         max_jobs,
         max_carried,
         snapshot.resident_chunks.len(),

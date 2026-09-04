@@ -48,6 +48,10 @@ pub(super) fn stone_outcrop(canvas: &mut Canvas, variant: u8) {
     resources::stone_outcrop(canvas, variant);
 }
 
+pub(super) fn berry_bush(canvas: &mut Canvas, variant: u8) {
+    resources::berry_bush(canvas, variant);
+}
+
 pub(super) fn quantity_dimensions(quantity: u32) -> (u32, u32) {
     labels::quantity_dimensions(quantity)
 }

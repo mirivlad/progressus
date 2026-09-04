@@ -37,6 +37,7 @@ pub(crate) enum ProceduralAssetKind {
     DoorOpen,
     Tree,
     StoneOutcrop,
+    BerryBush,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -216,6 +217,7 @@ pub(crate) fn resource_asset(kind: NaturalResourceKind, cell: WorldCell) -> Proc
     let kind = match kind {
         NaturalResourceKind::Tree => ProceduralAssetKind::Tree,
         NaturalResourceKind::StoneOutcrop => ProceduralAssetKind::StoneOutcrop,
+        NaturalResourceKind::BerryBush => ProceduralAssetKind::BerryBush,
     };
     ProceduralAssetKey::new(kind, variant_for_cell(cell))
 }
@@ -264,6 +266,7 @@ fn render_image(key: ProceduralAssetKey) -> Image {
         ProceduralAssetKind::DoorOpen => asset_code::door(&mut canvas, key.topology, true),
         ProceduralAssetKind::Tree => asset_code::tree(&mut canvas, key.variant),
         ProceduralAssetKind::StoneOutcrop => asset_code::stone_outcrop(&mut canvas, key.variant),
+        ProceduralAssetKind::BerryBush => asset_code::berry_bush(&mut canvas, key.variant),
     }
     canvas.into_image()
 }

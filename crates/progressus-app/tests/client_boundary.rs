@@ -226,6 +226,12 @@ fn natural_resource_snapshots_are_explored_deterministic_and_not_a_query_side_ch
             .iter()
             .any(|resource| resource.kind == NaturalResourceKind::StoneOutcrop)
     );
+    assert!(
+        snapshot
+            .natural_resources
+            .iter()
+            .any(|resource| resource.kind == NaturalResourceKind::BerryBush)
+    );
     for resource in &snapshot.natural_resources {
         let (coordinate, local) = resource.cell.split();
         let chunk = snapshot
@@ -234,7 +240,14 @@ fn natural_resource_snapshots_are_explored_deterministic_and_not_a_query_side_ch
             .find(|chunk| chunk.coordinate == coordinate)
             .unwrap();
         assert_eq!(chunk.known_terrain_at(local), Some(Terrain::Grass));
-        assert!((4..=8).contains(&resource.yield_quantity));
+        match resource.kind {
+            NaturalResourceKind::Tree | NaturalResourceKind::StoneOutcrop => {
+                assert!((4..=8).contains(&resource.yield_quantity));
+            }
+            NaturalResourceKind::BerryBush => {
+                assert!((3..=5).contains(&resource.yield_quantity));
+            }
+        }
     }
 
     let unknown = application

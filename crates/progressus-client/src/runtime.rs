@@ -146,6 +146,7 @@ pub(crate) fn advance_authority(
     }
 }
 
+#[allow(clippy::type_complexity)]
 pub(crate) fn pointer_navigation(
     input: (Res<ButtonInput<MouseButton>>, Res<ButtonInput<KeyCode>>),
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -693,6 +694,7 @@ fn harvest_job_at(snapshot: &ClientSnapshot, source: WorldCell) -> Option<Entity
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_selectable_click(
     snapshot: &ClientSnapshot,
     target: WorldPosition,

@@ -39,3 +39,25 @@ pub(super) fn stone_outcrop(canvas: &mut Canvas, variant: u8) {
     canvas.line(7 + shift, 3, 9 + shift, 7, LIGHT);
     canvas.line(9 + shift, 7, 8 + shift, 9, DARK);
 }
+
+pub(super) fn berry_bush(canvas: &mut Canvas, variant: u8) {
+    const SHADOW: Rgba8 = Rgba8::rgba(15, 20, 14, 70);
+    const DARK: Rgba8 = Rgba8::rgb(38, 82, 43);
+    const MID: Rgba8 = Rgba8::rgb(58, 120, 57);
+    const LIGHT: Rgba8 = Rgba8::rgb(91, 151, 71);
+    const BERRY: Rgba8 = Rgba8::rgb(172, 43, 58);
+    const BERRY_LIGHT: Rgba8 = Rgba8::rgb(221, 72, 82);
+    canvas.ellipse(8, 13, 6, 2, SHADOW);
+    let shift = i32::from(variant % 3) - 1;
+    canvas.circle(5 + shift, 9, 3, DARK);
+    canvas.circle(10 + shift, 9, 4, DARK);
+    canvas.circle(8 + shift, 6, 4, MID);
+    canvas.circle(5 + shift, 7, 2, LIGHT);
+    canvas.circle(10 + shift, 6, 2, LIGHT);
+    canvas.scatter(
+        0x4245_5252_595f_0000 + u64::from(variant),
+        8,
+        [4, 4, 11, 9],
+        &[BERRY, BERRY_LIGHT],
+    );
+}

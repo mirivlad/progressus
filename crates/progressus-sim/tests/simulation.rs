@@ -65,7 +65,7 @@ fn new_game_has_physical_starting_supplies_with_global_stable_ids() {
     assert_eq!(items[3].kind(), ItemKind::Stone);
     assert_eq!(items[4].id(), EntityId::new(10).unwrap());
     assert_eq!(items[4].kind(), ItemKind::Berries);
-    assert_eq!(items[4].quantity().get(), 700);
+    assert_eq!(items[4].quantity().get(), 10);
     assert!(matches!(items[4].location(), ItemLocation::Ground { .. }));
 }
 

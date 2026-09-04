@@ -33,6 +33,9 @@ use crate::{
     WorldPositionError, WorldSeed, WorldgenVersion, recipe_definition, within_interaction_range,
 };
 
+pub const BERRY_BUSH_REGROW_TICKS: u64 = 512;
+const BOOTSTRAP_BERRIES: u32 = 10;
+
 const IDLE_BEHAVIOR_INTERVAL_TICKS: u64 = 48;
 const IDLE_WANDER_RADIUS_CELLS: i64 = 3;
 const IDLE_SOCIAL_CHANCE_DIVISOR: u64 = 5;
@@ -62,6 +65,7 @@ pub struct Simulation {
     construction_world: ConstructionWorld,
     chunk_residency: ChunkResidency,
     depleted_resources: BTreeSet<WorldCell>,
+    renewable_resource_regrowth: BTreeMap<WorldCell, SimulationTick>,
     resource_revision: u64,
     explored_world: ExploredWorld,
     last_discovery_cells: BTreeMap<EntityId, WorldCell>,
@@ -143,7 +147,8 @@ impl Simulation {
             .insert_ground(ItemStack::new_ground(
                 berries_id,
                 ItemKind::Berries,
-                ItemQuantity::new(700).expect("bootstrap food quantity is within stack capacity"),
+                ItemQuantity::new(BOOTSTRAP_BERRIES)
+                    .expect("bootstrap food quantity is within stack capacity"),
                 WorldPosition::from_cell_center(berries_cell)?,
             ))
             .expect("bootstrap food ID is unique and starts on the ground");
@@ -175,6 +180,7 @@ impl Simulation {
             construction_world: ConstructionWorld::default(),
             chunk_residency,
             depleted_resources: BTreeSet::new(),
+            renewable_resource_regrowth: BTreeMap::new(),
             resource_revision: 0,
             explored_world,
             last_discovery_cells,
@@ -224,6 +230,7 @@ impl Simulation {
 
         for _ in 0..count {
             self.clock.advance(1)?;
+            self.maintain_renewable_resources()?;
             self.advance_characters_one_tick()?;
             self.decay_satiety_if_due();
             self.maintain_nutrition_jobs()?;
@@ -237,6 +244,27 @@ impl Simulation {
             self.reconcile_chunk_residency()?;
         }
 
+        Ok(())
+    }
+
+    fn maintain_renewable_resources(&mut self) -> Result<(), SimulationError> {
+        let tick = self.clock.tick();
+        let ready = self
+            .renewable_resource_regrowth
+            .iter()
+            .filter_map(|(cell, ready_tick)| (*ready_tick <= tick).then_some(*cell))
+            .collect::<Vec<_>>();
+        if ready.is_empty() {
+            return Ok(());
+        }
+        let next_resource_revision = self
+            .resource_revision
+            .checked_add(1)
+            .ok_or(SimulationError::ResourceRevisionOverflow)?;
+        for cell in ready {
+            self.renewable_resource_regrowth.remove(&cell);
+        }
+        self.resource_revision = next_resource_revision;
         Ok(())
     }
 
@@ -545,6 +573,7 @@ impl Simulation {
                         .expect("starving character is still present")
                         .set_movement(MovementState::Idle);
                 }
+                self.ensure_renewable_food_harvest(character_id)?;
                 continue;
             };
 
@@ -583,6 +612,47 @@ impl Simulation {
             self.apply_navigation_route(character_id, position, route);
         }
         Ok(())
+    }
+
+    fn ensure_renewable_food_harvest(
+        &mut self,
+        character_id: EntityId,
+    ) -> Result<bool, SimulationError> {
+        let character_cell = self
+            .characters
+            .get(&character_id)
+            .ok_or(SimulationError::UnknownCharacter(character_id))?
+            .position()
+            .containing_cell();
+        let mut candidates = Vec::new();
+        for cell in self.explored_world.cells() {
+            let Some(resource) = self.natural_resource_at(cell)? else {
+                continue;
+            };
+            if resource.kind() == NaturalResourceKind::BerryBush
+                && self.job_world.harvest_job_for_source(cell).is_none()
+            {
+                candidates.push((cell_manhattan_distance(character_cell, cell), cell));
+            }
+        }
+        candidates.sort_unstable();
+        for (_, source) in candidates {
+            let destination = WorldPosition::from_cell_center(source)?;
+            match self.plan_navigation_route(character_id, destination) {
+                Ok(_) => {
+                    self.designate_harvest(source)?;
+                    return Ok(true);
+                }
+                Err(
+                    SimulationError::MoveToDestinationBlocked(_)
+                    | SimulationError::MoveToDestinationUndiscovered(_)
+                    | SimulationError::MoveToPathNotFound
+                    | SimulationError::MoveToSearchBudgetExceeded,
+                ) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(false)
     }
 
     pub fn set_movement_direction(
@@ -651,7 +721,9 @@ impl Simulation {
         &self,
         position: WorldCell,
     ) -> Result<Option<NaturalResource>, SimulationError> {
-        if self.depleted_resources.contains(&position) {
+        if self.depleted_resources.contains(&position)
+            || self.renewable_resource_regrowth.contains_key(&position)
+        {
             return Ok(None);
         }
         let (coordinate, local) = position.split();
@@ -678,7 +750,9 @@ impl Simulation {
                     .ok_or(SimulationError::Worldgen(
                         WorldgenError::CoordinateOutOfRange(coordinate),
                     ))?;
-                if !self.depleted_resources.contains(&cell) {
+                if !self.depleted_resources.contains(&cell)
+                    && !self.renewable_resource_regrowth.contains_key(&cell)
+                {
                     resources.push((cell, resource));
                 }
             }
@@ -3694,10 +3768,22 @@ impl Simulation {
             .resource_revision
             .checked_add(1)
             .ok_or(SimulationError::ResourceRevisionOverflow)?;
+        let renewable_ready_tick = if resource.kind() == NaturalResourceKind::BerryBush {
+            Some(SimulationTick::new(
+                self.clock
+                    .tick()
+                    .value()
+                    .checked_add(BERRY_BUSH_REGROW_TICKS)
+                    .ok_or(SimulationError::TickOverflow)?,
+            ))
+        } else {
+            None
+        };
         let item_id = self.id_allocator.allocate()?;
         let kind = match resource.kind() {
             NaturalResourceKind::Tree => ItemKind::Wood,
             NaturalResourceKind::StoneOutcrop => ItemKind::Stone,
+            NaturalResourceKind::BerryBush => ItemKind::Berries,
         };
         let quantity = ItemQuantity::new(resource.yield_quantity())
             .expect("worldgen natural-resource yields are positive");
@@ -3705,8 +3791,24 @@ impl Simulation {
         self.item_world
             .insert_ground(ItemStack::new_ground(item_id, kind, quantity, position))
             .expect("allocated item IDs are unique and harvested outputs start on the ground");
-        if !self.depleted_resources.insert(source) {
-            return Err(SimulationError::JobInvariantViolation);
+        match resource.kind() {
+            NaturalResourceKind::BerryBush => {
+                if self
+                    .renewable_resource_regrowth
+                    .insert(
+                        source,
+                        renewable_ready_tick.expect("berry bushes precompute a regrowth tick"),
+                    )
+                    .is_some()
+                {
+                    return Err(SimulationError::JobInvariantViolation);
+                }
+            }
+            NaturalResourceKind::Tree | NaturalResourceKind::StoneOutcrop => {
+                if !self.depleted_resources.insert(source) {
+                    return Err(SimulationError::JobInvariantViolation);
+                }
+            }
         }
         self.resource_revision = next_resource_revision;
         self.job_world
@@ -4888,7 +4990,7 @@ mod tests {
         let borin = EntityId::new(2).unwrap();
         set_satiety(&mut simulation, ada, HUNGRY_SATIETY);
         set_satiety(&mut simulation, borin, HUNGRY_SATIETY);
-        assert_eq!(total_berries(&simulation), 700);
+        assert_eq!(total_berries(&simulation), BOOTSTRAP_BERRIES);
 
         simulation.advance_ticks(1).unwrap();
         let eat_jobs = simulation
@@ -4909,7 +5011,7 @@ mod tests {
                 .is_some_and(|item| item.kind() == ItemKind::Berries && item.quantity().get() == 1)
                 && matches!(state, JobState::Reserved { .. } | JobState::Working { .. })
         }));
-        assert_eq!(total_berries(&simulation), 700);
+        assert_eq!(total_berries(&simulation), BOOTSTRAP_BERRIES);
 
         for _ in 0..256 {
             simulation.advance_ticks(1).unwrap();
@@ -4923,7 +5025,7 @@ mod tests {
         assert!(character(&simulation, borin).satiety() > HUNGRY_SATIETY);
         assert!(character(&simulation, ada).satiety() <= MAX_SATIETY);
         assert!(character(&simulation, borin).satiety() <= MAX_SATIETY);
-        assert_eq!(total_berries(&simulation), 698);
+        assert_eq!(total_berries(&simulation), BOOTSTRAP_BERRIES - 2);
         assert!(simulation.job_world.indexes_are_consistent());
         assert!(simulation.item_world.indexes_are_consistent());
     }
@@ -4946,8 +5048,137 @@ mod tests {
         simulation.advance_ticks(1).unwrap();
 
         assert_eq!(character(&simulation, cora).satiety(), MAX_SATIETY);
-        assert_eq!(total_berries(&simulation), 699);
+        assert_eq!(total_berries(&simulation), BOOTSTRAP_BERRIES - 1);
         assert!(simulation.job_world.eat_job_for_character(cora).is_none());
+    }
+
+    #[test]
+    fn berry_bush_harvest_produces_physical_food_and_regrows() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let source = WorldCell::new(-3, -3);
+        let resource = simulation.natural_resource_at(source).unwrap().unwrap();
+        assert_eq!(resource.kind(), NaturalResourceKind::BerryBush);
+        let berries_before = total_berries(&simulation);
+
+        let job_id = simulation.designate_harvest(source).unwrap();
+        for _ in 0..256 {
+            simulation.advance_ticks(1).unwrap();
+            if simulation.job_world.get(job_id).is_none() {
+                break;
+            }
+        }
+        assert!(simulation.job_world.get(job_id).is_none());
+        assert_eq!(simulation.natural_resource_at(source).unwrap(), None);
+        assert_eq!(
+            total_berries(&simulation),
+            berries_before + resource.yield_quantity()
+        );
+        assert!(simulation.items().any(|item| {
+            item.kind() == ItemKind::Berries
+                && item.ground_position() == Some(WorldPosition::from_cell_center(source).unwrap())
+        }));
+
+        let ready_tick = simulation.renewable_resource_regrowth[&source];
+        assert!(ready_tick > simulation.tick());
+        simulation
+            .advance_ticks(ready_tick.value() - simulation.tick().value())
+            .unwrap();
+        let regrown = simulation.natural_resource_at(source).unwrap().unwrap();
+        assert_eq!(regrown, resource);
+        assert!(!simulation.renewable_resource_regrowth.contains_key(&source));
+    }
+
+    #[test]
+    fn harvested_berries_use_ordinary_stockpile_logistics() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let initial_berries = simulation
+            .items()
+            .filter(|item| item.kind() == ItemKind::Berries)
+            .map(|item| (item.id(), item.quantity().get()))
+            .collect::<Vec<_>>();
+        for (item_id, quantity) in initial_berries {
+            simulation.item_world.consume(item_id, quantity).unwrap();
+        }
+        let stockpile_id = simulation.create_stockpile(WorldCell::new(0, 2)).unwrap();
+        for cell in [WorldCell::new(-1, 2), WorldCell::new(1, 2)] {
+            simulation
+                .set_stockpile_cell(stockpile_id, cell, true)
+                .unwrap();
+        }
+        for kind in [ItemKind::Wood, ItemKind::Stone, ItemKind::PrimitiveTool] {
+            simulation
+                .set_stockpile_item_allowed(stockpile_id, kind, false)
+                .unwrap();
+        }
+
+        let source = WorldCell::new(-3, -3);
+        simulation.designate_harvest(source).unwrap();
+        let mut stockpiled = 0;
+        for _ in 0..512 {
+            simulation.advance_ticks(1).unwrap();
+            stockpiled = simulation
+                .items()
+                .filter(|item| item.kind() == ItemKind::Berries)
+                .filter_map(ItemStack::ground_position)
+                .filter(|position| {
+                    simulation.stockpile_at(position.containing_cell()) == Some(stockpile_id)
+                })
+                .count();
+            if stockpiled != 0 {
+                break;
+            }
+        }
+        assert!(
+            stockpiled > 0,
+            "harvested berries never reached the stockpile"
+        );
+    }
+
+    #[test]
+    fn four_regrowing_bushes_sustain_five_characters_long_term() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let initial_berries = simulation
+            .items()
+            .filter(|item| item.kind() == ItemKind::Berries)
+            .map(|item| (item.id(), item.quantity().get()))
+            .collect::<Vec<_>>();
+        for (item_id, quantity) in initial_berries {
+            simulation.item_world.consume(item_id, quantity).unwrap();
+        }
+
+        let stockpile_id = simulation.create_stockpile(WorldCell::new(0, 2)).unwrap();
+        for cell in [WorldCell::new(-1, 2), WorldCell::new(1, 2)] {
+            simulation
+                .set_stockpile_cell(stockpile_id, cell, true)
+                .unwrap();
+        }
+        for kind in [ItemKind::Wood, ItemKind::Stone, ItemKind::PrimitiveTool] {
+            simulation
+                .set_stockpile_item_allowed(stockpile_id, kind, false)
+                .unwrap();
+        }
+
+        let mut minimum_satiety = MAX_SATIETY;
+        for _ in 0..625 {
+            simulation.advance_ticks(16).unwrap();
+            for character in simulation.characters() {
+                minimum_satiety = minimum_satiety.min(character.satiety());
+                assert!(
+                    character.satiety() > 0,
+                    "character {} starved at tick {}",
+                    character.id().value(),
+                    simulation.tick().value()
+                );
+            }
+        }
+        assert!(minimum_satiety <= HUNGRY_SATIETY);
+        assert!(simulation.resource_revision() >= 8);
+        assert!(
+            simulation
+                .generator
+                .natural_resource_at(WorldCell::new(-3, -3))
+                .is_some_and(|resource| resource.kind() == NaturalResourceKind::BerryBush)
+        );
     }
 
     #[test]
@@ -4994,7 +5225,22 @@ mod tests {
             .find(|item| item.kind() == ItemKind::Berries)
             .unwrap()
             .id();
-        simulation.item_world.consume(berries, 700).unwrap();
+        let berry_quantity = simulation.item_world.get(berries).unwrap().quantity().get();
+        simulation
+            .item_world
+            .consume(berries, berry_quantity)
+            .unwrap();
+        for cell in simulation.explored_world.cells().collect::<Vec<_>>() {
+            if simulation
+                .generator
+                .natural_resource_at(cell)
+                .is_some_and(|resource| resource.kind() == NaturalResourceKind::BerryBush)
+            {
+                simulation
+                    .renewable_resource_regrowth
+                    .insert(cell, SimulationTick::new(u64::MAX));
+            }
+        }
         let (source, _) = harvest_fixture(&simulation);
         let job_id = simulation.designate_harvest(source).unwrap();
         for _ in 0..64 {
@@ -5227,7 +5473,7 @@ mod tests {
         assert_eq!(items[3].quantity().get(), 8);
         assert_eq!(items[4].id(), EntityId::new(10).unwrap());
         assert_eq!(items[4].kind(), ItemKind::Berries);
-        assert_eq!(items[4].quantity().get(), 700);
+        assert_eq!(items[4].quantity().get(), BOOTSTRAP_BERRIES);
         let berries_cell = items[4].ground_position().unwrap().containing_cell();
         assert!(berries_cell.x().abs() > 2 || berries_cell.y().abs() > 2);
         assert!(simulation.is_explored(berries_cell));
@@ -6034,6 +6280,7 @@ mod tests {
         let expected_kind = match resource.kind() {
             NaturalResourceKind::Tree => ItemKind::Wood,
             NaturalResourceKind::StoneOutcrop => ItemKind::Stone,
+            NaturalResourceKind::BerryBush => ItemKind::Berries,
         };
         assert_eq!(output.kind(), expected_kind);
         assert_eq!(output.quantity().get(), resource.yield_quantity());
@@ -7117,6 +7364,7 @@ mod tests {
         let output_kind = match resource.kind() {
             NaturalResourceKind::Tree => ItemKind::Wood,
             NaturalResourceKind::StoneOutcrop => ItemKind::Stone,
+            NaturalResourceKind::BerryBush => ItemKind::Berries,
         };
         let initial_stockpile_quantity = simulation
             .items()
@@ -7628,6 +7876,9 @@ mod tests {
                 let Some(resource) = simulation.natural_resource_at(cell).unwrap() else {
                     continue;
                 };
+                if resource.kind() == NaturalResourceKind::BerryBush {
+                    continue;
+                }
                 let destination = WorldPosition::from_cell_center(cell).unwrap();
                 if simulation.characters().any(|character| {
                     simulation

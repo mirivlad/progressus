@@ -40,7 +40,10 @@ pub use progressus_worldgen::{
 };
 pub use recipe::{CRAFT_WORK_TICKS, RecipeDefinition, RecipeId, RecipeInput, recipe_definition};
 pub use residency::{RESIDENT_CHUNK_RADIUS, RESIDENT_CHUNKS_PER_CENTER};
-pub use simulation::{SAVE_FORMAT_VERSION, SaveError, SaveMetadata, Simulation, SimulationError};
+pub use simulation::{
+    BERRY_BUSH_REGROW_TICKS, SAVE_FORMAT_VERSION, SaveError, SaveMetadata, Simulation,
+    SimulationError,
+};
 pub use stockpile::Stockpile;
 pub use workstation::{Workstation, WorkstationKind};
 pub use world_state::EffectiveChunk;

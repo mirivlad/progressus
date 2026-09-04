@@ -60,10 +60,14 @@ Status: **Complete**
 
 ### P02-N03 — Renewable food source
 
+Status: **Complete**
+
 - at least one deterministic renewable/gatherable food source;
 - collection produces physical food;
 - ordinary stockpile logistics can move it;
 - five characters can remain fed in a long-run scenario when enough source capacity exists.
+
+Worldgen v3 adds deterministic `BerryBush` sources, including four guaranteed bushes around the starting clearing. Harvest creates 3–5 physical Berries, the bush regrows after 512 authoritative ticks, regrowth state round-trips through persistence, ordinary Haul can stockpile the food, and hungry characters with no free Berries may autonomously designate an explored reachable bush for ordinary Harvest. A 10,000-tick test removes the bootstrap food entirely and verifies that all five characters remain above zero satiety. See [`ADR-0018`](../adr/0018-renewable-berry-bushes-and-worldgen-v3.md).
 
 ## 4. Stage B — Sleep and shelter
 
@@ -105,9 +109,9 @@ Before continuing the settlement systems, the Prototype 01/02 client received a 
 
 ## 9. Minimal idle life pass
 
-Status: **Complete (owner-PC visual validation pending)**
+Status: **Complete**
 
-Characters who have no job and no urgent need now exhibit deterministic low-priority life rather than standing forever. Idle people periodically take short authoritative `Wandering` routes through explored walkable cells, and occasionally approach another nearby idle person. Wandering is not a job: real work, hunger and player orders may preempt it. Each character keeps a persistent local idle anchor and every idle route stays within Manhattan radius three of that anchor, so repeated wandering cannot become autonomous migration/scouting. See [`ADR-0017`](../adr/0017-bounded-deterministic-idle-behavior.md).
+Owner-PC visual validation completed on 2026-09-05. Characters who have no job and no urgent need now exhibit deterministic low-priority life rather than standing forever. Idle people periodically take short authoritative `Wandering` routes through explored walkable cells, and occasionally approach another nearby idle person. Wandering is not a job: real work, hunger and player orders may preempt it. Each character keeps a persistent local idle anchor and every idle route stays within Manhattan radius three of that anchor, so repeated wandering cannot become autonomous migration/scouting. See [`ADR-0017`](../adr/0017-bounded-deterministic-idle-behavior.md).
 
 ## 10. Persistence and determinism
 
@@ -148,7 +152,7 @@ Prototype 02 does not require:
 ## 13. Definition of done
 
 - [x] nutrition and autonomous physical eating work;
-- [ ] renewable physical food can sustain the five-character settlement;
+- [x] renewable physical food can sustain the five-character settlement;
 - [ ] sleep and shelter work;
 - [ ] at least one practical skill changes work outcomes;
 - [ ] ore extraction works;
