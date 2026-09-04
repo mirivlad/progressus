@@ -18,6 +18,7 @@ The deeper rendering problem was the terrain representation itself. Every explor
 - The terrain root stays stable. Each chunk has a presentation fingerprint including a one-cell neighbour ring; exploration updates regenerate only chunks whose visible terrain/topology actually changed.
 - Leaving the camera window despawns only stale chunk sprites/images. Static chunks remain alive and their image handles are updated in place when needed.
 - The workspace dev profile now uses optimization (`opt-level=1`, dependencies `opt-level=3`) so `cargo run -p progressus-client` does not execute the Bevy/WGPU stack as fully unoptimized debug code.
+- The focused Winit event loop uses reactive low-power scheduling matched to the refresh rate reported for the monitor containing the window (for example 60 Hz or 200 Hz) instead of a hard-coded cap. If refresh metadata is unavailable it falls back to Bevy's continuous mode rather than silently capping a high-refresh display. The unfocused window drops to 15 Hz.
 
 ## Validation
 

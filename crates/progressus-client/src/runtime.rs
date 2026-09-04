@@ -1,12 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use bevy::diagnostic::Diagnostics;
 
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
+use bevy::window::{Monitor, PrimaryMonitor, PrimaryWindow, WindowPosition};
+use bevy::winit::{UpdateMode, WinitSettings};
 use progressus_app::{
     Application, ApplicationError, ChunkCoord, ClientSnapshot, Command, EntityId, JobKind,
     NewGameOptions, SnapshotQuery, StructureKind, WorkstationKind, WorldCell, WorldPosition,
@@ -845,6 +846,72 @@ pub fn run_with_seed(seed: u64) -> Result<(), ClientError> {
     run_with_options(seed, false)
 }
 
+fn client_winit_settings() -> WinitSettings {
+    WinitSettings {
+        // Preserve the monitor's native refresh until Bevy has synchronized
+        // monitor metadata. `sync_display_frame_pacing` then replaces this
+        // with a sleeping reactive cadence when the refresh rate is known.
+        focused_mode: UpdateMode::Continuous,
+        unfocused_mode: UpdateMode::reactive_low_power(Duration::from_secs_f64(1.0 / 15.0)),
+    }
+}
+
+fn refresh_interval(refresh_rate_millihertz: u32) -> Option<Duration> {
+    (refresh_rate_millihertz > 0)
+        .then(|| Duration::from_secs_f64(1_000.0 / f64::from(refresh_rate_millihertz)))
+}
+
+fn selected_monitor_refresh_rate(
+    window: &Window,
+    monitors: &Query<(&Monitor, Option<&PrimaryMonitor>)>,
+) -> Option<u32> {
+    let window_center = match window.position {
+        WindowPosition::At(position) => Some((
+            i64::from(position.x) + i64::from(window.physical_width()) / 2,
+            i64::from(position.y) + i64::from(window.physical_height()) / 2,
+        )),
+        WindowPosition::Automatic | WindowPosition::Centered(_) => None,
+    };
+
+    if let Some((center_x, center_y)) = window_center
+        && let Some(refresh_rate) = monitors.iter().find_map(|(monitor, _)| {
+            let left = i64::from(monitor.physical_position.x);
+            let top = i64::from(monitor.physical_position.y);
+            let right = left + i64::from(monitor.physical_width);
+            let bottom = top + i64::from(monitor.physical_height);
+            (center_x >= left && center_x < right && center_y >= top && center_y < bottom)
+                .then_some(monitor.refresh_rate_millihertz)
+                .flatten()
+        })
+    {
+        return Some(refresh_rate);
+    }
+
+    monitors.iter().find_map(|(monitor, primary)| {
+        primary
+            .is_some()
+            .then_some(monitor.refresh_rate_millihertz)
+            .flatten()
+    })
+}
+
+fn sync_display_frame_pacing(
+    windows: Query<&Window, With<PrimaryWindow>>,
+    monitors: Query<(&Monitor, Option<&PrimaryMonitor>)>,
+    mut settings: ResMut<WinitSettings>,
+) {
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let focused_mode = selected_monitor_refresh_rate(window, &monitors)
+        .and_then(refresh_interval)
+        .map(UpdateMode::reactive_low_power)
+        .unwrap_or(UpdateMode::Continuous);
+    if settings.focused_mode != focused_mode {
+        settings.focused_mode = focused_mode;
+    }
+}
+
 pub fn run_with_options(seed: u64, diagnostics_enabled: bool) -> Result<(), ClientError> {
     let mut app = App::new();
     app.insert_resource(AuthoritativeClient::new_with_seed(WorldSeed::new(seed))?)
@@ -864,6 +931,7 @@ pub fn run_with_options(seed: u64, diagnostics_enabled: bool) -> Result<(), Clie
         .insert_resource(ModalPresentation::default())
         .insert_resource(SaveStore::default())
         .insert_resource(ClientUpdateTimer::default())
+        .insert_resource(client_winit_settings())
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: format!("Progressus — Prototype 01 — seed {seed}"),
@@ -889,6 +957,7 @@ pub fn run_with_options(seed: u64, diagnostics_enabled: bool) -> Result<(), Clie
         Update,
         (
             begin_client_update,
+            sync_display_frame_pacing,
             (
                 language_toggle_interaction,
                 pause_toggle_interaction,
@@ -1009,6 +1078,19 @@ mod tests {
             .iter()
             .copied()
             .collect()
+    }
+
+    #[test]
+    fn display_frame_pacing_preserves_monitor_refresh_rates() {
+        assert_eq!(
+            super::refresh_interval(60_000),
+            Some(Duration::from_secs_f64(1.0 / 60.0))
+        );
+        assert_eq!(
+            super::refresh_interval(200_000),
+            Some(Duration::from_secs_f64(1.0 / 200.0))
+        );
+        assert_eq!(super::refresh_interval(0), None);
     }
 
     #[test]
