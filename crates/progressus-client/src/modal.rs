@@ -1,8 +1,8 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use progressus_app::{
-    ClientSnapshot, Command, EntityId, MAX_PRODUCTION_ORDER_RUNS, ProductionOrderSnapshot,
-    ProductionTarget, RecipeId, WorkstationKind,
+    ClientSnapshot, Command, EntityId, ItemCategory, ItemKind, MAX_PRODUCTION_ORDER_RUNS,
+    ProductionOrderSnapshot, ProductionTarget, RecipeId, StockpileSnapshot, WorkstationKind,
 };
 
 use crate::i18n::{Locale, TextKey};
@@ -12,12 +12,13 @@ use crate::procedural_assets::{ProceduralAssetParams, workstation_asset};
 use crate::render::PresentationCache;
 use crate::runtime::AuthoritativeClient;
 use crate::save_slots::{SaveNotice, SaveSlot, SaveSlotState, SaveStore};
-use crate::ui::{ToolMode, ToolState, UiCapture};
+use crate::ui::{SelectedStockpile, ToolMode, ToolState, UiCapture};
 use crate::ui_font::UiFont;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ModalKind {
     Workstation(EntityId),
+    Stockpile(EntityId),
     Saves,
 }
 
@@ -30,6 +31,11 @@ pub(crate) struct ModalState {
 impl ModalState {
     pub(crate) fn open_workstation(&mut self, workstation_id: EntityId) {
         self.open = Some(ModalKind::Workstation(workstation_id));
+        self.dirty = true;
+    }
+
+    pub(crate) fn open_stockpile(&mut self, stockpile_id: EntityId) {
+        self.open = Some(ModalKind::Stockpile(stockpile_id));
         self.dirty = true;
     }
 
@@ -51,7 +57,7 @@ impl ModalState {
 #[derive(Resource, Default)]
 pub(crate) struct ModalPresentation {
     root: Option<Entity>,
-    signature: Option<(ModalKind, u64, u64, u64, u64, crate::i18n::Language)>,
+    signature: Option<(ModalKind, u64, u64, u64, u64, u64, crate::i18n::Language)>,
 }
 
 #[derive(Component)]
@@ -100,6 +106,18 @@ pub(crate) struct RotateWorkbenchOutputsButton {
     workstation_id: EntityId,
 }
 
+#[derive(Component)]
+pub(crate) struct ToggleStockpileItemButton {
+    stockpile_id: EntityId,
+    kind: ItemKind,
+}
+
+#[derive(Component)]
+pub(crate) struct ToggleStockpileCategoryButton {
+    stockpile_id: EntityId,
+    category: ItemCategory,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SaveSlotAction {
     Save,
@@ -119,6 +137,7 @@ pub(crate) struct SaveModalState<'w> {
     modal: ResMut<'w, ModalState>,
     tool: ResMut<'w, ToolState>,
     selected: ResMut<'w, SelectedCharacter>,
+    selected_stockpile: ResMut<'w, SelectedStockpile>,
     motion: ResMut<'w, VisualMotion>,
     cache: ResMut<'w, PresentationCache>,
     scheduler: ResMut<'w, TickScheduler>,
@@ -164,6 +183,18 @@ pub(crate) struct ModalInteractionQueries<'w, 's> {
         'w,
         's,
         (&'static Interaction, &'static RotateWorkbenchOutputsButton),
+        Changed<Interaction>,
+    >,
+    stockpile_items: Query<
+        'w,
+        's,
+        (&'static Interaction, &'static ToggleStockpileItemButton),
+        Changed<Interaction>,
+    >,
+    stockpile_categories: Query<
+        'w,
+        's,
+        (&'static Interaction, &'static ToggleStockpileCategoryButton),
         Changed<Interaction>,
     >,
 }
@@ -239,6 +270,7 @@ pub(crate) fn save_modal_interaction(
             }
 
             state.selected.0 = None;
+            state.selected_stockpile.0 = None;
             state.motion.clear();
             state.tool.mode = ToolMode::Select;
             state.tool.cancel_drag();
@@ -273,6 +305,7 @@ pub(crate) fn sync_modal(
         state.authoritative.snapshot().production_revision,
         state.authoritative.snapshot().workstation_revision,
         state.authoritative.snapshot().production_logistics_revision,
+        state.authoritative.snapshot().stockpile_revision,
         state.save_store.revision(),
         state.locale.language,
     );
@@ -310,6 +343,20 @@ pub(crate) fn sync_modal(
                 &state.font,
                 workbench_image,
             )
+        }
+        ModalKind::Stockpile(stockpile_id) => {
+            let Some(stockpile) = state
+                .authoritative
+                .snapshot()
+                .stockpiles
+                .iter()
+                .find(|stockpile| stockpile.id == stockpile_id)
+            else {
+                state.modal.close();
+                state.presentation.signature = None;
+                return;
+            };
+            spawn_stockpile_modal(&mut commands, stockpile, *state.locale, &state.font)
         }
         ModalKind::Saves => {
             spawn_saves_modal(&mut commands, &state.save_store, *state.locale, &state.font)
@@ -542,6 +589,170 @@ fn spawn_save_slot_row(
                 }
             });
         });
+}
+
+fn spawn_stockpile_modal(
+    commands: &mut Commands,
+    stockpile: &StockpileSnapshot,
+    locale: Locale,
+    font: &UiFont,
+) -> Entity {
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: percent(100),
+                height: percent(100),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
+            GlobalZIndex(100),
+            Interaction::default(),
+            UiCapture,
+        ))
+        .with_children(|backdrop| {
+            backdrop
+                .spawn((
+                    Node {
+                        width: px(520),
+                        min_height: px(430),
+                        padding: UiRect::all(px(16)),
+                        row_gap: px(10),
+                        flex_direction: FlexDirection::Column,
+                        border: UiRect::all(px(1)),
+                        ..default()
+                    },
+                    BackgroundColor(PANEL),
+                    BorderColor::all(Color::srgb(0.30, 0.36, 0.38)),
+                    UiCapture,
+                ))
+                .with_children(|panel| {
+                    panel
+                        .spawn(Node {
+                            width: percent(100),
+                            justify_content: JustifyContent::SpaceBetween,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn(text_bundle(
+                                format!(
+                                    "{} #{}",
+                                    locale.tr(TextKey::Stockpile),
+                                    stockpile.id.value()
+                                ),
+                                font,
+                                22.0,
+                                TEXT,
+                            ));
+                            row.spawn((
+                                Button,
+                                ModalCloseButton,
+                                UiCapture,
+                                button_node(),
+                                BackgroundColor(BUTTON),
+                            ))
+                            .with_children(|button| {
+                                button.spawn(text_bundle(
+                                    locale.tr(TextKey::Close),
+                                    font,
+                                    14.0,
+                                    TEXT,
+                                ));
+                            });
+                        });
+
+                    panel.spawn(text_bundle(
+                        locale.tr(TextKey::AcceptedItems),
+                        font,
+                        16.0,
+                        MUTED,
+                    ));
+
+                    for category in ItemCategory::ALL {
+                        let kinds = category.kinds().collect::<Vec<_>>();
+                        let allowed = kinds
+                            .iter()
+                            .filter(|kind| !stockpile.disallowed_items.contains(kind))
+                            .count();
+                        let category_mark = if allowed == 0 {
+                            "[ ]"
+                        } else if allowed == kinds.len() {
+                            "[x]"
+                        } else {
+                            "[-]"
+                        };
+                        panel
+                            .spawn((
+                                Button,
+                                ToggleStockpileCategoryButton {
+                                    stockpile_id: stockpile.id,
+                                    category,
+                                },
+                                UiCapture,
+                                Node {
+                                    width: percent(100),
+                                    height: px(34),
+                                    padding: UiRect::horizontal(px(9)),
+                                    align_items: AlignItems::Center,
+                                    border: UiRect::all(px(1)),
+                                    ..default()
+                                },
+                                BackgroundColor(ROW),
+                                BorderColor::all(Color::srgb(0.24, 0.28, 0.30)),
+                            ))
+                            .with_children(|button| {
+                                button.spawn(text_bundle(
+                                    format!(
+                                        "{}  {}",
+                                        category_mark,
+                                        locale.item_category_name(category)
+                                    ),
+                                    font,
+                                    14.0,
+                                    TEXT,
+                                ));
+                            });
+
+                        for kind in kinds {
+                            let allowed = !stockpile.disallowed_items.contains(&kind);
+                            panel
+                                .spawn((
+                                    Button,
+                                    ToggleStockpileItemButton {
+                                        stockpile_id: stockpile.id,
+                                        kind,
+                                    },
+                                    UiCapture,
+                                    Node {
+                                        width: percent(100),
+                                        height: px(30),
+                                        margin: UiRect::left(px(18)),
+                                        padding: UiRect::horizontal(px(9)),
+                                        align_items: AlignItems::Center,
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgba(0.08, 0.10, 0.11, 0.96)),
+                                ))
+                                .with_children(|button| {
+                                    button.spawn(text_bundle(
+                                        format!(
+                                            "{}  {}",
+                                            if allowed { "[x]" } else { "[ ]" },
+                                            locale.item_name(kind)
+                                        ),
+                                        font,
+                                        13.0,
+                                        TEXT,
+                                    ));
+                                });
+                        }
+                    }
+                });
+        })
+        .id()
 }
 
 fn spawn_workstation_modal(
@@ -1010,6 +1221,8 @@ pub(crate) fn modal_interaction(
         remove,
         rotate_inputs,
         rotate_outputs,
+        stockpile_items,
+        stockpile_categories,
     } = interactions;
     if close
         .iter()
@@ -1176,6 +1389,72 @@ pub(crate) fn modal_interaction(
         {
             warn!("workstation output rotation rejected: {error}");
         } else {
+            refresh(&mut authoritative);
+            state.dirty = true;
+        }
+    }
+
+    for (interaction, button) in &stockpile_items {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let Some(allowed) = authoritative
+            .snapshot()
+            .stockpiles
+            .iter()
+            .find(|stockpile| stockpile.id == button.stockpile_id)
+            .map(|stockpile| stockpile.disallowed_items.contains(&button.kind))
+        else {
+            continue;
+        };
+        if let Err(error) =
+            authoritative
+                .application_mut()
+                .execute(Command::SetStockpileItemAllowed {
+                    stockpile_id: button.stockpile_id,
+                    kind: button.kind,
+                    allowed,
+                })
+        {
+            warn!("stockpile item policy update rejected: {error}");
+        } else {
+            refresh(&mut authoritative);
+            state.dirty = true;
+        }
+    }
+
+    for (interaction, button) in &stockpile_categories {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let kinds = button.category.kinds().collect::<Vec<_>>();
+        let Some(target_allowed) = authoritative
+            .snapshot()
+            .stockpiles
+            .iter()
+            .find(|stockpile| stockpile.id == button.stockpile_id)
+            .map(|stockpile| {
+                !kinds
+                    .iter()
+                    .all(|kind| !stockpile.disallowed_items.contains(kind))
+            })
+        else {
+            continue;
+        };
+        let mut changed = false;
+        for kind in kinds {
+            match authoritative
+                .application_mut()
+                .execute(Command::SetStockpileItemAllowed {
+                    stockpile_id: button.stockpile_id,
+                    kind,
+                    allowed: target_allowed,
+                }) {
+                Ok(()) => changed = true,
+                Err(error) => warn!("stockpile category policy update rejected: {error}"),
+            }
+        }
+        if changed {
             refresh(&mut authoritative);
             state.dirty = true;
         }

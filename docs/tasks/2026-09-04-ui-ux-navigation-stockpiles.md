@@ -1,6 +1,6 @@
 # Task: UI/UX pass, exploration orders, stockpile policies
 
-Status: **Accepted for implementation**
+Status: **Implemented; owner-PC visual validation pending**
 Date: 2026-09-04
 
 ## Goal
@@ -132,6 +132,12 @@ A future priority field is anticipated, but priority UI/behavior is not required
 ## Acceptance
 
 The work is accepted when all requested interactions exist, authoritative behavior has headless regression coverage where applicable, save/load preserves stockpile policies, and no client launch is required for automated verification.
+
+## Implementation/verification note
+
+Implemented on `codex/ui-ux-navigation-stockpiles`: grouped icon HUD with localized hover help, Orders/Zones/Build palettes, zone visibility control, middle-mouse camera drag, exploration-intent navigation/replanning, exact-route endpoint cleanup, translucent stockpile overlays and selected external boundary, stockpile selection/double-click/Configure flow, hierarchical item-category filters, authoritative hauling enforcement, and persistence.
+
+Server-safe verification on `tomas` passes `cargo test -p progressus-sim -p progressus-app -j1` and formatting/diff checks. The graphical client is intentionally not compiled or launched there, so final Bevy type/link/runtime and visual-layout validation is performed by the owner after pulling on the normal development PC.
 
 ## Tomas machine safety rule
 

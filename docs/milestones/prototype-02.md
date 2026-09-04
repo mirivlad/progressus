@@ -97,7 +97,13 @@ Research is a prerequisite, not a magic production currency.
 
 Prototype 02 needs only enough research/knowledge to prove that a capability can require both knowledge and physical prerequisites. Unlocking metallurgy must not itself create ore, fuel, furnaces, tools, or products.
 
-## 8. Persistence and determinism
+## 8. Cross-cutting client usability pass
+
+Status: **Complete (visual validation on owner PC pending)**
+
+Before continuing the settlement systems, the Prototype 01/02 client received a usability pass: the flat toolbar became an icon-first HUD with Orders/Zones/Build palettes and localized hover help; middle-mouse drag pans the camera; player move intent can continue into unexplored terrain without revealing it; stockpile zones render as a toggleable translucent layer and can be selected/configured; and stockpiles now persist typed item acceptance filters that ordinary physical Haul obeys.
+
+## 9. Persistence and determinism
 
 Every new authoritative state introduced by Prototype 02 must either:
 
@@ -106,7 +112,7 @@ Every new authoritative state introduced by Prototype 02 must either:
 
 Save/load during an active need-satisfaction job must continue deterministically. Global stable-ID uniqueness and physical quantity conservation remain mandatory.
 
-## 9. Headless acceptance
+## 10. Headless acceptance
 
 Add a `prototype-02` activity scenario that exercises at least food, sleep, skills, and metallurgy for a long run. It must verify:
 
@@ -118,7 +124,7 @@ Add a `prototype-02` activity scenario that exercises at least food, sleep, skil
 - save/load can occur while a need job is active;
 - the settlement can reach a stable repeating loop under sufficient resources.
 
-## 10. Non-goals
+## 11. Non-goals
 
 Prototype 02 does not require:
 
@@ -133,7 +139,7 @@ Prototype 02 does not require:
 - multi-settlement Simulation LOD;
 - a large research tree.
 
-## 11. Definition of done
+## 12. Definition of done
 
 - [x] nutrition and autonomous physical eating work;
 - [ ] renewable physical food can sustain the five-character settlement;

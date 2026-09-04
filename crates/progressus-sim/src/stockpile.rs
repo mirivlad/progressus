@@ -200,13 +200,28 @@ mod tests {
             .insert(Stockpile::new(stockpile_id, WorldCell::new(1, 2)))
             .unwrap();
         let revision = world.revision();
-        assert!(world.get(stockpile_id).unwrap().accepts(crate::ItemKind::Wood));
-        assert!(world.get(stockpile_id).unwrap().accepts(crate::ItemKind::Berries));
+        assert!(
+            world
+                .get(stockpile_id)
+                .unwrap()
+                .accepts(crate::ItemKind::Wood)
+        );
+        assert!(
+            world
+                .get(stockpile_id)
+                .unwrap()
+                .accepts(crate::ItemKind::Berries)
+        );
 
         world
             .set_item_allowed(stockpile_id, crate::ItemKind::Wood, false)
             .unwrap();
-        assert!(!world.get(stockpile_id).unwrap().accepts(crate::ItemKind::Wood));
+        assert!(
+            !world
+                .get(stockpile_id)
+                .unwrap()
+                .accepts(crate::ItemKind::Wood)
+        );
         assert_eq!(world.revision(), revision + 1);
 
         world
@@ -216,7 +231,12 @@ mod tests {
         world
             .set_item_allowed(stockpile_id, crate::ItemKind::Wood, true)
             .unwrap();
-        assert!(world.get(stockpile_id).unwrap().accepts(crate::ItemKind::Wood));
+        assert!(
+            world
+                .get(stockpile_id)
+                .unwrap()
+                .accepts(crate::ItemKind::Wood)
+        );
         assert_eq!(world.revision(), revision + 2);
     }
 

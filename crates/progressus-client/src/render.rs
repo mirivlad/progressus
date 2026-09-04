@@ -5,8 +5,8 @@ use bevy::prelude::*;
 use progressus_app::{
     CHUNK_SIDE, CharacterSnapshot, ChunkCoord, ConstructionSiteSnapshot, EntityId,
     GroundItemSnapshot, JobKind, JobState, LocalCell, NaturalResourceKind, NaturalResourceSnapshot,
-    SUBUNITS_PER_CELL, StructureKind, StructureSnapshot, WorkstationSnapshot, WorldCell,
-    WorldPosition,
+    SUBUNITS_PER_CELL, StockpileSnapshot, StructureKind, StructureSnapshot, WorkstationSnapshot,
+    WorldCell, WorldPosition,
 };
 
 use crate::navigation::{SelectedCharacter, VisualMotion, interpolate_trace};
@@ -21,7 +21,7 @@ use crate::procedural_assets::{
 
 use crate::runtime::AuthoritativeClient;
 use crate::tile_connectivity::CardinalConnections;
-use crate::ui::{ToolMode, ToolState};
+use crate::ui::{SelectedStockpile, ToolMode, ToolState, ZoneVisibility};
 
 const CELL_SIZE: f32 = 12.0;
 const TERRAIN_Z: f32 = 0.0;
@@ -62,6 +62,9 @@ pub(crate) struct ConstructionSiteVisual;
 #[derive(Component)]
 pub(crate) struct StructureVisual;
 
+#[derive(Component)]
+pub(crate) struct StockpileZoneVisual;
+
 #[derive(Resource, Default)]
 pub(crate) struct PresentationCache {
     pub(crate) render_origin: Option<WorldCell>,
@@ -71,6 +74,9 @@ pub(crate) struct PresentationCache {
     pub(crate) exploration_revision: Option<u64>,
     pub(crate) item_revision: Option<u64>,
     pub(crate) resource_revision: Option<u64>,
+    pub(crate) stockpile_revision: Option<u64>,
+    pub(crate) zone_visible: Option<bool>,
+    pub(crate) stockpile_zones: Vec<Entity>,
     pub(crate) characters: BTreeMap<EntityId, Entity>,
     pub(crate) ground_items: BTreeMap<EntityId, Entity>,
     pub(crate) ground_item_labels: BTreeMap<EntityId, Entity>,
@@ -89,6 +95,8 @@ impl PresentationCache {
         self.exploration_revision = None;
         self.item_revision = None;
         self.resource_revision = None;
+        self.stockpile_revision = None;
+        self.zone_visible = None;
     }
 }
 
@@ -104,6 +112,7 @@ pub(crate) fn sync_presentation(
     mut authoritative: ResMut<AuthoritativeClient>,
     mut cache: ResMut<PresentationCache>,
     mut selected: ResMut<SelectedCharacter>,
+    zones: Res<ZoneVisibility>,
     mut motion: ResMut<VisualMotion>,
     mut procedural_assets: ProceduralAssetParams,
     cameras: Query<(&Transform, &Projection), With<Camera2d>>,
@@ -190,6 +199,22 @@ pub(crate) fn sync_presentation(
                     .expect("a render origin has a representable radius-one window"),
             )
         });
+
+    if cache.visible_window.as_ref() != Some(&current_window)
+        || cache.stockpile_revision != Some(authoritative.snapshot().stockpile_revision)
+        || cache.zone_visible != Some(zones.visible)
+    {
+        sync_stockpile_zones(
+            &mut commands,
+            &mut cache,
+            &authoritative.snapshot().stockpiles,
+            origin,
+            &current_window,
+            zones.visible,
+        );
+        cache.stockpile_revision = Some(authoritative.snapshot().stockpile_revision);
+        cache.zone_visible = Some(zones.visible);
+    }
 
     if cache.visible_window.as_ref() != Some(&current_window)
         || cache.exploration_revision != Some(authoritative.snapshot().exploration_revision)
@@ -331,6 +356,46 @@ fn spawn_terrain(
         }
     });
     root_id
+}
+
+fn sync_stockpile_zones(
+    commands: &mut Commands,
+    cache: &mut PresentationCache,
+    stockpiles: &[StockpileSnapshot],
+    origin: WorldCell,
+    window: &VisibleChunkWindow,
+    visible: bool,
+) {
+    for entity in cache.stockpile_zones.drain(..) {
+        commands.entity(entity).despawn();
+    }
+    if !visible {
+        return;
+    }
+    let visible_chunks = window
+        .coordinates()
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+
+    for stockpile in stockpiles {
+        for &cell in &stockpile.cells {
+            if !visible_chunks.contains(&cell.split().0) {
+                continue;
+            }
+            let entity = commands
+                .spawn((
+                    Sprite::from_color(
+                        Color::srgba(0.20, 0.78, 0.55, 0.30),
+                        Vec2::splat(CELL_SIZE * 0.98),
+                    ),
+                    Transform::from_translation(world_translation(cell, origin, TERRAIN_Z + 1.0)),
+                    StockpileZoneVisual,
+                ))
+                .id();
+            cache.stockpile_zones.push(entity);
+        }
+    }
 }
 
 fn sync_natural_resources(
@@ -818,26 +883,61 @@ pub(crate) fn draw_tool_drag(
 pub(crate) fn draw_stockpiles(
     authoritative: Res<AuthoritativeClient>,
     cache: Res<PresentationCache>,
+    selected: Res<SelectedStockpile>,
+    zones: Res<ZoneVisibility>,
     mut gizmos: Gizmos,
 ) {
-    let Some(origin) = cache.render_origin else {
+    if !zones.visible {
+        return;
+    }
+    let (Some(origin), Some(stockpile_id)) = (cache.render_origin, selected.0) else {
         return;
     };
-    let color = Color::srgb(0.35, 0.92, 0.72);
-    let half = CELL_SIZE * 0.47;
-    for stockpile in &authoritative.snapshot().stockpiles {
-        for &cell in &stockpile.cells {
-            let center = world_translation(cell, origin, GROUND_ITEM_Z - 0.5).truncate();
-            let min = center - Vec2::splat(half);
-            let max = center + Vec2::splat(half);
-            for (from, to) in [
-                (Vec2::new(min.x, min.y), Vec2::new(max.x, min.y)),
-                (Vec2::new(max.x, min.y), Vec2::new(max.x, max.y)),
-                (Vec2::new(max.x, max.y), Vec2::new(min.x, max.y)),
-                (Vec2::new(min.x, max.y), Vec2::new(min.x, min.y)),
-            ] {
-                gizmos.line_2d(from, to, color);
-            }
+    let Some(stockpile) = authoritative
+        .snapshot()
+        .stockpiles
+        .iter()
+        .find(|stockpile| stockpile.id == stockpile_id)
+    else {
+        return;
+    };
+    let cells = stockpile.cells.iter().copied().collect::<BTreeSet<_>>();
+    let visible_chunks = cache.visible_window.as_ref().map(|window| {
+        window
+            .coordinates()
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>()
+    });
+    let half = CELL_SIZE * 0.50;
+    let color = Color::srgba(0.45, 1.0, 0.74, 0.95);
+
+    for &cell in &stockpile.cells {
+        if visible_chunks
+            .as_ref()
+            .is_some_and(|chunks| !chunks.contains(&cell.split().0))
+        {
+            continue;
+        }
+        let center = world_translation(cell, origin, GROUND_ITEM_Z - 0.5).truncate();
+        let min = center - Vec2::splat(half);
+        let max = center + Vec2::splat(half);
+        let west = cell.x().checked_sub(1).map(|x| WorldCell::new(x, cell.y()));
+        let east = cell.x().checked_add(1).map(|x| WorldCell::new(x, cell.y()));
+        let south = cell.y().checked_sub(1).map(|y| WorldCell::new(cell.x(), y));
+        let north = cell.y().checked_add(1).map(|y| WorldCell::new(cell.x(), y));
+
+        if west.is_none_or(|neighbor| !cells.contains(&neighbor)) {
+            gizmos.line_2d(Vec2::new(min.x, min.y), Vec2::new(min.x, max.y), color);
+        }
+        if east.is_none_or(|neighbor| !cells.contains(&neighbor)) {
+            gizmos.line_2d(Vec2::new(max.x, min.y), Vec2::new(max.x, max.y), color);
+        }
+        if south.is_none_or(|neighbor| !cells.contains(&neighbor)) {
+            gizmos.line_2d(Vec2::new(min.x, min.y), Vec2::new(max.x, min.y), color);
+        }
+        if north.is_none_or(|neighbor| !cells.contains(&neighbor)) {
+            gizmos.line_2d(Vec2::new(min.x, max.y), Vec2::new(max.x, max.y), color);
         }
     }
 }
@@ -976,8 +1076,8 @@ pub(crate) fn draw_selected_navigation(
         previous = next;
     }
     if let Some(destination) = navigation.destination {
-        let route_reaches_destination = navigation.remaining_waypoints.last().copied()
-            == Some(destination);
+        let route_reaches_destination =
+            navigation.remaining_waypoints.last().copied() == Some(destination);
         let destination = to_visual(destination).truncate();
         if route_reaches_destination && previous != destination {
             gizmos.line_2d(previous, destination, route_color);
@@ -1101,8 +1201,8 @@ pub(crate) fn camera_controls(
             pan.normalize_or_zero().extend(0.0) * CAMERA_PAN_SPEED * time.delta_secs();
         if let Projection::Orthographic(orthographic) = &mut *projection {
             if buttons.pressed(MouseButton::Middle) && !tool.pointer_over_ui {
-                transform.translation += Vec3::new(mouse_drag.x, -mouse_drag.y, 0.0)
-                    * orthographic.scale;
+                transform.translation +=
+                    Vec3::new(mouse_drag.x, -mouse_drag.y, 0.0) * orthographic.scale;
             }
             orthographic.scale = (orthographic.scale * 0.9_f32.powf(scroll))
                 .clamp(MIN_CAMERA_SCALE, MAX_CAMERA_SCALE);

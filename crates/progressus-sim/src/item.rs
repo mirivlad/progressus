@@ -36,7 +36,9 @@ impl ItemCategory {
     pub const ALL: [Self; 3] = [Self::Resources, Self::Food, Self::Products];
 
     pub fn kinds(self) -> impl Iterator<Item = ItemKind> {
-        ItemKind::ALL.into_iter().filter(move |kind| kind.category() == self)
+        ItemKind::ALL
+            .into_iter()
+            .filter(move |kind| kind.category() == self)
     }
 }
 

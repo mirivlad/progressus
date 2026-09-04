@@ -25,9 +25,12 @@ use crate::render::{
 };
 use crate::save_slots::SaveStore;
 use crate::ui::{
-    ToolMode, ToolState, language_toggle_interaction, pause_toggle_interaction,
-    refresh_toolbar_localization, save_menu_interaction, setup_character_inspector, setup_toolbar,
-    sync_character_inspector, toolbar_interaction, update_ui_capture,
+    HudPaletteState, SelectedStockpile, StockpileClickState, ToolMode, ToolState, ZoneVisibility,
+    configure_stockpile_interaction, hud_palette_interaction, language_toggle_interaction,
+    pause_toggle_interaction, refresh_toolbar_localization, save_menu_interaction,
+    setup_character_inspector, setup_stockpile_inspector, setup_toolbar, sync_character_inspector,
+    sync_hud_tooltip, sync_stockpile_inspector, toolbar_interaction, update_ui_capture,
+    zone_visibility_interaction,
 };
 use crate::ui_font::setup_ui_font;
 
@@ -148,14 +151,18 @@ pub(crate) fn pointer_navigation(
     cameras: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     interaction_state: (
         ResMut<SelectedCharacter>,
+        ResMut<SelectedStockpile>,
+        ResMut<StockpileClickState>,
         ResMut<ToolState>,
         ResMut<ModalState>,
     ),
+    time: Res<Time>,
     mut authoritative: ResMut<AuthoritativeClient>,
     cache: Res<PresentationCache>,
 ) {
     let (buttons, keys) = input;
-    let (mut selected, mut tool, mut modal) = interaction_state;
+    let (mut selected, mut selected_stockpile, mut stockpile_click, mut tool, mut modal) =
+        interaction_state;
     if modal.is_open() {
         return;
     }
@@ -293,14 +300,14 @@ pub(crate) fn pointer_navigation(
     }
 
     if buttons.just_pressed(MouseButton::Left) {
-        // A workstation owns its whole coarse cell for pointer hit-testing.
-        // Check it before the character-radius picker so a worker walking or
-        // crafting beside the bench cannot make the bench intermittently
-        // impossible to open.
+        // Physical objects keep pointer priority over zones. A stockpile is
+        // selected only when the click did not hit a workstation or pawn.
         if let Some(workstation_id) =
             workstation_at(authoritative.snapshot(), target.containing_cell())
         {
             selected.0 = None;
+            selected_stockpile.0 = None;
+            stockpile_click.last = None;
             modal.open_workstation(workstation_id);
         } else if let Some(character_id) = select_nearest(
             authoritative
@@ -312,8 +319,25 @@ pub(crate) fn pointer_navigation(
             progressus_app::SUBUNITS_PER_CELL / 2,
         ) {
             selected.0 = Some(character_id);
+            selected_stockpile.0 = None;
+            stockpile_click.last = None;
+        } else if let Some(stockpile_id) =
+            stockpile_at(authoritative.snapshot(), target.containing_cell())
+        {
+            selected.0 = None;
+            selected_stockpile.0 = Some(stockpile_id);
+            let now = time.elapsed_secs();
+            let double_click = stockpile_click
+                .last
+                .is_some_and(|(id, at)| id == stockpile_id && now - at <= 0.35);
+            stockpile_click.last = Some((stockpile_id, now));
+            if double_click {
+                modal.open_stockpile(stockpile_id);
+            }
         } else {
             selected.0 = None;
+            selected_stockpile.0 = None;
+            stockpile_click.last = None;
         }
         if let Err(error) = authoritative.refresh_lightweight_snapshot(selected.0) {
             error!("authoritative snapshot failed after selection: {error}");
@@ -713,8 +737,12 @@ pub fn run_with_seed(seed: u64) -> Result<(), ClientError> {
         .insert_resource(ProceduralAssetRegistry::default())
         .insert_resource(NavigationDebug::default())
         .insert_resource(SelectedCharacter::default())
+        .insert_resource(SelectedStockpile::default())
+        .insert_resource(StockpileClickState::default())
         .insert_resource(VisualMotion::default())
         .insert_resource(ToolState::default())
+        .insert_resource(HudPaletteState::default())
+        .insert_resource(ZoneVisibility::default())
         .insert_resource(Locale::default())
         .insert_resource(ModalState::default())
         .insert_resource(ModalPresentation::default())
@@ -733,6 +761,7 @@ pub fn run_with_seed(seed: u64) -> Result<(), ClientError> {
                 setup_camera,
                 setup_toolbar,
                 setup_character_inspector,
+                setup_stockpile_inspector,
             )
                 .chain(),
         )
@@ -742,12 +771,16 @@ pub fn run_with_seed(seed: u64) -> Result<(), ClientError> {
                 (
                     language_toggle_interaction,
                     pause_toggle_interaction,
+                    zone_visibility_interaction,
                     modal_keyboard,
                     save_menu_interaction,
+                    configure_stockpile_interaction,
                     save_modal_interaction,
                     modal_interaction,
                     toolbar_interaction,
+                    hud_palette_interaction,
                     refresh_toolbar_localization,
+                    sync_hud_tooltip,
                     sync_modal,
                     update_ui_capture,
                     pointer_navigation,
@@ -757,6 +790,7 @@ pub fn run_with_seed(seed: u64) -> Result<(), ClientError> {
                     advance_authority,
                     sync_presentation,
                     sync_character_inspector,
+                    sync_stockpile_inspector,
                     crate::render::interpolate_character_visuals,
                     draw_selected_character,
                     draw_selected_navigation,

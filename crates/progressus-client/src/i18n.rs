@@ -1,6 +1,6 @@
 use bevy::prelude::Resource;
 use progressus_app::{
-    Direction, ItemKind, JobKind, JobState, MovementState, RecipeId, WorkstationKind,
+    Direction, ItemCategory, ItemKind, JobKind, JobState, MovementState, RecipeId, WorkstationKind,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
@@ -33,6 +33,12 @@ pub(crate) enum TextKey {
     StoneWall,
     Workbench,
     CancelJobs,
+    Zones,
+    Build,
+    ZoneVisibility,
+    Stockpile,
+    Configure,
+    AcceptedItems,
     Mode,
     Pause,
     Resume,
@@ -81,6 +87,12 @@ impl Locale {
             (Language::Ru, TextKey::StoneWall) => "Каменная стена",
             (Language::Ru, TextKey::Workbench) => "Верстак",
             (Language::Ru, TextKey::CancelJobs) => "Отмена задач",
+            (Language::Ru, TextKey::Zones) => "Зоны",
+            (Language::Ru, TextKey::Build) => "Строительство",
+            (Language::Ru, TextKey::ZoneVisibility) => "Показывать зоны",
+            (Language::Ru, TextKey::Stockpile) => "Склад",
+            (Language::Ru, TextKey::Configure) => "Настроить",
+            (Language::Ru, TextKey::AcceptedItems) => "Разрешённые предметы",
             (Language::Ru, TextKey::Mode) => "Режим",
             (Language::Ru, TextKey::Pause) => "Пауза",
             (Language::Ru, TextKey::Resume) => "Продолжить",
@@ -124,6 +136,12 @@ impl Locale {
             (Language::En, TextKey::StoneWall) => "Stone wall",
             (Language::En, TextKey::Workbench) => "Workbench",
             (Language::En, TextKey::CancelJobs) => "Cancel jobs",
+            (Language::En, TextKey::Zones) => "Zones",
+            (Language::En, TextKey::Build) => "Build",
+            (Language::En, TextKey::ZoneVisibility) => "Show zones",
+            (Language::En, TextKey::Stockpile) => "Stockpile",
+            (Language::En, TextKey::Configure) => "Configure",
+            (Language::En, TextKey::AcceptedItems) => "Allowed items",
             (Language::En, TextKey::Mode) => "Mode",
             (Language::En, TextKey::Pause) => "Pause",
             (Language::En, TextKey::Resume) => "Resume",
@@ -209,6 +227,17 @@ impl Locale {
             (Language::En, ItemKind::Stone) => "Stone",
             (Language::En, ItemKind::PrimitiveTool) => "Primitive tool",
             (Language::En, ItemKind::Berries) => "Berries",
+        }
+    }
+
+    pub(crate) const fn item_category_name(self, category: ItemCategory) -> &'static str {
+        match (self.language, category) {
+            (Language::Ru, ItemCategory::Resources) => "Ресурсы",
+            (Language::Ru, ItemCategory::Food) => "Еда",
+            (Language::Ru, ItemCategory::Products) => "Изделия",
+            (Language::En, ItemCategory::Resources) => "Resources",
+            (Language::En, ItemCategory::Food) => "Food",
+            (Language::En, ItemCategory::Products) => "Products",
         }
     }
 

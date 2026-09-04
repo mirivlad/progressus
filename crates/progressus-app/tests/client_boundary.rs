@@ -298,7 +298,10 @@ fn stockpile_and_haul_cycle_cross_the_public_application_boundary() {
         })
         .unwrap();
     let filtered = application.snapshot(SnapshotQuery::default()).unwrap();
-    assert_eq!(filtered.stockpiles[0].disallowed_items, vec![ItemKind::Wood]);
+    assert_eq!(
+        filtered.stockpiles[0].disallowed_items,
+        vec![ItemKind::Wood]
+    );
     assert!(filtered.stockpile_revision > created.stockpile_revision);
     application
         .execute(Command::SetStockpileItemAllowed {

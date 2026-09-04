@@ -2124,9 +2124,11 @@ mod tests {
             .stockpiles()
             .find(|stockpile| stockpile.id() == stockpile_id)
             .unwrap();
-        assert!(ItemKind::ALL
-            .into_iter()
-            .all(|kind| legacy_stockpile.accepts(kind)));
+        assert!(
+            ItemKind::ALL
+                .into_iter()
+                .all(|kind| legacy_stockpile.accepts(kind))
+        );
     }
 
     #[test]

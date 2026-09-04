@@ -673,7 +673,10 @@ impl Simulation {
                         stockpile_id: destination_stockpile,
                         ..
                     } if destination_stockpile == stockpile_id
-                        && self.item_world.get(item_id).is_some_and(|item| item.kind() == kind) =>
+                        && self
+                            .item_world
+                            .get(item_id)
+                            .is_some_and(|item| item.kind() == kind) =>
                     {
                         Some(job.id())
                     }
@@ -1304,8 +1307,8 @@ impl Simulation {
             }
         }
 
-        let cells = find_closest_explored_path(self, start, goal)?
-            .map_err(|error| match error {
+        let cells =
+            find_closest_explored_path(self, start, goal)?.map_err(|error| match error {
                 PathfindingError::PathNotFound => SimulationError::MoveToPathNotFound,
                 PathfindingError::SearchBudgetExceeded => {
                     SimulationError::MoveToSearchBudgetExceeded
@@ -3879,15 +3882,9 @@ fn build_waypoints(
         debug_assert_eq!(cell_manhattan_distance(approach_cell, destination_cell), 1);
         let approach_center = WorldPosition::from_cell_center(approach_cell)?;
         let final_turn = if approach_cell.x() != destination_cell.x() {
-            WorldPosition::from_subunits(
-                destination.x_subunits(),
-                approach_center.y_subunits(),
-            )?
+            WorldPosition::from_subunits(destination.x_subunits(), approach_center.y_subunits())?
         } else {
-            WorldPosition::from_subunits(
-                approach_center.x_subunits(),
-                destination.y_subunits(),
-            )?
+            WorldPosition::from_subunits(approach_center.x_subunits(), destination.y_subunits())?
         };
         points.push(final_turn);
     }
@@ -4760,7 +4757,9 @@ mod tests {
             WorldCell::new(20, 1),
             WorldCell::new(20, -1),
         ] {
-            simulation.set_terrain_override(cell, Terrain::Rock).unwrap();
+            simulation
+                .set_terrain_override(cell, Terrain::Rock)
+                .unwrap();
         }
         simulation.advance_ticks(1).unwrap();
 
@@ -5306,11 +5305,12 @@ mod tests {
                 destination: blocked
             }
         );
-        assert_eq!(character(&simulation, cora).navigation_destination(), Some(blocked));
         assert_eq!(
-            character(&simulation, cora)
-                .navigation_waypoints()
-                .last(),
+            character(&simulation, cora).navigation_destination(),
+            Some(blocked)
+        );
+        assert_eq!(
+            character(&simulation, cora).navigation_waypoints().last(),
             Some(first)
         );
     }
