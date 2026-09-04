@@ -471,6 +471,13 @@ mod tests {
         image.data.as_deref().unwrap()[(y * 16 + x) * 4 + 3]
     }
 
+    fn rgba_at(image: &bevy::prelude::Image, x: usize, y: usize) -> [u8; 4] {
+        let offset = (y * 16 + x) * 4;
+        image.data.as_deref().unwrap()[offset..offset + 4]
+            .try_into()
+            .unwrap()
+    }
+
     #[test]
     fn water_and_rock_convex_corners_are_transparent_overlays() {
         let center = WorldCell::new(0, 0);
@@ -498,7 +505,7 @@ mod tests {
     }
 
     #[test]
-    fn water_and_rock_concave_corners_are_transparent_rounded_cutouts() {
+    fn water_and_rock_diagonal_corners_bridge_without_grass_cutouts() {
         let center = WorldCell::new(0, 0);
         let cases = [
             ((0, 1), (-1, 0), (-1, 1), (0, 0), (4, 0)),
@@ -507,6 +514,11 @@ mod tests {
             ((0, -1), (-1, 0), (-1, -1), (0, 15), (4, 15)),
         ];
         for terrain in [Terrain::Water, Terrain::Rock] {
+            let (corner_color, arc_color) = match terrain {
+                Terrain::Water => ([174, 159, 111, 255], [73, 139, 180, 255]),
+                Terrain::Rock => ([109, 104, 78, 255], [123, 118, 103, 255]),
+                Terrain::Grass => unreachable!(),
+            };
             for (first, second, diagonal, corner, arc) in cases {
                 let known = [
                     (center, terrain),
@@ -521,8 +533,8 @@ mod tests {
                     center,
                     TerrainConnections::from_known(center, terrain, &known),
                 ));
-                assert_eq!(alpha_at(&image, corner.0, corner.1), 0);
-                assert_ne!(alpha_at(&image, arc.0, arc.1), 0);
+                assert_eq!(rgba_at(&image, corner.0, corner.1), corner_color);
+                assert_eq!(rgba_at(&image, arc.0, arc.1), arc_color);
                 assert_ne!(alpha_at(&image, 8, 8), 0);
             }
         }

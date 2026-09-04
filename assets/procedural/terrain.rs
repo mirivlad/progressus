@@ -146,7 +146,7 @@ fn shoreline_corner(
     if first_open && second_open {
         rounded_external_corner(canvas, x, y, shore, light);
     } else if diagonal_open && !first_open && !second_open {
-        rounded_internal_corner(canvas, x, y, shore, light, shallow);
+        rounded_diagonal_bridge(canvas, x, y, shore, light, shallow);
     }
 }
 
@@ -157,41 +157,28 @@ fn rounded_external_corner(
     edge: Rgba8,
     inner: Rgba8,
 ) {
-    // A 16 px terrain tile needs a visibly rounded 90-degree turn. The old
-    // 5 px radius only clipped the extreme corner, leaving the two edge
-    // strips looking like a square L. Use a 7 px quarter-circle so the
-    // shoreline/foothill actually bends before reaching the tile corner.
-    const RADIUS: i32 = 7;
     const TRANSPARENT: Rgba8 = Rgba8::rgba(0, 0, 0, 0);
-    let center_x = if corner_x == 0 { RADIUS } else { 15 - RADIUS };
-    let center_y = if corner_y == 0 { RADIUS } else { 15 - RADIUS };
-    let x_range = if corner_x == 0 {
-        0..=RADIUS
-    } else {
-        (15 - RADIUS)..=15
-    };
-    let y_range = if corner_y == 0 {
-        0..=RADIUS
-    } else {
-        (15 - RADIUS)..=15
-    };
+    let center_x = if corner_x == 0 { 5 } else { 10 };
+    let center_y = if corner_y == 0 { 5 } else { 10 };
+    let x_range = if corner_x == 0 { 0..=5 } else { 10..=15 };
+    let y_range = if corner_y == 0 { 0..=5 } else { 10..=15 };
     for py in y_range {
         for px in x_range.clone() {
             let dx = px - center_x;
             let dy = py - center_y;
             let distance = dx * dx + dy * dy;
-            if distance > RADIUS * RADIUS {
+            if distance > 25 {
                 canvas.pixel(px, py, TRANSPARENT);
-            } else if distance >= 36 {
+            } else if distance >= 16 {
                 canvas.pixel(px, py, edge);
-            } else if distance >= 25 {
+            } else if distance >= 9 {
                 canvas.pixel(px, py, inner);
             }
         }
     }
 }
 
-fn rounded_internal_corner(
+fn rounded_diagonal_bridge(
     canvas: &mut Canvas,
     corner_x: i32,
     corner_y: i32,
@@ -199,25 +186,23 @@ fn rounded_internal_corner(
     inner: Rgba8,
     transition: Rgba8,
 ) {
-    // A diagonal-only opening is a concave terrain corner. Carve a real
-    // quarter-circle out of the overlay, then bridge back into the terrain
-    // with concentric transition bands. The previous tiny 2 px notch left
-    // square strip ends visible where two cardinal edges met.
-    const TRANSPARENT: Rgba8 = Rgba8::rgba(0, 0, 0, 0);
-    let x_range = if corner_x == 0 { 0..=6 } else { 9..=15 };
-    let y_range = if corner_y == 0 { 0..=6 } else { 9..=15 };
+    // Three same-terrain cells around one diagonal unlike neighbour form a
+    // protruding corner of the unlike terrain. Do not expose the Grass
+    // underlay inside this water/rock cell: that creates the visible green
+    // "bush". Instead bridge the two straight edge treatments with one
+    // quarter-disc whose outer radius matches the four-pixel shoreline.
+    let x_range = if corner_x == 0 { 0..=4 } else { 11..=15 };
+    let y_range = if corner_y == 0 { 0..=4 } else { 11..=15 };
     for py in y_range {
         for px in x_range.clone() {
             let dx = px - corner_x;
             let dy = py - corner_y;
             let distance = dx * dx + dy * dy;
-            if distance <= 9 {
-                canvas.pixel(px, py, TRANSPARENT);
-            } else if distance <= 16 {
+            if distance <= 4 {
                 canvas.pixel(px, py, edge);
-            } else if distance <= 25 {
+            } else if distance <= 9 {
                 canvas.pixel(px, py, inner);
-            } else if distance <= 36 {
+            } else if distance <= 16 {
                 canvas.pixel(px, py, transition);
             }
         }
@@ -358,9 +343,6 @@ fn foothill_corner(
         let inner_y = if y == 0 { 4 } else { 11 };
         canvas.pixel(inner_x, inner_y, moss);
     } else if diagonal_open && !first_open && !second_open {
-        rounded_internal_corner(canvas, x, y, soil, talus, talus);
-        let moss_x = if x == 0 { 3 } else { 12 };
-        let moss_y = if y == 0 { 3 } else { 12 };
-        canvas.pixel(moss_x, moss_y, moss);
+        rounded_diagonal_bridge(canvas, x, y, soil, talus, talus);
     }
 }
