@@ -5,8 +5,8 @@ use bevy::prelude::*;
 use progressus_app::{
     CHUNK_SIDE, CharacterSnapshot, ChunkCoord, ConstructionSiteSnapshot, EntityId,
     GroundItemSnapshot, JobKind, JobState, LocalCell, NaturalResourceKind, NaturalResourceSnapshot,
-    SUBUNITS_PER_CELL, StockpileSnapshot, StructureKind, StructureSnapshot, WorkstationSnapshot,
-    WorldCell, WorldPosition,
+    SUBUNITS_PER_CELL, StockpileSnapshot, StructureSnapshot, WorkstationSnapshot, WorldCell,
+    WorldPosition,
 };
 
 use crate::navigation::{SelectedCharacter, VisualMotion, interpolate_trace};
