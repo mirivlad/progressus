@@ -201,6 +201,41 @@ fn terrain_query_does_not_publish_undiscovered_terrain() {
 }
 
 #[test]
+fn spatial_snapshot_layers_can_be_requested_without_rebuilding_terrain() {
+    let application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(0),
+    })
+    .unwrap();
+    let chunks = vec![ChunkCoord::new(-1, 0), ChunkCoord::new(0, 0)];
+
+    let items_only = application
+        .snapshot(SnapshotQuery {
+            chunks: chunks.clone(),
+            include_terrain: false,
+            include_ground_items: true,
+            include_natural_resources: false,
+            ..SnapshotQuery::default()
+        })
+        .unwrap();
+    assert!(items_only.chunks.is_empty());
+    assert!(!items_only.ground_items.is_empty());
+    assert!(items_only.natural_resources.is_empty());
+
+    let resources_only = application
+        .snapshot(SnapshotQuery {
+            chunks,
+            include_terrain: false,
+            include_ground_items: false,
+            include_natural_resources: true,
+            ..SnapshotQuery::default()
+        })
+        .unwrap();
+    assert!(resources_only.chunks.is_empty());
+    assert!(resources_only.ground_items.is_empty());
+    assert!(!resources_only.natural_resources.is_empty());
+}
+
+#[test]
 fn natural_resource_snapshots_are_explored_deterministic_and_not_a_query_side_channel() {
     let application = Application::new_game(NewGameOptions {
         seed: WorldSeed::new(0),
@@ -1049,6 +1084,7 @@ fn blocked_move_to_updates_selected_navigation_to_the_closest_approach() {
     let query = SnapshotQuery {
         chunks: vec![ChunkCoord::new(0, 0)],
         navigation_for: Some(cora),
+        ..SnapshotQuery::default()
     };
     let before = application.snapshot(query.clone()).unwrap();
     let blocked = before

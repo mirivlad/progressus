@@ -107,10 +107,25 @@ pub enum Command {
     },
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SnapshotQuery {
     pub chunks: Vec<ChunkCoord>,
     pub navigation_for: Option<EntityId>,
+    pub include_terrain: bool,
+    pub include_ground_items: bool,
+    pub include_natural_resources: bool,
+}
+
+impl Default for SnapshotQuery {
+    fn default() -> Self {
+        Self {
+            chunks: Vec::new(),
+            navigation_for: None,
+            include_terrain: true,
+            include_ground_items: true,
+            include_natural_resources: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -241,74 +256,87 @@ impl Application {
         query.chunks.dedup();
         let requested_chunks = query.chunks.clone();
 
-        let chunks = query
-            .chunks
-            .into_iter()
-            .filter_map(|coordinate| {
-                let any_known = (0..CHUNK_SIDE).any(|y| {
-                    (0..CHUNK_SIDE).any(|x| {
-                        let cell = coordinate
-                            .world_cell(LocalCell::new(x, y))
-                            .expect("valid chunk-local cells produce world cells");
-                        self.simulation.is_explored(cell)
-                    })
-                });
-                if !any_known {
-                    return None;
-                }
-                let effective = match self.simulation.effective_chunk(coordinate) {
-                    Ok(chunk) => chunk,
-                    Err(error) => return Some(Err(error)),
-                };
-                let cells = (0..CHUNK_SIDE)
-                    .flat_map(|y| (0..CHUNK_SIDE).map(move |x| LocalCell::new(x, y)))
-                    .map(|local| {
-                        let cell = coordinate
-                            .world_cell(local)
-                            .expect("valid chunk-local cells produce world cells");
-                        if self.simulation.is_explored(cell) {
-                            KnownTerrain::Known(
-                                effective
-                                    .terrain_at(local)
-                                    .expect("effective chunks contain every local cell"),
-                            )
-                        } else {
-                            KnownTerrain::Unknown
-                        }
-                    })
-                    .collect();
-                Some(Ok(ChunkSnapshot {
-                    coordinate,
-                    side: CHUNK_SIDE,
-                    cells,
-                }))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let chunks = if query.include_terrain {
+            query
+                .chunks
+                .into_iter()
+                .filter_map(|coordinate| {
+                    let any_known = (0..CHUNK_SIDE).any(|y| {
+                        (0..CHUNK_SIDE).any(|x| {
+                            let cell = coordinate
+                                .world_cell(LocalCell::new(x, y))
+                                .expect("valid chunk-local cells produce world cells");
+                            self.simulation.is_explored(cell)
+                        })
+                    });
+                    if !any_known {
+                        return None;
+                    }
+                    let effective = match self.simulation.effective_chunk(coordinate) {
+                        Ok(chunk) => chunk,
+                        Err(error) => return Some(Err(error)),
+                    };
+                    let cells = (0..CHUNK_SIDE)
+                        .flat_map(|y| (0..CHUNK_SIDE).map(move |x| LocalCell::new(x, y)))
+                        .map(|local| {
+                            let cell = coordinate
+                                .world_cell(local)
+                                .expect("valid chunk-local cells produce world cells");
+                            if self.simulation.is_explored(cell) {
+                                KnownTerrain::Known(
+                                    effective
+                                        .terrain_at(local)
+                                        .expect("effective chunks contain every local cell"),
+                                )
+                            } else {
+                                KnownTerrain::Unknown
+                            }
+                        })
+                        .collect();
+                    Some(Ok(ChunkSnapshot {
+                        coordinate,
+                        side: CHUNK_SIDE,
+                        cells,
+                    }))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        };
         let carried_items = self
             .simulation
             .items()
             .filter(|item| item.carrier().is_some())
             .map(CarriedItemSnapshot::from_carried_item)
             .collect();
-        let ground_items = requested_chunks
-            .iter()
-            .copied()
-            .flat_map(|coordinate| self.simulation.ground_items_in_chunk(coordinate))
-            .filter(|item| {
-                item.ground_position()
-                    .is_some_and(|position| self.simulation.is_explored(position.containing_cell()))
-            })
-            .map(GroundItemSnapshot::from_ground_item)
-            .collect();
-        let natural_resources = requested_chunks
-            .into_iter()
-            .map(|coordinate| self.simulation.natural_resources_in_chunk(coordinate))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .filter(|(cell, _)| self.simulation.is_explored(*cell))
-            .map(|(cell, resource)| NaturalResourceSnapshot::new(cell, resource))
-            .collect();
+        let ground_items = if query.include_ground_items {
+            requested_chunks
+                .iter()
+                .copied()
+                .flat_map(|coordinate| self.simulation.ground_items_in_chunk(coordinate))
+                .filter(|item| {
+                    item.ground_position().is_some_and(|position| {
+                        self.simulation.is_explored(position.containing_cell())
+                    })
+                })
+                .map(GroundItemSnapshot::from_ground_item)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let natural_resources = if query.include_natural_resources {
+            requested_chunks
+                .into_iter()
+                .map(|coordinate| self.simulation.natural_resources_in_chunk(coordinate))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .flatten()
+                .filter(|(cell, _)| self.simulation.is_explored(*cell))
+                .map(|(cell, resource)| NaturalResourceSnapshot::new(cell, resource))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let characters = self
             .simulation
             .characters()

@@ -35,6 +35,7 @@ use crate::{
 
 pub const BERRY_BUSH_REGROW_TICKS: u64 = 512;
 const BOOTSTRAP_BERRIES: u32 = 10;
+const AUTONOMOUS_FORAGE_RADIUS_CELLS: i64 = 8;
 
 const IDLE_BEHAVIOR_INTERVAL_TICKS: u64 = 48;
 const IDLE_WANDER_RADIUS_CELLS: i64 = 3;
@@ -624,15 +625,28 @@ impl Simulation {
             .ok_or(SimulationError::UnknownCharacter(character_id))?
             .position()
             .containing_cell();
+        // Autonomous need satisfaction is deliberately local to the bootstrap
+        // settlement. Scanning every explored cell each tick both scales with
+        // explored-world size and lets a chain of newly discovered wild bushes
+        // become accidental free scouting. Manual Harvest remains unrestricted.
         let mut candidates = Vec::new();
-        for cell in self.explored_world.cells() {
-            let Some(resource) = self.natural_resource_at(cell)? else {
-                continue;
-            };
-            if resource.kind() == NaturalResourceKind::BerryBush
-                && self.job_world.harvest_job_for_source(cell).is_none()
-            {
-                candidates.push((cell_manhattan_distance(character_cell, cell), cell));
+        for y in -AUTONOMOUS_FORAGE_RADIUS_CELLS..=AUTONOMOUS_FORAGE_RADIUS_CELLS {
+            for x in -AUTONOMOUS_FORAGE_RADIUS_CELLS..=AUTONOMOUS_FORAGE_RADIUS_CELLS {
+                if x.abs() + y.abs() > AUTONOMOUS_FORAGE_RADIUS_CELLS {
+                    continue;
+                }
+                let cell = WorldCell::new(x, y);
+                if !self.is_explored(cell) {
+                    continue;
+                }
+                let Some(resource) = self.natural_resource_at(cell)? else {
+                    continue;
+                };
+                if resource.kind() == NaturalResourceKind::BerryBush
+                    && self.job_world.harvest_job_for_source(cell).is_none()
+                {
+                    candidates.push((cell_manhattan_distance(character_cell, cell), cell));
+                }
             }
         }
         candidates.sort_unstable();
@@ -5173,6 +5187,14 @@ mod tests {
         }
         assert!(minimum_satiety <= HUNGRY_SATIETY);
         assert!(simulation.resource_revision() >= 8);
+        assert!(
+            simulation.explored_world.cells().all(|cell| {
+                cell_manhattan_distance(WorldCell::new(0, 0), cell)
+                    <= u128::try_from(AUTONOMOUS_FORAGE_RADIUS_CELLS + IDLE_WANDER_RADIUS_CELLS + 5)
+                        .expect("bootstrap forage bound is positive")
+            }),
+            "autonomous foraging must not turn renewable food into free long-range scouting"
+        );
         assert!(
             simulation
                 .generator

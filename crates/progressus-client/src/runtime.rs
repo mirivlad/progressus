@@ -82,14 +82,28 @@ impl AuthoritativeClient {
         Ok(())
     }
 
+    pub(crate) fn spatial_snapshot(
+        &self,
+        chunks: Vec<ChunkCoord>,
+        include_terrain: bool,
+        include_ground_items: bool,
+        include_natural_resources: bool,
+    ) -> Result<ClientSnapshot, ClientError> {
+        Ok(self.application.snapshot(SnapshotQuery {
+            chunks,
+            include_terrain,
+            include_ground_items,
+            include_natural_resources,
+            ..SnapshotQuery::default()
+        })?)
+    }
+
+    #[cfg(test)]
     pub(crate) fn terrain_snapshot(
         &self,
         chunks: Vec<ChunkCoord>,
     ) -> Result<ClientSnapshot, ClientError> {
-        Ok(self.application.snapshot(SnapshotQuery {
-            chunks,
-            ..SnapshotQuery::default()
-        })?)
+        self.spatial_snapshot(chunks, true, true, true)
     }
 
     pub(crate) fn take_snapshot_dirty(&mut self) -> bool {
@@ -1272,6 +1286,34 @@ mod tests {
                 .exploration_revision,
             exploration_before
         );
+    }
+
+    #[test]
+    fn item_and_resource_revisions_do_not_rebuild_static_terrain() {
+        let mut app = presentation_app(AuthoritativeClient::new().unwrap());
+        app.world_mut().spawn((Camera2d, Transform::default()));
+        app.update();
+
+        let root_before = app
+            .world()
+            .resource::<PresentationCache>()
+            .terrain_root
+            .unwrap();
+        let children_before = terrain_children(&app, root_before);
+
+        {
+            let mut authoritative = app.world_mut().resource_mut::<AuthoritativeClient>();
+            authoritative.snapshot.item_revision =
+                authoritative.snapshot.item_revision.wrapping_add(1);
+            authoritative.snapshot.resource_revision =
+                authoritative.snapshot.resource_revision.wrapping_add(1);
+            authoritative.snapshot_dirty = true;
+        }
+        app.update();
+
+        let cache = app.world().resource::<PresentationCache>();
+        assert_eq!(cache.terrain_root, Some(root_before));
+        assert_eq!(terrain_children(&app, root_before), children_before);
     }
 
     #[test]

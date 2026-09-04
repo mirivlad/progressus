@@ -17,7 +17,7 @@ Every v3 new game has four guaranteed berry bushes near the starting clearing at
 
 Harvesting a BerryBush uses the ordinary `Harvest` job and creates an ordinary physical Berries ground stack. The bush then becomes unavailable for 512 authoritative simulation ticks instead of entering permanent depletion. Its regrowth deadline is authoritative sparse state keyed by world cell and participates in save/load and resource revision tracking.
 
-When a hungry character has no unreserved physical Berries available, nutrition maintenance may designate a reachable explored BerryBush for harvest. This does not create a special food-production shortcut: the designation enters the same Harvest scheduler, reserves an ordinary worker, requires travel/work, and only completion creates food. Existing player Harvest designations remain valid and use the same path.
+When a hungry character has no unreserved physical Berries available, nutrition maintenance may designate a reachable explored BerryBush for harvest. Autonomous foraging is deliberately bounded to the bootstrap settlement radius (Manhattan radius 8 around the initial clearing): it must not scan the entire explored world every tick or turn newly discovered wild bushes into a free scouting chain. Player Harvest designations remain unrestricted. The autonomous designation still enters the same Harvest scheduler, reserves an ordinary worker, requires travel/work, and only completion creates food.
 
 Ordinary Haul and stockpile acceptance handle harvested Berries without a food-specific storage mechanism. The small new-game Berries stack is reduced to 10 units and is only a startup buffer; long-run sustainability must come from renewable sources.
 

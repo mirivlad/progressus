@@ -217,13 +217,24 @@ pub(crate) fn sync_presentation(
         cache.zone_visible = Some(zones.visible);
     }
 
-    if cache.visible_window.as_ref() != Some(&current_window)
-        || cache.exploration_revision != Some(authoritative.snapshot().exploration_revision)
-        || cache.item_revision != Some(authoritative.snapshot().item_revision)
-        || cache.resource_revision != Some(authoritative.snapshot().resource_revision)
-    {
-        let terrain = match authoritative.terrain_snapshot(current_window.coordinates().to_vec()) {
-            Ok(terrain) => terrain,
+    let window_changed = cache.visible_window.as_ref() != Some(&current_window);
+    let exploration_changed =
+        cache.exploration_revision != Some(authoritative.snapshot().exploration_revision);
+    let item_changed = cache.item_revision != Some(authoritative.snapshot().item_revision);
+    let resource_changed =
+        cache.resource_revision != Some(authoritative.snapshot().resource_revision);
+    let refresh_terrain = window_changed || exploration_changed;
+    let refresh_items = window_changed || exploration_changed || item_changed;
+    let refresh_resources = window_changed || exploration_changed || resource_changed;
+
+    if refresh_terrain || refresh_items || refresh_resources {
+        let spatial = match authoritative.spatial_snapshot(
+            current_window.coordinates().to_vec(),
+            refresh_terrain,
+            refresh_items,
+            refresh_resources,
+        ) {
+            Ok(snapshot) => snapshot,
             Err(error) => {
                 error!("presentation sync failed: {error}");
                 return;
@@ -231,37 +242,40 @@ pub(crate) fn sync_presentation(
         };
 
         let render_origin = cache.render_origin.expect("origin was established above");
-        if let Some(previous_root) = cache.terrain_root {
-            commands.entity(previous_root).despawn();
+        if refresh_terrain {
+            if let Some(previous_root) = cache.terrain_root {
+                commands.entity(previous_root).despawn();
+            }
+            let new_root = {
+                let (images, registry) = procedural_assets.parts();
+                spawn_terrain(
+                    &mut commands,
+                    &spatial.chunks,
+                    render_origin,
+                    images,
+                    registry,
+                )
+            };
+            cache.terrain_root = Some(new_root);
+            position_characters(&mut commands, &authoritative, &cache, render_origin);
         }
-        let new_root = {
-            let (images, registry) = procedural_assets.parts();
-            spawn_terrain(
-                &mut commands,
-                &terrain.chunks,
-                render_origin,
-                images,
-                registry,
-            )
-        };
-        cache.terrain_root = Some(new_root);
-        {
+        if refresh_resources {
             let (images, registry) = procedural_assets.parts();
             sync_natural_resources(
                 &mut commands,
                 &mut cache,
-                &terrain.natural_resources,
+                &spatial.natural_resources,
                 render_origin,
                 images,
                 registry,
             );
         }
-        {
+        if refresh_items {
             let (images, registry) = procedural_assets.parts();
             sync_ground_items(
                 &mut commands,
                 &mut cache,
-                &terrain.ground_items,
+                &spatial.ground_items,
                 render_origin,
                 images,
                 registry,
@@ -269,10 +283,9 @@ pub(crate) fn sync_presentation(
         }
         cache.central_chunk = Some(current_center);
         cache.visible_window = Some(current_window);
-        cache.exploration_revision = Some(terrain.exploration_revision);
-        cache.item_revision = Some(terrain.item_revision);
-        cache.resource_revision = Some(terrain.resource_revision);
-        position_characters(&mut commands, &authoritative, &cache, render_origin);
+        cache.exploration_revision = Some(spatial.exploration_revision);
+        cache.item_revision = Some(spatial.item_revision);
+        cache.resource_revision = Some(spatial.resource_revision);
     }
 }
 
