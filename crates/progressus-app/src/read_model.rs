@@ -117,6 +117,7 @@ impl From<&Job> for JobSnapshot {
 pub struct StockpileSnapshot {
     pub id: EntityId,
     pub cells: Vec<WorldCell>,
+    pub disallowed_items: Vec<ItemKind>,
 }
 
 impl From<&Stockpile> for StockpileSnapshot {
@@ -124,6 +125,7 @@ impl From<&Stockpile> for StockpileSnapshot {
         Self {
             id: stockpile.id(),
             cells: stockpile.cells().collect(),
+            disallowed_items: stockpile.disallowed_items().collect(),
         }
     }
 }

@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{EntityId, WorldCell};
+use crate::{EntityId, ItemKind, WorldCell};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Stockpile {
     id: EntityId,
     cells: BTreeSet<WorldCell>,
+    disallowed_items: BTreeSet<ItemKind>,
 }
 
 impl Stockpile {
@@ -13,6 +14,7 @@ impl Stockpile {
         Self {
             id,
             cells: BTreeSet::from([first_cell]),
+            disallowed_items: BTreeSet::new(),
         }
     }
 
@@ -26,6 +28,14 @@ impl Stockpile {
 
     pub fn contains(&self, cell: WorldCell) -> bool {
         self.cells.contains(&cell)
+    }
+
+    pub fn accepts(&self, kind: ItemKind) -> bool {
+        !self.disallowed_items.contains(&kind)
+    }
+
+    pub fn disallowed_items(&self) -> impl ExactSizeIterator<Item = ItemKind> + '_ {
+        self.disallowed_items.iter().copied()
     }
 }
 
@@ -71,6 +81,27 @@ impl StockpileWorld {
         }
         self.stockpiles.insert(id, stockpile);
         self.bump_revision()?;
+        Ok(())
+    }
+
+    pub(crate) fn set_item_allowed(
+        &mut self,
+        stockpile_id: EntityId,
+        kind: ItemKind,
+        allowed: bool,
+    ) -> Result<(), StockpileWorldError> {
+        let stockpile = self
+            .stockpiles
+            .get_mut(&stockpile_id)
+            .ok_or(StockpileWorldError::UnknownStockpile(stockpile_id))?;
+        let changed = if allowed {
+            stockpile.disallowed_items.remove(&kind)
+        } else {
+            stockpile.disallowed_items.insert(kind)
+        };
+        if changed {
+            self.bump_revision()?;
+        }
         Ok(())
     }
 
@@ -159,6 +190,34 @@ mod tests {
 
     fn id(value: u64) -> EntityId {
         EntityId::new(value).unwrap()
+    }
+
+    #[test]
+    fn item_policy_defaults_to_allow_all_and_changes_revision_only_on_change() {
+        let mut world = StockpileWorld::default();
+        let stockpile_id = id(10);
+        world
+            .insert(Stockpile::new(stockpile_id, WorldCell::new(1, 2)))
+            .unwrap();
+        let revision = world.revision();
+        assert!(world.get(stockpile_id).unwrap().accepts(crate::ItemKind::Wood));
+        assert!(world.get(stockpile_id).unwrap().accepts(crate::ItemKind::Berries));
+
+        world
+            .set_item_allowed(stockpile_id, crate::ItemKind::Wood, false)
+            .unwrap();
+        assert!(!world.get(stockpile_id).unwrap().accepts(crate::ItemKind::Wood));
+        assert_eq!(world.revision(), revision + 1);
+
+        world
+            .set_item_allowed(stockpile_id, crate::ItemKind::Wood, false)
+            .unwrap();
+        assert_eq!(world.revision(), revision + 1);
+        world
+            .set_item_allowed(stockpile_id, crate::ItemKind::Wood, true)
+            .unwrap();
+        assert!(world.get(stockpile_id).unwrap().accepts(crate::ItemKind::Wood));
+        assert_eq!(world.revision(), revision + 2);
     }
 
     #[test]

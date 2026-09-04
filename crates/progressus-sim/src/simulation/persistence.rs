@@ -683,6 +683,8 @@ impl ItemSave {
 struct StockpileSave {
     id: u64,
     cells: Vec<CellSave>,
+    #[serde(default)]
+    disallowed_items: Vec<ItemKindSave>,
 }
 
 impl StockpileSave {
@@ -690,6 +692,7 @@ impl StockpileSave {
         Self {
             id: stockpile.id().value(),
             cells: stockpile.cells().map(Into::into).collect(),
+            disallowed_items: stockpile.disallowed_items().map(Into::into).collect(),
         }
     }
 }
@@ -1335,6 +1338,23 @@ fn restore_stockpiles(saved: Vec<StockpileSave>) -> Result<StockpileWorld, SaveE
             world
                 .set_cell(id, cell, true)
                 .map_err(|error| invalid_world_error("stockpile cell", error))?;
+        }
+        let mut disallowed_items = value
+            .disallowed_items
+            .into_iter()
+            .map(ItemKind::from)
+            .collect::<Vec<_>>();
+        disallowed_items.sort_unstable();
+        if disallowed_items.windows(2).any(|pair| pair[0] == pair[1]) {
+            return invalid(format!(
+                "stockpile {} contains duplicate item filters",
+                id.value()
+            ));
+        }
+        for kind in disallowed_items {
+            world
+                .set_item_allowed(id, kind, false)
+                .map_err(|error| invalid_world_error("stockpile policy", error))?;
         }
     }
     Ok(world)
@@ -2076,6 +2096,37 @@ mod tests {
                 .characters()
                 .all(|character| character.last_tick_motion_trace() == [character.position()])
         );
+    }
+
+    #[test]
+    fn stockpile_item_policy_round_trips_and_missing_policy_defaults_to_allow_all() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let stockpile_id = simulation.create_stockpile(WorldCell::new(-2, 0)).unwrap();
+        simulation
+            .set_stockpile_item_allowed(stockpile_id, ItemKind::Berries, false)
+            .unwrap();
+        let encoded = simulation.save_json().unwrap();
+        let restored = Simulation::load_json(&encoded).unwrap();
+        let stockpile = restored
+            .stockpiles()
+            .find(|stockpile| stockpile.id() == stockpile_id)
+            .unwrap();
+        assert!(!stockpile.accepts(ItemKind::Berries));
+        assert!(stockpile.accepts(ItemKind::Wood));
+
+        let mut json: Value = serde_json::from_slice(&encoded).unwrap();
+        json["stockpiles"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("disallowed_items");
+        let legacy = Simulation::load_json(&serde_json::to_vec(&json).unwrap()).unwrap();
+        let legacy_stockpile = legacy
+            .stockpiles()
+            .find(|stockpile| stockpile.id() == stockpile_id)
+            .unwrap();
+        assert!(ItemKind::ALL
+            .into_iter()
+            .all(|kind| legacy_stockpile.accepts(kind)));
     }
 
     #[test]

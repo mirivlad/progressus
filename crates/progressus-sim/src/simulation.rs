@@ -654,6 +654,42 @@ impl Simulation {
         Ok(id)
     }
 
+    pub fn set_stockpile_item_allowed(
+        &mut self,
+        stockpile_id: EntityId,
+        kind: ItemKind,
+        allowed: bool,
+    ) -> Result<(), SimulationError> {
+        if self.stockpile_world.get(stockpile_id).is_none() {
+            return Err(SimulationError::UnknownStockpile(stockpile_id));
+        }
+        if !allowed {
+            let jobs = self
+                .job_world
+                .iter()
+                .filter_map(|job| match job.kind() {
+                    JobKind::Haul {
+                        item_id,
+                        stockpile_id: destination_stockpile,
+                        ..
+                    } if destination_stockpile == stockpile_id
+                        && self.item_world.get(item_id).is_some_and(|item| item.kind() == kind) =>
+                    {
+                        Some(job.id())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            for job_id in jobs {
+                self.cancel_job(job_id)?;
+            }
+        }
+        self.stockpile_world
+            .set_item_allowed(stockpile_id, kind, allowed)
+            .map_err(SimulationError::from_stockpile_world)?;
+        Ok(())
+    }
+
     pub fn set_stockpile_cell(
         &mut self,
         stockpile_id: EntityId,
@@ -1393,6 +1429,16 @@ impl Simulation {
         let Some(item) = self.item_world.get(item_id) else {
             return false;
         };
+        let Some(stockpile_id) = self.stockpile_world.stockpile_at(destination) else {
+            return false;
+        };
+        if !self
+            .stockpile_world
+            .get(stockpile_id)
+            .is_some_and(|stockpile| stockpile.accepts(item.kind()))
+        {
+            return false;
+        }
         let mut occupants = self.item_world.iter().filter(|other| {
             other.id() != item_id
                 && other
@@ -1456,6 +1502,9 @@ impl Simulation {
         // even when only part of the source fits. The caller splits that
         // exact amount before creating the physical Haul job.
         for stockpile in self.stockpile_world.iter() {
+            if !stockpile.accepts(item.kind()) {
+                continue;
+            }
             for cell in stockpile.cells() {
                 if self.job_world.haul_job_for_destination(cell).is_some()
                     || !self.is_walkable(cell)?
@@ -1472,6 +1521,9 @@ impl Simulation {
             return Ok(None);
         }
         for stockpile in self.stockpile_world.iter() {
+            if !stockpile.accepts(item.kind()) {
+                continue;
+            }
             for cell in stockpile.cells() {
                 if self.job_world.haul_job_for_destination(cell).is_some()
                     || !self.is_walkable(cell)?
@@ -1985,7 +2037,11 @@ impl Simulation {
 
         for (item_id, source_cell) in available_ground_items {
             let source_stockpile = self.stockpile_world.stockpile_at(source_cell);
-            let destination = if source_stockpile.is_some() {
+            let source_accepts_item = source_stockpile
+                .and_then(|id| self.stockpile_world.get(id))
+                .zip(self.item_world.get(item_id))
+                .is_some_and(|(stockpile, item)| stockpile.accepts(item.kind()));
+            let destination = if source_accepts_item {
                 self.stockpile_consolidation_destination(item_id)?
             } else {
                 self.stockpile_destination_for_item(item_id, true)?
@@ -6094,6 +6150,51 @@ mod tests {
                 .unwrap(),
             Some((stockpile_id, target_cell, 10)),
         );
+    }
+
+    #[test]
+    fn stockpile_item_policy_filters_haul_destinations_and_moves_disallowed_contents_out() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        clear_all_items(&mut simulation);
+        let cells = empty_stockpile_cells(&simulation, 3);
+        let rejected = simulation.create_stockpile(cells[0]).unwrap();
+        let accepted = simulation.create_stockpile(cells[1]).unwrap();
+        simulation
+            .set_stockpile_item_allowed(rejected, ItemKind::Wood, false)
+            .unwrap();
+        let item_id = insert_ground_stack(&mut simulation, ItemKind::Wood, 4, cells[2]);
+
+        assert_eq!(
+            simulation
+                .stockpile_destination_for_item(item_id, true)
+                .unwrap()
+                .map(|(stockpile_id, cell, _)| (stockpile_id, cell)),
+            Some((accepted, cells[1]))
+        );
+
+        simulation
+            .item_world
+            .move_to_carried(item_id, cora())
+            .unwrap();
+        simulation
+            .item_world
+            .move_to_ground(
+                item_id,
+                cora(),
+                WorldPosition::from_cell_center(cells[0]).unwrap(),
+            )
+            .unwrap();
+        simulation.maintain_haul_jobs().unwrap();
+        assert!(simulation.jobs().any(|job| {
+            matches!(
+                job.kind(),
+                JobKind::Haul {
+                    item_id: hauled,
+                    stockpile_id,
+                    destination,
+                } if hauled == item_id && stockpile_id == accepted && destination == cells[1]
+            )
+        }));
     }
 
     #[test]

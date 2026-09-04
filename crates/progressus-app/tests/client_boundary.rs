@@ -288,7 +288,25 @@ fn stockpile_and_haul_cycle_cross_the_public_application_boundary() {
     let created = application.snapshot(SnapshotQuery::default()).unwrap();
     assert_eq!(created.stockpiles.len(), 1);
     assert_eq!(created.stockpiles[0].cells, vec![destination]);
+    assert!(created.stockpiles[0].disallowed_items.is_empty());
     let stockpile_id = created.stockpiles[0].id;
+    application
+        .execute(Command::SetStockpileItemAllowed {
+            stockpile_id,
+            kind: ItemKind::Wood,
+            allowed: false,
+        })
+        .unwrap();
+    let filtered = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert_eq!(filtered.stockpiles[0].disallowed_items, vec![ItemKind::Wood]);
+    assert!(filtered.stockpile_revision > created.stockpile_revision);
+    application
+        .execute(Command::SetStockpileItemAllowed {
+            stockpile_id,
+            kind: ItemKind::Wood,
+            allowed: true,
+        })
+        .unwrap();
     let item_id = EntityId::new(6).unwrap();
     let mut saw_transporting = false;
     let mut saw_carried = false;
@@ -670,14 +688,32 @@ fn physical_wall_construction_crosses_the_public_application_boundary() {
             .iter()
             .any(|structure| structure.id == site_id)
     );
-    assert!(
-        application
-            .execute(Command::MoveTo {
-                character_id: EntityId::new(3).unwrap(),
-                destination: WorldPosition::from_cell_center(cell).unwrap(),
-            })
-            .is_err()
-    );
+    let cora = EntityId::new(3).unwrap();
+    let destination = WorldPosition::from_cell_center(cell).unwrap();
+    application
+        .execute(Command::MoveTo {
+            character_id: cora,
+            destination,
+        })
+        .unwrap();
+    let navigation = application
+        .snapshot(SnapshotQuery {
+            navigation_for: Some(cora),
+            ..SnapshotQuery::default()
+        })
+        .unwrap()
+        .navigation;
+    if let Some(navigation) = navigation
+        && navigation.destination.is_some()
+    {
+        assert_eq!(navigation.destination, Some(destination));
+        assert!(
+            navigation
+                .remaining_waypoints
+                .iter()
+                .all(|waypoint| waypoint.containing_cell() != cell)
+        );
+    }
 }
 
 #[test]
@@ -790,7 +826,7 @@ fn selected_navigation_snapshot_is_detached_and_default_query_omits_route() {
 }
 
 #[test]
-fn rejected_move_to_keeps_the_selected_navigation_snapshot() {
+fn blocked_move_to_updates_selected_navigation_to_the_closest_approach() {
     let mut application = Application::new_game(NewGameOptions {
         seed: WorldSeed::new(2),
     })
@@ -826,15 +862,23 @@ fn rejected_move_to_keeps_the_selected_navigation_snapshot() {
         })
         .unwrap();
 
+    let blocked_destination = WorldPosition::from_cell_center(blocked).unwrap();
+    application
+        .execute(Command::MoveTo {
+            character_id: cora,
+            destination: blocked_destination,
+        })
+        .unwrap();
+    let after = application.snapshot(query).unwrap();
+    assert_ne!(after, before);
+    let navigation = after.navigation.unwrap();
+    assert_eq!(navigation.destination, Some(blocked_destination));
     assert!(
-        application
-            .execute(Command::MoveTo {
-                character_id: cora,
-                destination: WorldPosition::from_cell_center(blocked).unwrap(),
-            })
-            .is_err()
+        navigation
+            .remaining_waypoints
+            .iter()
+            .all(|waypoint| waypoint.containing_cell() != blocked)
     );
-    assert_eq!(application.snapshot(query).unwrap(), before);
 }
 
 #[test]

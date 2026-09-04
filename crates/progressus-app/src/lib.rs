@@ -8,7 +8,7 @@ use progressus_sim::{Simulation, SimulationError};
 pub use progressus_sim::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, ConstructionMaterialState, ConstructionSite,
     DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED, Direction, EntityId,
-    InteractionRadius, ItemKind, ItemLocation, ItemQuantity, JobKind, JobState, LocalCell,
+    InteractionRadius, ItemCategory, ItemKind, ItemLocation, ItemQuantity, JobKind, JobState, LocalCell,
     MAX_PRODUCTION_ORDER_RUNS, MAX_SATIETY, MovementSpeed, MovementState, NaturalResource,
     NaturalResourceKind, ProductionLogistics, ProductionOrder, ProductionTarget,
     ProductionZoneKind, RESIDENT_CHUNK_RADIUS, RESIDENT_CHUNKS_PER_CENTER, RecipeId,
@@ -57,6 +57,11 @@ pub enum Command {
         stockpile_id: EntityId,
         cell: WorldCell,
         enabled: bool,
+    },
+    SetStockpileItemAllowed {
+        stockpile_id: EntityId,
+        kind: ItemKind,
+        allowed: bool,
     },
     PlaceWorkstation {
         kind: WorkstationKind,
@@ -164,6 +169,13 @@ impl Application {
             } => self
                 .simulation
                 .set_stockpile_cell(stockpile_id, cell, enabled)?,
+            Command::SetStockpileItemAllowed {
+                stockpile_id,
+                kind,
+                allowed,
+            } => self
+                .simulation
+                .set_stockpile_item_allowed(stockpile_id, kind, allowed)?,
             Command::PlaceWorkstation { kind, cell } => {
                 self.simulation.place_workstation(kind, cell)?;
             }

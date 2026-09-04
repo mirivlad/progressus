@@ -13,6 +13,33 @@ pub enum ItemKind {
     Berries,
 }
 
+impl ItemKind {
+    pub const ALL: [Self; 4] = [Self::Wood, Self::Stone, Self::PrimitiveTool, Self::Berries];
+
+    pub const fn category(self) -> ItemCategory {
+        match self {
+            Self::Wood | Self::Stone => ItemCategory::Resources,
+            Self::Berries => ItemCategory::Food,
+            Self::PrimitiveTool => ItemCategory::Products,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ItemCategory {
+    Resources,
+    Food,
+    Products,
+}
+
+impl ItemCategory {
+    pub const ALL: [Self; 3] = [Self::Resources, Self::Food, Self::Products];
+
+    pub fn kinds(self) -> impl Iterator<Item = ItemKind> {
+        ItemKind::ALL.into_iter().filter(move |kind| kind.category() == self)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ItemQuantity(NonZeroU32);
 
