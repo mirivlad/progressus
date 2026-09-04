@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use progressus_app::{
     CHUNK_SIDE, CharacterSnapshot, ChunkCoord, ConstructionSiteSnapshot, EntityId,
@@ -1063,7 +1063,10 @@ fn world_translation(world_cell: WorldCell, origin: WorldCell, z: f32) -> Vec3 {
 
 pub(crate) fn camera_controls(
     keys: Res<ButtonInput<KeyCode>>,
+    buttons: Res<ButtonInput<MouseButton>>,
     time: Res<Time>,
+    tool: Res<ToolState>,
+    mut motion_events: MessageReader<MouseMotion>,
     mut wheel_events: MessageReader<MouseWheel>,
     mut cameras: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
 ) {
@@ -1080,6 +1083,9 @@ pub(crate) fn camera_controls(
     if keys.pressed(KeyCode::KeyD) {
         pan.x += 1.0;
     }
+    let mouse_drag = motion_events
+        .read()
+        .fold(Vec2::ZERO, |delta, event| delta + event.delta);
     let scroll = wheel_events
         .read()
         .map(|event| match event.unit {
@@ -1092,6 +1098,10 @@ pub(crate) fn camera_controls(
         transform.translation +=
             pan.normalize_or_zero().extend(0.0) * CAMERA_PAN_SPEED * time.delta_secs();
         if let Projection::Orthographic(orthographic) = &mut *projection {
+            if buttons.pressed(MouseButton::Middle) && !tool.pointer_over_ui {
+                transform.translation += Vec3::new(mouse_drag.x, -mouse_drag.y, 0.0)
+                    * orthographic.scale;
+            }
             orthographic.scale = (orthographic.scale * 0.9_f32.powf(scroll))
                 .clamp(MIN_CAMERA_SCALE, MAX_CAMERA_SCALE);
         }

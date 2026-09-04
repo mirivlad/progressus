@@ -159,6 +159,9 @@ pub(crate) fn pointer_navigation(
     if modal.is_open() {
         return;
     }
+    if buttons.pressed(MouseButton::Middle) || buttons.just_released(MouseButton::Middle) {
+        return;
+    }
     let tool_active = tool.mode != ToolMode::Select;
     let area_tool = tool.mode.uses_area_drag();
 
