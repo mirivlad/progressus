@@ -6,8 +6,8 @@ use bevy::image::ImageSampler;
 use bevy::prelude::{Assets, Handle, Image, ResMut, Resource, Sprite, Vec2};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use progressus_app::{
-    DoorState, EntityId, ItemKind, NaturalResourceKind, StructureKind, Terrain, WorkstationKind,
-    WorldCell,
+    CHUNK_SIDE, ChunkCoord, DoorState, EntityId, ItemKind, LocalCell, NaturalResourceKind,
+    StructureKind, Terrain, WorkstationKind, WorldCell,
 };
 
 use crate::tile_connectivity::{CardinalConnections, TerrainConnections};
@@ -245,7 +245,7 @@ fn render_quantity_image(quantity: u32) -> Image {
     canvas.into_image()
 }
 
-fn render_image(key: ProceduralAssetKey) -> Image {
+fn render_canvas(key: ProceduralAssetKey) -> Canvas {
     let mut canvas = Canvas::new(ART_PIXELS, ART_PIXELS);
     match key.kind {
         ProceduralAssetKind::Grass => asset_code::grass(&mut canvas, key.variant),
@@ -268,7 +268,50 @@ fn render_image(key: ProceduralAssetKey) -> Image {
         ProceduralAssetKind::StoneOutcrop => asset_code::stone_outcrop(&mut canvas, key.variant),
         ProceduralAssetKind::BerryBush => asset_code::berry_bush(&mut canvas, key.variant),
     }
-    canvas.into_image()
+    canvas
+}
+
+fn render_image(key: ProceduralAssetKey) -> Image {
+    render_canvas(key).into_image()
+}
+
+pub(crate) fn render_terrain_chunk_image(
+    coordinate: ChunkCoord,
+    known: &BTreeMap<WorldCell, Terrain>,
+) -> Image {
+    let side = u32::from(CHUNK_SIDE) * ART_PIXELS;
+    let mut chunk = Canvas::new(side, side);
+    for local_y in 0..CHUNK_SIDE {
+        for local_x in 0..CHUNK_SIDE {
+            let local = LocalCell::new(local_x, local_y);
+            let Some(cell) = coordinate.world_cell(local) else {
+                continue;
+            };
+            let Some(&terrain) = known.get(&cell) else {
+                continue;
+            };
+            let connections = TerrainConnections::from_known(cell, terrain, known);
+            let tile = if terrain == Terrain::Grass {
+                render_canvas(terrain_asset(terrain, cell, connections))
+            } else {
+                let mut underlay = render_canvas(terrain_asset(
+                    Terrain::Grass,
+                    cell,
+                    TerrainConnections::default(),
+                ));
+                let overlay = render_canvas(terrain_asset(terrain, cell, connections));
+                underlay.alpha_blit(&overlay, 0, 0);
+                underlay
+            };
+            // Image row zero is displayed at the top, while authoritative local-y
+            // grows upward. Flip chunk rows so one chunk sprite preserves the same
+            // world orientation as the previous per-cell sprites.
+            let pixel_x = u32::from(local_x) * ART_PIXELS;
+            let pixel_y = u32::from(CHUNK_SIDE - 1 - local_y) * ART_PIXELS;
+            chunk.alpha_blit(&tile, pixel_x, pixel_y);
+        }
+    }
+    chunk.into_image()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -387,6 +430,40 @@ impl Canvas {
             if doubled <= dx {
                 error += dx;
                 y0 += sy;
+            }
+        }
+    }
+
+    fn alpha_blit(&mut self, source: &Canvas, destination_x: u32, destination_y: u32) {
+        for source_y in 0..source.height {
+            for source_x in 0..source.width {
+                let target_x = destination_x + source_x;
+                let target_y = destination_y + source_y;
+                if target_x >= self.width || target_y >= self.height {
+                    continue;
+                }
+                let source_offset = ((source_y * source.width + source_x) * 4) as usize;
+                let alpha = source.pixels[source_offset + 3];
+                if alpha == 0 {
+                    continue;
+                }
+                let target_offset = ((target_y * self.width + target_x) * 4) as usize;
+                if alpha == 255 {
+                    self.pixels[target_offset..target_offset + 4]
+                        .copy_from_slice(&source.pixels[source_offset..source_offset + 4]);
+                    continue;
+                }
+                let a = u32::from(alpha);
+                let inverse = 255 - a;
+                for channel in 0..3 {
+                    let source_value = u32::from(source.pixels[source_offset + channel]);
+                    let target_value = u32::from(self.pixels[target_offset + channel]);
+                    self.pixels[target_offset + channel] =
+                        ((source_value * a + target_value * inverse + 127) / 255) as u8;
+                }
+                let target_alpha = u32::from(self.pixels[target_offset + 3]);
+                self.pixels[target_offset + 3] =
+                    (a + (target_alpha * inverse + 127) / 255).min(255) as u8;
             }
         }
     }
@@ -539,6 +616,47 @@ mod tests {
                 assert_eq!(rgba_at(&image, corner.0, corner.1), corner_color);
                 assert_eq!(rgba_at(&image, arc.0, arc.1), arc_color);
                 assert_ne!(alpha_at(&image, 8, 8), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn chunk_raster_matches_composited_per_cell_terrain_pixels() {
+        let coordinate = progressus_app::ChunkCoord::new(0, 0);
+        let cell = WorldCell::new(3, 4);
+        let known = [
+            (cell, Terrain::Water),
+            (WorldCell::new(3, 5), Terrain::Water),
+            (WorldCell::new(4, 4), Terrain::Water),
+            (WorldCell::new(4, 5), Terrain::Grass),
+        ]
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+        let chunk = super::render_terrain_chunk_image(coordinate, &known);
+        assert_eq!(chunk.texture_descriptor.size.width, 32 * 16);
+        assert_eq!(chunk.texture_descriptor.size.height, 32 * 16);
+
+        let connections = TerrainConnections::from_known(cell, Terrain::Water, &known);
+        let mut expected = super::render_canvas(terrain_asset(
+            Terrain::Grass,
+            cell,
+            TerrainConnections::default(),
+        ));
+        let overlay = super::render_canvas(terrain_asset(Terrain::Water, cell, connections));
+        expected.alpha_blit(&overlay, 0, 0);
+
+        let chunk_data = chunk.data.as_deref().unwrap();
+        let chunk_width = 32 * 16;
+        let base_x = 3 * 16;
+        let base_y = (31 - 4) * 16;
+        for y in 0..16 {
+            for x in 0..16 {
+                let chunk_offset = ((base_y + y) * chunk_width + base_x + x) * 4;
+                let tile_offset = (y * 16 + x) * 4;
+                assert_eq!(
+                    &chunk_data[chunk_offset..chunk_offset + 4],
+                    &expected.pixels[tile_offset..tile_offset + 4]
+                );
             }
         }
     }

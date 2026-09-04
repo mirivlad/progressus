@@ -16,11 +16,11 @@ use crate::presentation::{
 };
 use crate::procedural_assets::{
     ProceduralAssetParams, ProceduralAssetRegistry, character_asset, construction_site_asset,
-    item_asset, resource_asset, structure_asset, terrain_asset, workstation_asset,
+    item_asset, render_terrain_chunk_image, resource_asset, structure_asset, workstation_asset,
 };
 
 use crate::runtime::AuthoritativeClient;
-use crate::tile_connectivity::{CardinalConnections, TerrainConnections};
+use crate::tile_connectivity::CardinalConnections;
 use crate::ui::{SelectedStockpile, ToolMode, ToolState, ZoneVisibility};
 
 const CELL_SIZE: f32 = 12.0;
@@ -38,6 +38,16 @@ const PRESENTATION_CHUNK_MARGIN: i64 = 1;
 
 #[derive(Component)]
 pub(crate) struct TerrainRoot;
+
+#[derive(Component)]
+pub(crate) struct TerrainChunkVisual;
+
+#[derive(Clone)]
+pub(crate) struct TerrainChunkPresentation {
+    pub(crate) entity: Entity,
+    pub(crate) image: Handle<Image>,
+    pub(crate) fingerprint: u64,
+}
 
 #[derive(Component)]
 pub(crate) struct CharacterVisual {
@@ -71,6 +81,7 @@ pub(crate) struct PresentationCache {
     pub(crate) central_chunk: Option<ChunkCoord>,
     pub(crate) visible_window: Option<VisibleChunkWindow>,
     pub(crate) terrain_root: Option<Entity>,
+    pub(crate) terrain_chunks: BTreeMap<ChunkCoord, TerrainChunkPresentation>,
     pub(crate) exploration_revision: Option<u64>,
     pub(crate) item_revision: Option<u64>,
     pub(crate) resource_revision: Option<u64>,
@@ -243,20 +254,14 @@ pub(crate) fn sync_presentation(
 
         let render_origin = cache.render_origin.expect("origin was established above");
         if refresh_terrain {
-            if let Some(previous_root) = cache.terrain_root {
-                commands.entity(previous_root).despawn();
-            }
-            let new_root = {
-                let (images, registry) = procedural_assets.parts();
-                spawn_terrain(
-                    &mut commands,
-                    &spatial.chunks,
-                    render_origin,
-                    images,
-                    registry,
-                )
-            };
-            cache.terrain_root = Some(new_root);
+            let (images, _) = procedural_assets.parts();
+            sync_terrain_chunks(
+                &mut commands,
+                &mut cache,
+                &spatial.chunks,
+                render_origin,
+                images,
+            );
             position_characters(&mut commands, &authoritative, &cache, render_origin);
         }
         if refresh_resources {
@@ -334,13 +339,23 @@ fn camera_world_cell(x: f32, y: f32, origin: WorldCell) -> Option<WorldCell> {
     Some(WorldCell::new(x, y))
 }
 
-fn spawn_terrain(
+fn sync_terrain_chunks(
     commands: &mut Commands,
+    cache: &mut PresentationCache,
     chunks: &[progressus_app::ChunkSnapshot],
     origin: WorldCell,
     images: &mut Assets<Image>,
-    procedural_assets: &mut ProceduralAssetRegistry,
-) -> Entity {
+) {
+    let root = if let Some(root) = cache.terrain_root {
+        root
+    } else {
+        let root = commands
+            .spawn((TerrainRoot, Transform::default(), Visibility::default()))
+            .id();
+        cache.terrain_root = Some(root);
+        root
+    };
+
     let mut known = BTreeMap::<WorldCell, progressus_app::Terrain>::new();
     for chunk in chunks {
         for local_y in 0..CHUNK_SIDE {
@@ -358,47 +373,103 @@ fn spawn_terrain(
         }
     }
 
-    let mut root = commands.spawn((TerrainRoot, Transform::default(), Visibility::default()));
-    let root_id = root.id();
-    root.with_children(|parent| {
-        for (&world_cell, &terrain) in &known {
-            let connections = TerrainConnections::from_known(world_cell, terrain, &known);
-            if terrain != progressus_app::Terrain::Grass {
-                // Water and rock use transparent rounded corners. A deterministic
-                // Grass underlay keeps those pixels part of the explored terrain
-                // instead of exposing the world clear colour.
-                parent.spawn((
-                    procedural_assets.sprite(
-                        images,
-                        terrain_asset(
-                            progressus_app::Terrain::Grass,
-                            world_cell,
-                            TerrainConnections::default(),
-                        ),
-                        Vec2::splat(CELL_SIZE),
-                    ),
-                    Transform::from_translation(world_translation(world_cell, origin, TERRAIN_Z)),
-                ));
-            }
-            parent.spawn((
-                procedural_assets.sprite(
-                    images,
-                    terrain_asset(terrain, world_cell, connections),
-                    Vec2::splat(CELL_SIZE),
-                ),
-                Transform::from_translation(world_translation(
-                    world_cell,
-                    origin,
-                    if terrain == progressus_app::Terrain::Grass {
-                        TERRAIN_Z
-                    } else {
-                        TERRAIN_Z + 0.1
-                    },
-                )),
-            ));
+    let visible = chunks
+        .iter()
+        .map(|chunk| chunk.coordinate)
+        .collect::<BTreeSet<_>>();
+    let stale = cache
+        .terrain_chunks
+        .keys()
+        .copied()
+        .filter(|coordinate| !visible.contains(coordinate))
+        .collect::<Vec<_>>();
+    for coordinate in stale {
+        if let Some(previous) = cache.terrain_chunks.remove(&coordinate) {
+            commands.entity(previous.entity).despawn();
+            images.remove(previous.image.id());
         }
-    });
-    root_id
+    }
+
+    for chunk in chunks {
+        let coordinate = chunk.coordinate;
+        let fingerprint = terrain_chunk_fingerprint(coordinate, &known);
+        if let Some(previous) = cache.terrain_chunks.get_mut(&coordinate) {
+            commands
+                .entity(previous.entity)
+                .insert(terrain_chunk_transform(coordinate, origin));
+            if previous.fingerprint != fingerprint {
+                images
+                    .insert(
+                        previous.image.id(),
+                        render_terrain_chunk_image(coordinate, &known),
+                    )
+                    .expect("live terrain chunk image handle remains valid");
+                previous.fingerprint = fingerprint;
+            }
+            continue;
+        }
+
+        let image = images.add(render_terrain_chunk_image(coordinate, &known));
+        let mut sprite = Sprite::from_image(image.clone());
+        sprite.custom_size = Some(Vec2::splat(f32::from(CHUNK_SIDE) * CELL_SIZE));
+        let entity = commands
+            .spawn((
+                sprite,
+                terrain_chunk_transform(coordinate, origin),
+                TerrainChunkVisual,
+                ChildOf(root),
+            ))
+            .id();
+        cache.terrain_chunks.insert(
+            coordinate,
+            TerrainChunkPresentation {
+                entity,
+                image,
+                fingerprint,
+            },
+        );
+    }
+}
+
+fn terrain_chunk_transform(coordinate: ChunkCoord, origin: WorldCell) -> Transform {
+    let first = coordinate
+        .world_cell(LocalCell::new(0, 0))
+        .expect("renderable chunk origin has valid world coordinates");
+    let first_translation = world_translation(first, origin, TERRAIN_Z);
+    let center_offset = (f32::from(CHUNK_SIDE) - 1.0) * CELL_SIZE * 0.5;
+    Transform::from_xyz(
+        first_translation.x + center_offset,
+        first_translation.y + center_offset,
+        TERRAIN_Z,
+    )
+}
+
+fn terrain_chunk_fingerprint(
+    coordinate: ChunkCoord,
+    known: &BTreeMap<WorldCell, progressus_app::Terrain>,
+) -> u64 {
+    let first = coordinate
+        .world_cell(LocalCell::new(0, 0))
+        .expect("snapshotted chunk origin has valid world coordinates");
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let side = i64::from(CHUNK_SIDE);
+    for dy in -1..=side {
+        for dx in -1..=side {
+            let value = first
+                .x()
+                .checked_add(dx)
+                .zip(first.y().checked_add(dy))
+                .and_then(|(x, y)| known.get(&WorldCell::new(x, y)).copied())
+                .map_or(0_u8, |terrain| match terrain {
+                    progressus_app::Terrain::Grass => 1,
+                    progressus_app::Terrain::Water => 2,
+                    progressus_app::Terrain::Rock => 3,
+                });
+            hash ^= u64::from(value);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
 }
 
 fn sync_stockpile_zones(
@@ -1260,10 +1331,9 @@ mod tests {
     };
 
     use super::{
-        CHARACTER_Z, CHUNK_SIDE, GROUND_ITEM_Z, LocalCell, item_translation, spawn_terrain,
-        world_position_translation,
+        CHARACTER_Z, CHUNK_SIDE, GROUND_ITEM_Z, LocalCell, PresentationCache, item_translation,
+        sync_terrain_chunks, world_position_translation,
     };
-    use crate::procedural_assets::ProceduralAssetRegistry;
 
     #[test]
     fn terrain_root_has_visibility_for_sprite_children() {
@@ -1278,22 +1348,26 @@ mod tests {
             ],
         }];
         let mut images = Assets::<Image>::default();
-        let mut procedural_assets = ProceduralAssetRegistry::default();
-        let root = {
+        let mut cache = PresentationCache::default();
+        {
             let mut commands = bevy::prelude::Commands::new(&mut queue, &world);
-            spawn_terrain(
+            sync_terrain_chunks(
                 &mut commands,
+                &mut cache,
                 &chunks,
                 progressus_app::ChunkCoord::new(0, 0)
                     .world_cell(LocalCell::new(0, 0))
                     .unwrap(),
                 &mut images,
-                &mut procedural_assets,
-            )
-        };
+            );
+        }
         queue.apply(&mut world);
 
+        let root = cache.terrain_root.unwrap();
         assert!(world.entity(root).contains::<Visibility>());
+        assert_eq!(cache.terrain_chunks.len(), 1);
+        let chunk = cache.terrain_chunks.values().next().unwrap();
+        assert!(world.get_entity(chunk.entity).is_ok());
     }
 
     #[test]

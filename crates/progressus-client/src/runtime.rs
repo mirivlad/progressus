@@ -933,7 +933,6 @@ mod tests {
         sync_presentation,
     };
 
-    const TERRAIN_CELL_COUNT: usize = 9 * (CHUNK_SIDE as usize) * (CHUNK_SIDE as usize);
     const CROSSING_WALK_STEP_LIMIT: u64 = 1_024;
     const WALKER_DIRECTIONS: [Direction; 4] = [
         Direction::East,
@@ -1119,14 +1118,18 @@ mod tests {
     }
 
     #[test]
-    fn dirty_sync_rebuilds_terrain_only_after_authoritative_chunk_crossing() {
+    fn dirty_sync_updates_chunk_terrain_without_replacing_the_root() {
         let mut app = presentation_app(AuthoritativeClient::new().unwrap());
 
         app.update();
 
-        let initial_root = {
+        let (initial_root, initial_chunk_count, initial_window_count) = {
             let cache = app.world().resource::<PresentationCache>();
-            cache.terrain_root.unwrap()
+            (
+                cache.terrain_root.unwrap(),
+                cache.terrain_chunks.len(),
+                cache.visible_window.as_ref().unwrap().coordinates().len(),
+            )
         };
         let initial_children = terrain_children(&app, initial_root);
         assert_eq!(
@@ -1134,7 +1137,8 @@ mod tests {
             Some(ChunkCoord::new(0, 0))
         );
         assert!(!initial_children.is_empty());
-        assert!(initial_children.len() < TERRAIN_CELL_COUNT);
+        assert_eq!(initial_children.len(), initial_chunk_count);
+        assert!(initial_chunk_count <= initial_window_count);
 
         let crossing_from = {
             let mut authoritative = app.world_mut().resource_mut::<AuthoritativeClient>();
@@ -1204,16 +1208,22 @@ mod tests {
         assert_eq!(crossing_to, WorldCell::new(32, crossing_from.y()));
         let new_center = crossing_to.split().0;
         assert_eq!(new_center, ChunkCoord::new(1, crossing_center.y()));
-        let (new_root, characters) = {
+        let (new_root, characters, new_chunk_count, new_window_count) = {
             let cache = app.world().resource::<PresentationCache>();
             assert_eq!(cache.central_chunk, Some(ChunkCoord::new(0, 0)));
-            (cache.terrain_root.unwrap(), cache.characters.clone())
+            (
+                cache.terrain_root.unwrap(),
+                cache.characters.clone(),
+                cache.terrain_chunks.len(),
+                cache.visible_window.as_ref().unwrap().coordinates().len(),
+            )
         };
-        assert_ne!(new_root, root_before);
-        assert!(app.world().get_entity(root_before).is_err());
+        assert_eq!(new_root, root_before);
+        assert!(app.world().get_entity(root_before).is_ok());
         let new_children = terrain_children(&app, new_root);
         assert!(!new_children.is_empty());
-        assert!(new_children.len() < TERRAIN_CELL_COUNT);
+        assert_eq!(new_children.len(), new_chunk_count);
+        assert!(new_chunk_count <= new_window_count);
         let terrain_root_count = {
             let world = app.world_mut();
             let mut terrain_roots = world.query::<&TerrainRoot>();
@@ -1249,7 +1259,7 @@ mod tests {
     }
 
     #[test]
-    fn terrain_window_follows_camera_without_moving_or_selecting_cora() {
+    fn terrain_window_follows_camera_while_reusing_the_chunk_root() {
         let mut app = presentation_app(AuthoritativeClient::new().unwrap());
         let camera = app.world_mut().spawn((Camera2d, Transform::default())).id();
 
@@ -1276,7 +1286,7 @@ mod tests {
 
         let cache = app.world().resource::<PresentationCache>();
         assert_eq!(cache.central_chunk, Some(ChunkCoord::new(1, 0)));
-        assert_ne!(cache.terrain_root, Some(first_root));
+        assert_eq!(cache.terrain_root, Some(first_root));
         assert_eq!(character(&app, super::cora_id()), cora_before);
         assert_eq!(app.world().resource::<SelectedCharacter>().0, None);
         assert_eq!(
