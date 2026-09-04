@@ -15,6 +15,7 @@ Make natural terrain read as continuous lakes and mountain masses rather than st
 - Unknown neighbours must not reveal hidden terrain: an unknown neighbour is rendered as visually continuous until discovered.
 - Water edges gain shallow water, a narrow shore strip and rounded cardinal/diagonal corners.
 - Rock edges gain talus/soil/moss foothill treatment and rounded cardinal/diagonal corners.
+- Diagonal-only gaps between two connected cardinal neighbours use true concave alpha cutouts with transition bands, avoiding square internal-corner artifacts.
 
 ## Door mechanics
 

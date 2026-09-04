@@ -81,6 +81,7 @@ pub(super) fn water(canvas: &mut Canvas, variant: u8, connections: u8) {
         0,
         SHORE,
         SHORE_LIGHT,
+        SHALLOW,
     );
     shoreline_corner(
         canvas,
@@ -92,6 +93,7 @@ pub(super) fn water(canvas: &mut Canvas, variant: u8, connections: u8) {
         0,
         SHORE,
         SHORE_LIGHT,
+        SHALLOW,
     );
     shoreline_corner(
         canvas,
@@ -103,6 +105,7 @@ pub(super) fn water(canvas: &mut Canvas, variant: u8, connections: u8) {
         15,
         SHORE,
         SHORE_LIGHT,
+        SHALLOW,
     );
     shoreline_corner(
         canvas,
@@ -114,6 +117,7 @@ pub(super) fn water(canvas: &mut Canvas, variant: u8, connections: u8) {
         15,
         SHORE,
         SHORE_LIGHT,
+        SHALLOW,
     );
 
     let offset = i32::from(variant % 4);
@@ -134,6 +138,7 @@ fn shoreline_corner(
     y: i32,
     shore: Rgba8,
     light: Rgba8,
+    shallow: Rgba8,
 ) {
     let first_open = connections & first == 0;
     let second_open = connections & second == 0;
@@ -141,7 +146,7 @@ fn shoreline_corner(
     if first_open && second_open {
         rounded_external_corner(canvas, x, y, shore, light);
     } else if diagonal_open && !first_open && !second_open {
-        rounded_diagonal_notch(canvas, x, y, shore, light);
+        rounded_internal_corner(canvas, x, y, shore, light, shallow);
     }
 }
 
@@ -173,27 +178,34 @@ fn rounded_external_corner(
     }
 }
 
-fn rounded_diagonal_notch(
+fn rounded_internal_corner(
     canvas: &mut Canvas,
     corner_x: i32,
     corner_y: i32,
     edge: Rgba8,
     inner: Rgba8,
+    transition: Rgba8,
 ) {
+    // A diagonal-only opening is a concave terrain corner. Carve a real
+    // quarter-circle out of the overlay, then bridge back into the terrain
+    // with concentric transition bands. The previous tiny 2 px notch left
+    // square strip ends visible where two cardinal edges met.
     const TRANSPARENT: Rgba8 = Rgba8::rgba(0, 0, 0, 0);
-    let x_range = if corner_x == 0 { 0..=4 } else { 11..=15 };
-    let y_range = if corner_y == 0 { 0..=4 } else { 11..=15 };
+    let x_range = if corner_x == 0 { 0..=6 } else { 9..=15 };
+    let y_range = if corner_y == 0 { 0..=6 } else { 9..=15 };
     for py in y_range {
         for px in x_range.clone() {
             let dx = px - corner_x;
             let dy = py - corner_y;
             let distance = dx * dx + dy * dy;
-            if distance <= 4 {
+            if distance <= 9 {
                 canvas.pixel(px, py, TRANSPARENT);
-            } else if distance <= 10 {
-                canvas.pixel(px, py, edge);
             } else if distance <= 16 {
+                canvas.pixel(px, py, edge);
+            } else if distance <= 25 {
                 canvas.pixel(px, py, inner);
+            } else if distance <= 36 {
+                canvas.pixel(px, py, transition);
             }
         }
     }
@@ -333,7 +345,7 @@ fn foothill_corner(
         let inner_y = if y == 0 { 4 } else { 11 };
         canvas.pixel(inner_x, inner_y, moss);
     } else if diagonal_open && !first_open && !second_open {
-        rounded_diagonal_notch(canvas, x, y, soil, talus);
+        rounded_internal_corner(canvas, x, y, soil, talus, talus);
         let moss_x = if x == 0 { 3 } else { 12 };
         let moss_y = if y == 0 { 3 } else { 12 };
         canvas.pixel(moss_x, moss_y, moss);

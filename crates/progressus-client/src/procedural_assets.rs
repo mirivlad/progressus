@@ -493,6 +493,37 @@ mod tests {
     }
 
     #[test]
+    fn water_and_rock_concave_corners_are_transparent_rounded_cutouts() {
+        let center = WorldCell::new(0, 0);
+        let cases = [
+            ((0, 1), (-1, 0), (-1, 1), (0, 0), (4, 0)),
+            ((0, 1), (1, 0), (1, 1), (15, 0), (11, 0)),
+            ((0, -1), (1, 0), (1, -1), (15, 15), (11, 15)),
+            ((0, -1), (-1, 0), (-1, -1), (0, 15), (4, 15)),
+        ];
+        for terrain in [Terrain::Water, Terrain::Rock] {
+            for (first, second, diagonal, corner, arc) in cases {
+                let known = [
+                    (center, terrain),
+                    (WorldCell::new(first.0, first.1), terrain),
+                    (WorldCell::new(second.0, second.1), terrain),
+                    (WorldCell::new(diagonal.0, diagonal.1), Terrain::Grass),
+                ]
+                .into_iter()
+                .collect::<BTreeMap<_, _>>();
+                let image = render_image(terrain_asset(
+                    terrain,
+                    center,
+                    TerrainConnections::from_known(center, terrain, &known),
+                ));
+                assert_eq!(alpha_at(&image, corner.0, corner.1), 0);
+                assert_ne!(alpha_at(&image, arc.0, arc.1), 0);
+                assert_ne!(alpha_at(&image, 8, 8), 0);
+            }
+        }
+    }
+
+    #[test]
     fn wall_raster_reaches_only_the_requested_cardinal_edges() {
         let center = WorldCell::new(0, 0);
         let north_cells = [center, WorldCell::new(0, 1)]
