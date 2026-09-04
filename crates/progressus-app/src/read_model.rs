@@ -276,6 +276,7 @@ pub struct CharacterSnapshot {
     pub name: String,
     pub position: WorldPosition,
     pub containing_cell: WorldCell,
+    pub satiety: u8,
     pub movement: MovementState,
     pub last_tick_motion_trace: Vec<WorldPosition>,
 }
@@ -287,6 +288,7 @@ impl From<&Character> for CharacterSnapshot {
             name: character.name().to_owned(),
             position: character.position(),
             containing_cell: character.position().containing_cell(),
+            satiety: character.satiety(),
             movement: character.movement(),
             last_tick_motion_trace: character.last_tick_motion_trace().to_vec(),
         }

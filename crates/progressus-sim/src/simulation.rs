@@ -23,14 +23,14 @@ use crate::stockpile::{StockpileWorld, StockpileWorldError};
 use crate::workstation::{WorkstationWorld, WorkstationWorldError};
 use crate::world_state::ModifiedWorld;
 use crate::{
-    CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, ConstructionMaterialState,
-    ConstructionSite, Direction, EffectiveChunk, EntityId, GeneratedChunk, HARVEST_WORK_TICKS,
-    InteractionRadius, ItemKind, ItemLocation, ItemQuantity, ItemStack, Job, JobKind, JobState,
-    LocalCell, MAX_STACK_QUANTITY, MovementState, NaturalResource, NaturalResourceKind,
-    ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind, RecipeId,
-    SimulationTick, Stockpile, Structure, StructureKind, Terrain, Workstation, WorkstationKind,
-    WorldCell, WorldPosition, WorldPositionError, WorldSeed, WorldgenVersion, recipe_definition,
-    within_interaction_range,
+    BERRIES_MEAL_SATIETY, CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord,
+    ConstructionMaterialState, ConstructionSite, Direction, EAT_WORK_TICKS, EffectiveChunk,
+    EntityId, GeneratedChunk, HARVEST_WORK_TICKS, InteractionRadius, ItemKind, ItemLocation,
+    ItemQuantity, ItemStack, Job, JobKind, JobState, LocalCell, MAX_STACK_QUANTITY, MovementState,
+    NaturalResource, NaturalResourceKind, ProductionLogistics, ProductionOrder, ProductionTarget,
+    ProductionZoneKind, RecipeId, SATIETY_DECAY_INTERVAL_TICKS, SimulationTick, Stockpile,
+    Structure, StructureKind, Terrain, Workstation, WorkstationKind, WorldCell, WorldPosition,
+    WorldPositionError, WorldSeed, WorldgenVersion, recipe_definition, within_interaction_range,
 };
 
 const INITIAL_CHARACTERS: [(&str, i64); 5] = [
@@ -109,6 +109,40 @@ impl Simulation {
         for character in characters.values() {
             explored_world.reveal_around(character.position().containing_cell());
         }
+        let occupied_cells = characters
+            .values()
+            .map(|character| character.position().containing_cell())
+            .chain(
+                item_world
+                    .iter()
+                    .filter_map(ItemStack::ground_position)
+                    .map(WorldPosition::containing_cell),
+            )
+            .collect::<BTreeSet<_>>();
+        let berries_cell = explored_world
+            .cells()
+            .filter(|cell| !occupied_cells.contains(cell))
+            .filter(|cell| i128::from(cell.x()).abs() > 2 || i128::from(cell.y()).abs() > 2)
+            .filter(|cell| generator.terrain_at(*cell) == Terrain::Grass)
+            .filter(|cell| generator.natural_resource_at(*cell).is_none())
+            .min_by_key(|cell| {
+                (
+                    i128::from(cell.x()).abs() + i128::from(cell.y()).abs(),
+                    cell.x(),
+                    cell.y(),
+                )
+            })
+            .ok_or(SimulationError::NoBootstrapFoodCell)?;
+        let berries_id = id_allocator.allocate()?;
+        item_world
+            .insert_ground(ItemStack::new_ground(
+                berries_id,
+                ItemKind::Berries,
+                ItemQuantity::new(700).expect("bootstrap food quantity is within stack capacity"),
+                WorldPosition::from_cell_center(berries_cell)?,
+            ))
+            .expect("bootstrap food ID is unique and starts on the ground");
+
         let last_discovery_cells = characters
             .iter()
             .map(|(id, character)| (*id, character.position().containing_cell()))
@@ -186,6 +220,8 @@ impl Simulation {
         for _ in 0..count {
             self.clock.advance(1)?;
             self.advance_characters_one_tick()?;
+            self.decay_satiety_if_due();
+            self.maintain_nutrition_jobs()?;
             self.maintain_construction_jobs()?;
             self.maintain_craft_jobs()?;
             self.maintain_craft_supply_jobs()?;
@@ -194,6 +230,148 @@ impl Simulation {
             self.reconcile_chunk_residency()?;
         }
 
+        Ok(())
+    }
+
+    fn decay_satiety_if_due(&mut self) {
+        if self.clock.tick().value() % SATIETY_DECAY_INTERVAL_TICKS != 0 {
+            return;
+        }
+        for character in self.characters.values_mut() {
+            character.decay_satiety();
+        }
+    }
+
+    fn maintain_nutrition_jobs(&mut self) -> Result<(), SimulationError> {
+        let eat_jobs = self
+            .job_world
+            .iter()
+            .filter_map(|job| matches!(job.kind(), JobKind::Eat { .. }).then_some(job.id()))
+            .collect::<Vec<_>>();
+        for job_id in eat_jobs {
+            let Some(job) = self.job_world.get(job_id).cloned() else {
+                continue;
+            };
+            let JobKind::Eat {
+                character_id,
+                item_id,
+            } = job.kind()
+            else {
+                continue;
+            };
+            let valid_character = self
+                .characters
+                .get(&character_id)
+                .is_some_and(Character::is_hungry);
+            let valid_food = self.item_world.get(item_id).is_some_and(|item| {
+                item.kind() == ItemKind::Berries && item.ground_position().is_some()
+            });
+            if !valid_character || !valid_food {
+                self.cancel_job(job_id)?;
+            }
+        }
+
+        let character_ids = self.characters.keys().copied().collect::<Vec<_>>();
+        for character_id in character_ids {
+            let Some(character) = self.characters.get(&character_id) else {
+                continue;
+            };
+            if !character.is_hungry()
+                || self.job_world.eat_job_for_character(character_id).is_some()
+            {
+                continue;
+            }
+
+            let current_job = self.job_world.job_for_worker(character_id);
+            if current_job.is_none() && character.movement() != MovementState::Idle {
+                continue;
+            }
+
+            let character_cell = character.position().containing_cell();
+            let mut candidates = self
+                .item_world
+                .iter()
+                .filter_map(|item| {
+                    let position = item.ground_position()?;
+                    (item.kind() == ItemKind::Berries
+                        && self.is_explored(position.containing_cell())
+                        && self.job_world.item_job_for_item(item.id()).is_none())
+                    .then_some((
+                        cell_manhattan_distance(character_cell, position.containing_cell()),
+                        item.id(),
+                        position,
+                        item.quantity().get(),
+                    ))
+                })
+                .collect::<Vec<_>>();
+            candidates.sort_unstable_by_key(|(distance, item_id, ..)| (*distance, *item_id));
+
+            let mut chosen = None;
+            for (_, item_id, position, quantity) in candidates {
+                let route = match self.plan_navigation_route(character_id, position) {
+                    Ok(route) => route,
+                    Err(
+                        SimulationError::MoveToDestinationBlocked(_)
+                        | SimulationError::MoveToDestinationUndiscovered(_)
+                        | SimulationError::MoveToPathNotFound
+                        | SimulationError::MoveToSearchBudgetExceeded,
+                    ) => continue,
+                    Err(error) => return Err(error),
+                };
+                chosen = Some((item_id, position, quantity, route));
+                break;
+            }
+
+            let Some((source_item_id, position, quantity, route)) = chosen else {
+                if self
+                    .characters
+                    .get(&character_id)
+                    .is_some_and(Character::is_starving)
+                    && current_job.is_some()
+                {
+                    self.interrupt_worker_job(character_id)?;
+                    self.characters
+                        .get_mut(&character_id)
+                        .expect("starving character is still present")
+                        .set_movement(MovementState::Idle);
+                }
+                continue;
+            };
+
+            if current_job.is_some() {
+                self.interrupt_worker_job(character_id)?;
+            }
+
+            let meal_item_id = if quantity > 1 {
+                let split_id = self.id_allocator.allocate()?;
+                self.item_world
+                    .split_ground_stack(source_item_id, split_id, 1)
+                    .map_err(|_| SimulationError::JobInvariantViolation)?;
+                split_id
+            } else {
+                source_item_id
+            };
+            debug_assert_eq!(
+                self.item_world
+                    .get(meal_item_id)
+                    .and_then(ItemStack::ground_position),
+                Some(position)
+            );
+            let job_id = self.id_allocator.allocate()?;
+            self.job_world
+                .insert(Job::new(
+                    job_id,
+                    JobKind::Eat {
+                        character_id,
+                        item_id: meal_item_id,
+                    },
+                ))
+                .map_err(SimulationError::from_job_world)?;
+            self.job_world
+                .reserve_worker(job_id, character_id)
+                .map_err(SimulationError::from_job_world)?;
+            self.apply_navigation_route(character_id, position, route);
+        }
         Ok(())
     }
 
@@ -418,7 +596,10 @@ impl Simulation {
                 JobKind::Haul { item_id, .. }
                 | JobKind::SupplyProduction { item_id, .. }
                 | JobKind::DeliverConstruction { item_id, .. } => Some(item_id),
-                JobKind::Harvest { .. } | JobKind::Craft { .. } | JobKind::Construct { .. } => None,
+                JobKind::Harvest { .. }
+                | JobKind::Eat { .. }
+                | JobKind::Craft { .. }
+                | JobKind::Construct { .. } => None,
             };
             if let Some(item_id) = item_id {
                 let position = self
@@ -1122,12 +1303,19 @@ impl Simulation {
             .get(job_id)
             .cloned()
             .ok_or(SimulationError::UnknownJob(job_id))?;
+        if matches!(job.kind(), JobKind::Eat { .. }) {
+            self.cancel_job(job_id)?;
+            return Ok(());
+        }
         if let JobState::Transporting { .. } = job.state() {
             let item_id = match job.kind() {
                 JobKind::Haul { item_id, .. }
                 | JobKind::SupplyProduction { item_id, .. }
                 | JobKind::DeliverConstruction { item_id, .. } => Some(item_id),
-                JobKind::Harvest { .. } | JobKind::Craft { .. } | JobKind::Construct { .. } => None,
+                JobKind::Harvest { .. }
+                | JobKind::Eat { .. }
+                | JobKind::Craft { .. }
+                | JobKind::Construct { .. } => None,
             };
             if let Some(item_id) = item_id {
                 let position = self
@@ -1398,8 +1586,7 @@ impl Simulation {
                 (item.kind() == site.kind().material_kind()
                     && item.quantity().get() >= site.kind().material_quantity()
                     && self.is_explored(position.containing_cell())
-                    && self.job_world.logistics_job_for_item(item.id()).is_none()
-                    && self.job_world.craft_job_for_item(item.id()).is_none()
+                    && self.job_world.item_job_for_item(item.id()).is_none()
                     && self
                         .construction_world
                         .site_for_material(item.id())
@@ -1462,8 +1649,7 @@ impl Simulation {
         self.item_world
             .iter()
             .filter(|item| item.kind() == kind)
-            .filter(|item| self.job_world.logistics_job_for_item(item.id()).is_none())
-            .filter(|item| self.job_world.craft_job_for_item(item.id()).is_none())
+            .filter(|item| self.job_world.item_job_for_item(item.id()).is_none())
             .filter(|item| {
                 self.construction_world
                     .site_for_material(item.id())
@@ -1523,11 +1709,7 @@ impl Simulation {
                     [] => !merge_only,
                     [existing] => {
                         existing.kind() == item_kind
-                            && self
-                                .job_world
-                                .logistics_job_for_item(existing.id())
-                                .is_none()
-                            && self.job_world.craft_job_for_item(existing.id()).is_none()
+                            && self.job_world.item_job_for_item(existing.id()).is_none()
                             && self
                                 .construction_world
                                 .site_for_material(existing.id())
@@ -1559,8 +1741,7 @@ impl Simulation {
             .iter()
             .filter_map(|item| {
                 if item.kind() != kind
-                    || self.job_world.logistics_job_for_item(item.id()).is_some()
-                    || self.job_world.craft_job_for_item(item.id()).is_some()
+                    || self.job_world.item_job_for_item(item.id()).is_some()
                     || self
                         .construction_world
                         .site_for_material(item.id())
@@ -1698,6 +1879,7 @@ impl Simulation {
             .filter_map(|job| match job.kind() {
                 JobKind::Haul { .. } => Some(job.id()),
                 JobKind::Harvest { .. }
+                | JobKind::Eat { .. }
                 | JobKind::Craft { .. }
                 | JobKind::SupplyProduction { .. }
                 | JobKind::DeliverConstruction { .. }
@@ -1743,8 +1925,7 @@ impl Simulation {
             .filter_map(|item| {
                 let position = item.ground_position()?;
                 (self.is_explored(position.containing_cell())
-                    && self.job_world.logistics_job_for_item(item.id()).is_none()
-                    && self.job_world.craft_job_for_item(item.id()).is_none()
+                    && self.job_world.item_job_for_item(item.id()).is_none()
                     && !self.item_is_local_input_for_waiting_craft(item.id())
                     && self
                         .construction_world
@@ -1874,6 +2055,10 @@ impl Simulation {
     fn try_assign_job(&mut self, job_id: EntityId, kind: JobKind) -> Result<(), SimulationError> {
         match kind {
             JobKind::Harvest { source } => self.try_assign_harvest(job_id, source),
+            JobKind::Eat {
+                character_id,
+                item_id,
+            } => self.try_assign_eat(job_id, character_id, item_id),
             JobKind::Haul {
                 item_id,
                 stockpile_id,
@@ -1902,6 +2087,7 @@ impl Simulation {
             .values()
             .filter(|character| {
                 character.movement() == MovementState::Idle
+                    && !character.is_starving()
                     && self.job_world.job_for_worker(character.id()).is_none()
                     && !self
                         .item_world
@@ -1917,6 +2103,47 @@ impl Simulation {
             .collect::<Vec<_>>();
         candidates.sort_unstable();
         candidates.into_iter().map(|(_, id)| id).collect()
+    }
+
+    fn try_assign_eat(
+        &mut self,
+        job_id: EntityId,
+        character_id: EntityId,
+        item_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        let Some(character) = self.characters.get(&character_id) else {
+            self.cancel_job(job_id)?;
+            return Ok(());
+        };
+        if !character.is_hungry()
+            || character.movement() != MovementState::Idle
+            || self.job_world.job_for_worker(character_id).is_some()
+        {
+            return Ok(());
+        }
+        let Some(item_position) = self.item_world.get(item_id).and_then(|item| {
+            (item.kind() == ItemKind::Berries)
+                .then(|| item.ground_position())
+                .flatten()
+        }) else {
+            self.cancel_job(job_id)?;
+            return Ok(());
+        };
+        let route = match self.plan_navigation_route(character_id, item_position) {
+            Ok(route) => route,
+            Err(
+                SimulationError::MoveToDestinationBlocked(_)
+                | SimulationError::MoveToDestinationUndiscovered(_)
+                | SimulationError::MoveToPathNotFound
+                | SimulationError::MoveToSearchBudgetExceeded,
+            ) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        self.job_world
+            .reserve_worker(job_id, character_id)
+            .map_err(SimulationError::from_job_world)?;
+        self.apply_navigation_route(character_id, item_position, route);
+        Ok(())
     }
 
     fn try_assign_harvest(
@@ -2217,8 +2444,7 @@ impl Simulation {
             for item in self.item_world.iter() {
                 if selected.contains(&item.id())
                     || item.kind() != requirement.kind
-                    || self.job_world.logistics_job_for_item(item.id()).is_some()
-                    || self.job_world.craft_job_for_item(item.id()).is_some()
+                    || self.job_world.item_job_for_item(item.id()).is_some()
                     || self
                         .construction_world
                         .site_for_material(item.id())
@@ -2350,6 +2576,50 @@ impl Simulation {
                         .set_movement(MovementState::Idle);
                     self.job_world
                         .start_working(job_id, HARVEST_WORK_TICKS)
+                        .map_err(SimulationError::from_job_world)?;
+                } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                }
+            }
+            JobKind::Eat {
+                character_id,
+                item_id,
+            } => {
+                if character_id != worker_id
+                    || !self
+                        .characters
+                        .get(&character_id)
+                        .is_some_and(Character::is_hungry)
+                {
+                    self.cancel_job(job_id)?;
+                    return Ok(());
+                }
+                let Some(item_position) = self.item_world.get(item_id).and_then(|item| {
+                    (item.kind() == ItemKind::Berries)
+                        .then(|| item.ground_position())
+                        .flatten()
+                }) else {
+                    self.cancel_job(job_id)?;
+                    return Ok(());
+                };
+                let character = self
+                    .characters
+                    .get(&worker_id)
+                    .expect("eat worker was validated above");
+                if within_interaction_range(
+                    character.position(),
+                    character.interaction_radius(),
+                    item_position,
+                    InteractionRadius::zero(),
+                ) {
+                    self.characters
+                        .get_mut(&worker_id)
+                        .expect("eat worker is still present")
+                        .set_movement(MovementState::Idle);
+                    self.job_world
+                        .start_working(job_id, EAT_WORK_TICKS)
                         .map_err(SimulationError::from_job_world)?;
                 } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
                     self.job_world
@@ -2793,7 +3063,10 @@ impl Simulation {
                         .map_err(SimulationError::from_job_world)?;
                 }
             }
-            JobKind::Harvest { .. } | JobKind::Craft { .. } | JobKind::Construct { .. } => {
+            JobKind::Harvest { .. }
+            | JobKind::Eat { .. }
+            | JobKind::Craft { .. }
+            | JobKind::Construct { .. } => {
                 return Err(SimulationError::JobInvariantViolation);
             }
         }
@@ -2826,6 +3099,59 @@ impl Simulation {
                     return Ok(());
                 }
                 self.complete_harvest(job_id, worker_id, source, resource)?;
+            }
+            JobKind::Eat {
+                character_id,
+                item_id,
+            } => {
+                if character_id != worker_id {
+                    return Err(SimulationError::JobInvariantViolation);
+                }
+                let Some(character) = self.characters.get(&character_id) else {
+                    self.job_world
+                        .remove(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                };
+                let Some(item_position) = self.item_world.get(item_id).and_then(|item| {
+                    (item.kind() == ItemKind::Berries)
+                        .then(|| item.ground_position())
+                        .flatten()
+                }) else {
+                    self.cancel_job(job_id)?;
+                    return Ok(());
+                };
+                if !within_interaction_range(
+                    character.position(),
+                    character.interaction_radius(),
+                    item_position,
+                    InteractionRadius::zero(),
+                ) {
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                }
+                if remaining_ticks > 1 {
+                    self.job_world
+                        .set_remaining_work(job_id, remaining_ticks - 1)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                }
+                self.item_world
+                    .consume(item_id, 1)
+                    .map_err(|_| SimulationError::JobInvariantViolation)?;
+                self.characters
+                    .get_mut(&character_id)
+                    .expect("eat worker is still present")
+                    .restore_satiety(BERRIES_MEAL_SATIETY);
+                self.job_world
+                    .remove(job_id)
+                    .map_err(SimulationError::from_job_world)?;
+                self.characters
+                    .get_mut(&character_id)
+                    .expect("eat worker is still present")
+                    .set_movement(MovementState::Idle);
             }
             JobKind::Haul { .. } | JobKind::SupplyProduction { .. } => {
                 return Err(SimulationError::JobInvariantViolation);
@@ -3476,6 +3802,7 @@ pub enum SimulationError {
     EntityIdExhausted,
     DuplicateEntityId(EntityId),
     SpawnNotWalkable(WorldCell),
+    NoBootstrapFoodCell,
     UnknownCharacter(EntityId),
     UnknownItem(EntityId),
     UnknownJob(EntityId),
@@ -3574,6 +3901,8 @@ impl SimulationError {
             }
             JobWorldError::RevisionOverflow => Self::JobRevisionOverflow,
             JobWorldError::DuplicateJob(_)
+            | JobWorldError::EatCharacterAlreadyDesignated(_)
+            | JobWorldError::EatItemAlreadyReserved(_)
             | JobWorldError::HaulItemAlreadyReserved(_)
             | JobWorldError::HaulDestinationAlreadyReserved(_)
             | JobWorldError::ProductionSupplyItemAlreadyReserved(_)
@@ -3684,6 +4013,9 @@ impl Display for SimulationError {
                 position.x(),
                 position.y()
             ),
+            Self::NoBootstrapFoodCell => {
+                formatter.write_str("no free explored grass cell is available for bootstrap food")
+            }
             Self::UnknownCharacter(id) => write!(formatter, "unknown character ID {}", id.value()),
             Self::UnknownItem(id) => write!(formatter, "unknown item ID {}", id.value()),
             Self::UnknownJob(id) => write!(formatter, "unknown job ID {}", id.value()),
@@ -4006,10 +4338,190 @@ impl From<WorldPositionError> for SimulationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Direction, MovementSpeed, MovementState};
+    use crate::{Direction, HUNGRY_SATIETY, MAX_SATIETY, MovementSpeed, MovementState};
 
     fn cora() -> EntityId {
         EntityId::new(3).unwrap()
+    }
+
+    fn set_satiety(simulation: &mut Simulation, character_id: EntityId, target: u8) {
+        let character = simulation.characters.get_mut(&character_id).unwrap();
+        while character.satiety() > target {
+            character.decay_satiety();
+        }
+        if character.satiety() < target {
+            character.restore_satiety(target - character.satiety());
+        }
+    }
+
+    fn total_berries(simulation: &Simulation) -> u32 {
+        simulation
+            .items()
+            .filter(|item| item.kind() == ItemKind::Berries)
+            .map(|item| item.quantity().get())
+            .sum()
+    }
+
+    #[test]
+    fn satiety_decays_only_on_the_global_interval() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let cora = cora();
+        simulation
+            .advance_ticks(SATIETY_DECAY_INTERVAL_TICKS - 1)
+            .unwrap();
+        assert_eq!(character(&simulation, cora).satiety(), MAX_SATIETY);
+
+        simulation.advance_ticks(1).unwrap();
+        assert_eq!(character(&simulation, cora).satiety(), MAX_SATIETY - 1);
+    }
+
+    #[test]
+    fn hungry_characters_split_exact_physical_meals_and_eat_concurrently() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let ada = EntityId::new(1).unwrap();
+        let borin = EntityId::new(2).unwrap();
+        set_satiety(&mut simulation, ada, HUNGRY_SATIETY);
+        set_satiety(&mut simulation, borin, HUNGRY_SATIETY);
+        assert_eq!(total_berries(&simulation), 700);
+
+        simulation.advance_ticks(1).unwrap();
+        let eat_jobs = simulation
+            .jobs()
+            .filter_map(|job| match job.kind() {
+                JobKind::Eat {
+                    character_id,
+                    item_id,
+                } => Some((character_id, item_id, job.state())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(eat_jobs.len(), 2);
+        assert!(eat_jobs.iter().all(|(_, item_id, state)| {
+            simulation
+                .item_world
+                .get(*item_id)
+                .is_some_and(|item| item.kind() == ItemKind::Berries && item.quantity().get() == 1)
+                && matches!(state, JobState::Reserved { .. } | JobState::Working { .. })
+        }));
+        assert_eq!(total_berries(&simulation), 700);
+
+        for _ in 0..256 {
+            simulation.advance_ticks(1).unwrap();
+            if simulation.job_world.eat_job_for_character(ada).is_none()
+                && simulation.job_world.eat_job_for_character(borin).is_none()
+            {
+                break;
+            }
+        }
+        assert!(character(&simulation, ada).satiety() > HUNGRY_SATIETY);
+        assert!(character(&simulation, borin).satiety() > HUNGRY_SATIETY);
+        assert!(character(&simulation, ada).satiety() <= MAX_SATIETY);
+        assert!(character(&simulation, borin).satiety() <= MAX_SATIETY);
+        assert_eq!(total_berries(&simulation), 698);
+        assert!(simulation.job_world.indexes_are_consistent());
+        assert!(simulation.item_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn one_berry_restores_exactly_fifty_satiety_at_completion() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let cora = cora();
+        let food_position = simulation
+            .items()
+            .find(|item| item.kind() == ItemKind::Berries)
+            .and_then(ItemStack::ground_position)
+            .unwrap();
+        place_on_grass(&mut simulation, cora, food_position.containing_cell());
+        set_satiety(&mut simulation, cora, HUNGRY_SATIETY);
+
+        simulation.advance_ticks(1).unwrap();
+        simulation.advance_ticks(1).unwrap();
+        assert_eq!(character(&simulation, cora).satiety(), HUNGRY_SATIETY);
+        simulation.advance_ticks(1).unwrap();
+
+        assert_eq!(character(&simulation, cora).satiety(), MAX_SATIETY);
+        assert_eq!(total_berries(&simulation), 699);
+        assert!(simulation.job_world.eat_job_for_character(cora).is_none());
+    }
+
+    #[test]
+    fn manual_interruption_cancels_eat_and_does_not_consume_reserved_meal() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let cora = cora();
+        set_satiety(&mut simulation, cora, HUNGRY_SATIETY);
+        simulation.advance_ticks(1).unwrap();
+        let eat_job_id = simulation.job_world.eat_job_for_character(cora).unwrap();
+        let JobKind::Eat { item_id, .. } = simulation.job_world.get(eat_job_id).unwrap().kind()
+        else {
+            unreachable!();
+        };
+        assert_eq!(
+            simulation.item_world.get(item_id).unwrap().quantity().get(),
+            1
+        );
+        let before = character(&simulation, cora).satiety();
+
+        simulation
+            .set_movement_direction(cora, Direction::East)
+            .unwrap();
+
+        assert!(simulation.job_world.eat_job_for_character(cora).is_none());
+        assert_eq!(simulation.job_world.eat_job_for_item(item_id), None);
+        assert_eq!(
+            simulation.item_world.get(item_id).unwrap().quantity().get(),
+            1
+        );
+        assert_eq!(character(&simulation, cora).satiety(), before);
+        assert_eq!(
+            character(&simulation, cora).movement(),
+            MovementState::ManualDirectional {
+                direction: Direction::East
+            }
+        );
+    }
+
+    #[test]
+    fn starving_character_without_food_stops_work_and_is_not_reassigned() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let berries = simulation
+            .items()
+            .find(|item| item.kind() == ItemKind::Berries)
+            .unwrap()
+            .id();
+        simulation.item_world.consume(berries, 700).unwrap();
+        let (source, _) = harvest_fixture(&simulation);
+        let job_id = simulation.designate_harvest(source).unwrap();
+        for _ in 0..64 {
+            simulation.advance_ticks(1).unwrap();
+            if simulation
+                .job_world
+                .get(job_id)
+                .unwrap()
+                .state()
+                .worker()
+                .is_some()
+            {
+                break;
+            }
+        }
+        let worker_id = simulation
+            .job_world
+            .get(job_id)
+            .unwrap()
+            .state()
+            .worker()
+            .unwrap();
+        set_satiety(&mut simulation, worker_id, 0);
+
+        simulation.advance_ticks(1).unwrap();
+
+        assert_eq!(simulation.job_world.job_for_worker(worker_id), None);
+        assert_eq!(
+            character(&simulation, worker_id).movement(),
+            MovementState::Idle
+        );
+        assert!(character(&simulation, worker_id).is_starving());
+        assert!(simulation.job_world.get(job_id).is_some());
     }
 
     #[test]
@@ -4147,7 +4659,7 @@ mod tests {
         let simulation = Simulation::new(WorldSeed::new(2)).unwrap();
         let items = simulation.items().collect::<Vec<_>>();
 
-        assert_eq!(items.len(), 4);
+        assert_eq!(items.len(), 5);
         assert_eq!(items[0].id(), EntityId::new(6).unwrap());
         assert_eq!(items[0].kind(), ItemKind::Wood);
         assert_eq!(items[0].quantity().get(), 8);
@@ -4163,6 +4675,22 @@ mod tests {
         assert_eq!(items[3].id(), EntityId::new(9).unwrap());
         assert_eq!(items[3].kind(), ItemKind::Stone);
         assert_eq!(items[3].quantity().get(), 8);
+        assert_eq!(items[4].id(), EntityId::new(10).unwrap());
+        assert_eq!(items[4].kind(), ItemKind::Berries);
+        assert_eq!(items[4].quantity().get(), 700);
+        let berries_cell = items[4].ground_position().unwrap().containing_cell();
+        assert!(berries_cell.x().abs() > 2 || berries_cell.y().abs() > 2);
+        assert!(simulation.is_explored(berries_cell));
+        assert_eq!(
+            simulation.effective_terrain_at(berries_cell).unwrap(),
+            Terrain::Grass
+        );
+        assert!(
+            simulation
+                .natural_resource_at(berries_cell)
+                .unwrap()
+                .is_none()
+        );
         assert!(
             items
                 .iter()
@@ -5915,6 +6443,7 @@ mod tests {
                     ..
                 } => Some((item_id, destination)),
                 JobKind::Harvest { .. }
+                | JobKind::Eat { .. }
                 | JobKind::Craft { .. }
                 | JobKind::SupplyProduction { .. }
                 | JobKind::DeliverConstruction { .. }

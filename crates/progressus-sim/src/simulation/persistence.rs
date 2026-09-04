@@ -5,9 +5,8 @@ use std::fmt::{self, Display, Formatter};
 use serde::{Deserialize, Serialize};
 
 use super::*;
-use crate::MovementSpeed;
 use crate::construction::ConstructionWorld;
-use crate::entity::{EntityIdAllocator, NavigationRoute};
+use crate::entity::{CharacterRestoreState, EntityIdAllocator, NavigationRoute};
 use crate::exploration::ExploredWorld;
 use crate::item::ItemWorld;
 use crate::job::JobWorld;
@@ -17,6 +16,7 @@ use crate::residency::ChunkResidency;
 use crate::stockpile::StockpileWorld;
 use crate::workstation::WorkstationWorld;
 use crate::world_state::ModifiedWorld;
+use crate::{MAX_SATIETY, MovementSpeed};
 
 pub const SAVE_FORMAT_VERSION: u32 = 1;
 const SAVE_FORMAT_NAME: &str = "progressus-save";
@@ -504,8 +504,14 @@ struct CharacterSave {
     position: PositionSave,
     speed_subunits_per_tick: u32,
     interaction_radius_subunits: u32,
+    #[serde(default = "default_satiety")]
+    satiety: u8,
     movement: MovementSave,
     navigation: Option<NavigationSave>,
+}
+
+const fn default_satiety() -> u8 {
+    MAX_SATIETY
 }
 
 impl CharacterSave {
@@ -516,6 +522,7 @@ impl CharacterSave {
             position: character.position().into(),
             speed_subunits_per_tick: character.speed().subunits_per_tick(),
             interaction_radius_subunits: character.interaction_radius().subunits(),
+            satiety: character.satiety(),
             movement: character.movement().into(),
             navigation: character.navigation_route().map(NavigationSave::from_route),
         }
@@ -527,6 +534,14 @@ impl CharacterSave {
         let speed = MovementSpeed::new(self.speed_subunits_per_tick).ok_or_else(|| {
             SaveError::InvalidData(format!("character {} has zero movement speed", id.value()))
         })?;
+        if self.satiety > MAX_SATIETY {
+            return invalid(format!(
+                "character {} has satiety {} above maximum {}",
+                id.value(),
+                self.satiety,
+                MAX_SATIETY
+            ));
+        }
         let movement = self.movement.into_movement()?;
         let route = self
             .navigation
@@ -553,10 +568,13 @@ impl CharacterSave {
             id,
             self.name,
             position,
-            speed,
-            InteractionRadius::new(self.interaction_radius_subunits),
-            movement,
-            route,
+            CharacterRestoreState {
+                speed,
+                interaction_radius: InteractionRadius::new(self.interaction_radius_subunits),
+                satiety: self.satiety,
+                movement,
+                route,
+            },
         ))
     }
 }
@@ -602,6 +620,7 @@ enum ItemKindSave {
     Wood,
     Stone,
     PrimitiveTool,
+    Berries,
 }
 
 impl From<ItemKind> for ItemKindSave {
@@ -610,6 +629,7 @@ impl From<ItemKind> for ItemKindSave {
             ItemKind::Wood => Self::Wood,
             ItemKind::Stone => Self::Stone,
             ItemKind::PrimitiveTool => Self::PrimitiveTool,
+            ItemKind::Berries => Self::Berries,
         }
     }
 }
@@ -620,6 +640,7 @@ impl From<ItemKindSave> for ItemKind {
             ItemKindSave::Wood => Self::Wood,
             ItemKindSave::Stone => Self::Stone,
             ItemKindSave::PrimitiveTool => Self::PrimitiveTool,
+            ItemKindSave::Berries => Self::Berries,
         }
     }
 }
@@ -928,6 +949,10 @@ enum JobKindSave {
     Harvest {
         source: CellSave,
     },
+    Eat {
+        character_id: u64,
+        item_id: u64,
+    },
     Haul {
         item_id: u64,
         stockpile_id: u64,
@@ -957,6 +982,13 @@ impl From<JobKind> for JobKindSave {
         match kind {
             JobKind::Harvest { source } => Self::Harvest {
                 source: source.into(),
+            },
+            JobKind::Eat {
+                character_id,
+                item_id,
+            } => Self::Eat {
+                character_id: character_id.value(),
+                item_id: item_id.value(),
             },
             JobKind::Haul {
                 item_id,
@@ -1001,6 +1033,13 @@ impl JobKindSave {
         Ok(match self {
             Self::Harvest { source } => JobKind::Harvest {
                 source: source.into_cell(),
+            },
+            Self::Eat {
+                character_id,
+                item_id,
+            } => JobKind::Eat {
+                character_id: entity_id(character_id, "eat character_id")?,
+                item_id: entity_id(item_id, "eat item_id")?,
             },
             Self::Haul {
                 item_id,
@@ -1485,6 +1524,7 @@ fn restore_jobs(
         validate_job_references(
             id,
             kind,
+            characters,
             items,
             stockpiles,
             workstations,
@@ -1542,6 +1582,16 @@ fn restore_jobs(
             }
             JobStateSave::Reserved { worker_id } => {
                 let worker = restore_worker_id(characters, worker_id, id)?;
+                if let JobKind::Eat { character_id, .. } = kind
+                    && worker != character_id
+                {
+                    return invalid(format!(
+                        "eat job {} is reserved by character {} instead of {}",
+                        id.value(),
+                        worker.value(),
+                        character_id.value()
+                    ));
+                }
                 world
                     .reserve_worker(id, worker)
                     .map_err(|error| invalid_world_error("job worker reservation", error))?;
@@ -1559,6 +1609,16 @@ fn restore_jobs(
                     ));
                 }
                 let worker = restore_worker_id(characters, worker_id, id)?;
+                if let JobKind::Eat { character_id, .. } = kind
+                    && worker != character_id
+                {
+                    return invalid(format!(
+                        "eat job {} is reserved by character {} instead of {}",
+                        id.value(),
+                        worker.value(),
+                        character_id.value()
+                    ));
+                }
                 world
                     .reserve_worker(id, worker)
                     .map_err(|error| invalid_world_error("job worker reservation", error))?;
@@ -1578,7 +1638,10 @@ fn restore_jobs(
                 }
                 if !matches!(
                     kind,
-                    JobKind::Harvest { .. } | JobKind::Craft { .. } | JobKind::Construct { .. }
+                    JobKind::Harvest { .. }
+                        | JobKind::Eat { .. }
+                        | JobKind::Craft { .. }
+                        | JobKind::Construct { .. }
                 ) {
                     return invalid(format!(
                         "job {} has working state for a non-work job",
@@ -1586,6 +1649,16 @@ fn restore_jobs(
                     ));
                 }
                 let worker = restore_worker_id(characters, worker_id, id)?;
+                if let JobKind::Eat { character_id, .. } = kind
+                    && worker != character_id
+                {
+                    return invalid(format!(
+                        "eat job {} is reserved by character {} instead of {}",
+                        id.value(),
+                        worker.value(),
+                        character_id.value()
+                    ));
+                }
                 world
                     .reserve_worker(id, worker)
                     .map_err(|error| invalid_world_error("job worker reservation", error))?;
@@ -1618,6 +1691,7 @@ fn restore_worker_id(
 fn validate_job_references(
     job_id: EntityId,
     kind: JobKind,
+    characters: &BTreeMap<EntityId, Character>,
     items: &ItemWorld,
     stockpiles: &StockpileWorld,
     workstations: &WorkstationWorld,
@@ -1627,6 +1701,28 @@ fn validate_job_references(
 ) -> Result<(), SaveError> {
     match kind {
         JobKind::Harvest { .. } => {}
+        JobKind::Eat {
+            character_id,
+            item_id,
+        } => {
+            if !characters.contains_key(&character_id) {
+                return invalid(format!(
+                    "eat job {} references missing character {}",
+                    job_id.value(),
+                    character_id.value()
+                ));
+            }
+            require_item(items, item_id, job_id)?;
+            if items.get(item_id).is_none_or(|item| {
+                item.kind() != ItemKind::Berries || item.ground_position().is_none()
+            }) {
+                return invalid(format!(
+                    "eat job {} references non-food item {}",
+                    job_id.value(),
+                    item_id.value()
+                ));
+            }
+        }
         JobKind::Haul {
             item_id,
             stockpile_id,
@@ -1956,6 +2052,7 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
+    use crate::HUNGRY_SATIETY;
 
     #[test]
     fn pristine_save_round_trips_canonically_and_metadata_is_readable() {
@@ -1978,6 +2075,22 @@ mod tests {
             restored
                 .characters()
                 .all(|character| character.last_tick_motion_trace() == [character.position()])
+        );
+    }
+
+    #[test]
+    fn save_v1_without_satiety_defaults_existing_characters_to_full() {
+        let simulation = Simulation::new(WorldSeed::new(42)).unwrap();
+        let encoded = simulation.save_json().unwrap();
+        let mut json: Value = serde_json::from_slice(&encoded).unwrap();
+        for character in json["characters"].as_array_mut().unwrap() {
+            character.as_object_mut().unwrap().remove("satiety");
+        }
+        let restored = Simulation::load_json(&serde_json::to_vec(&json).unwrap()).unwrap();
+        assert!(
+            restored
+                .characters()
+                .all(|character| character.satiety() == MAX_SATIETY)
         );
     }
 
@@ -2032,6 +2145,46 @@ mod tests {
             restored.advance_ticks(1).unwrap();
         }
         assert_eq!(restored.save_json().unwrap(), original.save_json().unwrap());
+    }
+
+    #[test]
+    fn active_eat_job_and_satiety_continue_deterministically_after_load() {
+        let mut original = Simulation::new(WorldSeed::new(0)).unwrap();
+        let cora = EntityId::new(3).unwrap();
+        while original.characters.get(&cora).unwrap().satiety() > HUNGRY_SATIETY {
+            original.characters.get_mut(&cora).unwrap().decay_satiety();
+        }
+        original.advance_ticks(1).unwrap();
+        let eat_job = original
+            .jobs()
+            .find(|job| matches!(job.kind(), JobKind::Eat { character_id, .. } if character_id == cora))
+            .cloned()
+            .expect("hungry Cora must receive an Eat job");
+        let JobKind::Eat { item_id, .. } = eat_job.kind() else {
+            unreachable!();
+        };
+        assert_eq!(
+            original.item_world.get(item_id).unwrap().quantity().get(),
+            1
+        );
+        assert!(matches!(
+            eat_job.state(),
+            JobState::Reserved { .. } | JobState::Working { .. }
+        ));
+
+        let encoded = original.save_json().unwrap();
+        let mut restored = Simulation::load_json(&encoded).unwrap();
+        assert_eq!(restored.save_json().unwrap(), encoded);
+
+        for _ in 0..128 {
+            original.advance_ticks(1).unwrap();
+            restored.advance_ticks(1).unwrap();
+        }
+        assert_eq!(restored.save_json().unwrap(), original.save_json().unwrap());
+        assert_eq!(
+            restored.characters.get(&cora).unwrap().satiety(),
+            original.characters.get(&cora).unwrap().satiety()
+        );
     }
 
     #[test]

@@ -853,6 +853,17 @@ pub(crate) fn draw_job_designations(
     for job in &authoritative.snapshot().jobs {
         let (cell, z) = match job.kind {
             JobKind::Harvest { source } => (source, NATURAL_RESOURCE_Z + 1.0),
+            JobKind::Eat { item_id, .. } => {
+                let Some(item) = authoritative
+                    .snapshot()
+                    .ground_items
+                    .iter()
+                    .find(|item| item.id == item_id)
+                else {
+                    continue;
+                };
+                (item.position.containing_cell(), GROUND_ITEM_Z + 1.0)
+            }
             JobKind::Craft { workstation_id, .. } => {
                 let Some(workstation) = authoritative
                     .snapshot()

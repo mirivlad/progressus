@@ -9,12 +9,12 @@ pub use progressus_sim::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, ConstructionMaterialState, ConstructionSite,
     DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED, Direction, EntityId,
     InteractionRadius, ItemKind, ItemLocation, ItemQuantity, JobKind, JobState, LocalCell,
-    MAX_PRODUCTION_ORDER_RUNS, MovementSpeed, MovementState, NaturalResource, NaturalResourceKind,
-    ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind,
-    RESIDENT_CHUNK_RADIUS, RESIDENT_CHUNKS_PER_CENTER, RecipeId, SAVE_FORMAT_VERSION,
-    SUBUNITS_PER_CELL, SaveError, SaveMetadata, SimulationTick, Stockpile, Structure,
-    StructureKind, Terrain, Workstation, WorkstationKind, WorldCell, WorldPosition, WorldSeed,
-    WorldgenVersion,
+    MAX_PRODUCTION_ORDER_RUNS, MAX_SATIETY, MovementSpeed, MovementState, NaturalResource,
+    NaturalResourceKind, ProductionLogistics, ProductionOrder, ProductionTarget,
+    ProductionZoneKind, RESIDENT_CHUNK_RADIUS, RESIDENT_CHUNKS_PER_CENTER, RecipeId,
+    SAVE_FORMAT_VERSION, SUBUNITS_PER_CELL, SaveError, SaveMetadata, SimulationTick, Stockpile,
+    Structure, StructureKind, Terrain, Workstation, WorkstationKind, WorldCell, WorldPosition,
+    WorldSeed, WorldgenVersion,
 };
 pub use read_model::{
     CarriedItemSnapshot, CharacterSnapshot, ChunkSnapshot, ClientSnapshot,

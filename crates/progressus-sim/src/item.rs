@@ -10,6 +10,7 @@ pub enum ItemKind {
     Wood,
     Stone,
     PrimitiveTool,
+    Berries,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

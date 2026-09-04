@@ -36,6 +36,10 @@ pub(super) fn primitive_tool(canvas: &mut Canvas, variant: u8) {
     items::primitive_tool(canvas, variant);
 }
 
+pub(super) fn berries_stack(canvas: &mut Canvas, variant: u8) {
+    items::berries_stack(canvas, variant);
+}
+
 pub(super) fn tree(canvas: &mut Canvas, variant: u8) {
     resources::tree(canvas, variant);
 }

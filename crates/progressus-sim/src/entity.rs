@@ -53,6 +53,10 @@ impl MovementSpeed {
 
 pub const DEFAULT_CHARACTER_SPEED: MovementSpeed = MovementSpeed(256);
 pub const DEFAULT_CHARACTER_INTERACTION_RADIUS: InteractionRadius = InteractionRadius::new(768);
+pub const MAX_SATIETY: u8 = 100;
+pub const HUNGRY_SATIETY: u8 = 50;
+pub const BERRIES_MEAL_SATIETY: u8 = 50;
+pub const SATIETY_DECAY_INTERVAL_TICKS: u64 = 16;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct EntityId(u64);
@@ -68,12 +72,22 @@ impl EntityId {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CharacterRestoreState {
+    pub(crate) speed: MovementSpeed,
+    pub(crate) interaction_radius: InteractionRadius,
+    pub(crate) satiety: u8,
+    pub(crate) movement: MovementState,
+    pub(crate) route: Option<NavigationRoute>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Character {
     id: EntityId,
     name: String,
     position: WorldPosition,
     speed: MovementSpeed,
     interaction_radius: InteractionRadius,
+    satiety: u8,
     movement: MovementState,
     route: Option<NavigationRoute>,
     last_tick_motion_trace: Vec<WorldPosition>,
@@ -87,6 +101,7 @@ impl Character {
             position,
             speed: DEFAULT_CHARACTER_SPEED,
             interaction_radius: DEFAULT_CHARACTER_INTERACTION_RADIUS,
+            satiety: MAX_SATIETY,
             movement: MovementState::Idle,
             route: None,
             last_tick_motion_trace: vec![position],
@@ -97,19 +112,17 @@ impl Character {
         id: EntityId,
         name: String,
         position: WorldPosition,
-        speed: MovementSpeed,
-        interaction_radius: InteractionRadius,
-        movement: MovementState,
-        route: Option<NavigationRoute>,
+        state: CharacterRestoreState,
     ) -> Self {
         Self {
             id,
             name,
             position,
-            speed,
-            interaction_radius,
-            movement,
-            route,
+            speed: state.speed,
+            interaction_radius: state.interaction_radius,
+            satiety: state.satiety,
+            movement: state.movement,
+            route: state.route,
             last_tick_motion_trace: vec![position],
         }
     }
@@ -132,6 +145,26 @@ impl Character {
 
     pub const fn interaction_radius(&self) -> InteractionRadius {
         self.interaction_radius
+    }
+
+    pub const fn satiety(&self) -> u8 {
+        self.satiety
+    }
+
+    pub const fn is_hungry(&self) -> bool {
+        self.satiety <= HUNGRY_SATIETY
+    }
+
+    pub const fn is_starving(&self) -> bool {
+        self.satiety == 0
+    }
+
+    pub(crate) fn decay_satiety(&mut self) {
+        self.satiety = self.satiety.saturating_sub(1);
+    }
+
+    pub(crate) fn restore_satiety(&mut self, amount: u8) {
+        self.satiety = self.satiety.saturating_add(amount).min(MAX_SATIETY);
     }
 
     pub const fn movement(&self) -> MovementState {

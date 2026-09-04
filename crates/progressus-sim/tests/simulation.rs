@@ -57,12 +57,16 @@ fn new_game_has_physical_starting_supplies_with_global_stable_ids() {
     let simulation = Simulation::new(WorldSeed::new(42)).unwrap();
     let items = simulation.items().collect::<Vec<_>>();
 
-    assert_eq!(items.len(), 4);
+    assert_eq!(items.len(), 5);
     assert_eq!(items[0].id(), EntityId::new(6).unwrap());
     assert_eq!(items[0].kind(), ItemKind::Wood);
     assert!(matches!(items[0].location(), ItemLocation::Ground { .. }));
     assert_eq!(items[3].id(), EntityId::new(9).unwrap());
     assert_eq!(items[3].kind(), ItemKind::Stone);
+    assert_eq!(items[4].id(), EntityId::new(10).unwrap());
+    assert_eq!(items[4].kind(), ItemKind::Berries);
+    assert_eq!(items[4].quantity().get(), 700);
+    assert!(matches!(items[4].location(), ItemLocation::Ground { .. }));
 }
 
 #[test]
@@ -74,5 +78,5 @@ fn entity_id_zero_is_invalid() {
 fn next_stable_entity_id_continues_after_bootstrap_characters() {
     let simulation = Simulation::new(WorldSeed::new(42)).unwrap();
 
-    assert_eq!(simulation.next_entity_id(), EntityId::new(10));
+    assert_eq!(simulation.next_entity_id(), EntityId::new(11));
 }

@@ -67,6 +67,7 @@ pub(crate) enum TextKey {
     Movement,
     Work,
     Carrying,
+    Satiety,
     NoneValue,
 }
 
@@ -114,6 +115,7 @@ impl Locale {
             (Language::Ru, TextKey::Movement) => "Движение",
             (Language::Ru, TextKey::Work) => "Работа",
             (Language::Ru, TextKey::Carrying) => "Несёт",
+            (Language::Ru, TextKey::Satiety) => "Сытость",
             (Language::Ru, TextKey::NoneValue) => "нет",
             (Language::En, TextKey::Select) => "Select",
             (Language::En, TextKey::StockpileAdd) => "Stockpile +",
@@ -156,6 +158,7 @@ impl Locale {
             (Language::En, TextKey::Movement) => "Movement",
             (Language::En, TextKey::Work) => "Work",
             (Language::En, TextKey::Carrying) => "Carrying",
+            (Language::En, TextKey::Satiety) => "Satiety",
             (Language::En, TextKey::NoneValue) => "none",
         }
     }
@@ -201,21 +204,25 @@ impl Locale {
             (Language::Ru, ItemKind::Wood) => "Дерево",
             (Language::Ru, ItemKind::Stone) => "Камень",
             (Language::Ru, ItemKind::PrimitiveTool) => "Примитивный инструмент",
+            (Language::Ru, ItemKind::Berries) => "Ягоды",
             (Language::En, ItemKind::Wood) => "Wood",
             (Language::En, ItemKind::Stone) => "Stone",
             (Language::En, ItemKind::PrimitiveTool) => "Primitive tool",
+            (Language::En, ItemKind::Berries) => "Berries",
         }
     }
 
     pub(crate) const fn job_kind_name(self, kind: JobKind) -> &'static str {
         match (self.language, kind) {
             (Language::Ru, JobKind::Harvest { .. }) => "добыча",
+            (Language::Ru, JobKind::Eat { .. }) => "еда",
             (Language::Ru, JobKind::Haul { .. }) => "перенос на склад",
             (Language::Ru, JobKind::Craft { .. }) => "производство",
             (Language::Ru, JobKind::SupplyProduction { .. }) => "подача сырья",
             (Language::Ru, JobKind::DeliverConstruction { .. }) => "доставка на стройку",
             (Language::Ru, JobKind::Construct { .. }) => "строительство",
             (Language::En, JobKind::Harvest { .. }) => "harvest",
+            (Language::En, JobKind::Eat { .. }) => "eat",
             (Language::En, JobKind::Haul { .. }) => "haul",
             (Language::En, JobKind::Craft { .. }) => "craft",
             (Language::En, JobKind::SupplyProduction { .. }) => "production supply",

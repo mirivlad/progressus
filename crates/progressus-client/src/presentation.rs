@@ -66,6 +66,7 @@ mod tests {
             name: "Cora".to_owned(),
             position: WorldPosition::from_cell_center(WorldCell::new(32, 0)).unwrap(),
             containing_cell: WorldCell::new(32, 0),
+            satiety: 100,
             movement: MovementState::Idle,
             last_tick_motion_trace: vec![
                 WorldPosition::from_cell_center(WorldCell::new(32, 0)).unwrap(),

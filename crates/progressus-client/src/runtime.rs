@@ -467,7 +467,8 @@ fn apply_tool_area(
                 .iter()
                 .filter_map(|job| match job.kind {
                     JobKind::Harvest { source } => Some(source),
-                    JobKind::Haul { .. }
+                    JobKind::Eat { .. }
+                    | JobKind::Haul { .. }
                     | JobKind::SupplyProduction { .. }
                     | JobKind::Craft { .. }
                     | JobKind::DeliverConstruction { .. }
@@ -562,6 +563,7 @@ fn apply_tool_area(
                 .filter_map(|job| match job.kind {
                     JobKind::Harvest { source } if selected.contains(&source) => Some(job.id),
                     JobKind::Harvest { .. }
+                    | JobKind::Eat { .. }
                     | JobKind::Haul { .. }
                     | JobKind::SupplyProduction { .. }
                     | JobKind::Craft { .. }

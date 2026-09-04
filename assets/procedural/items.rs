@@ -52,3 +52,21 @@ pub(super) fn primitive_tool(canvas: &mut Canvas, variant: u8) {
     canvas.rect(8 + shift, 4, 4, 2, METAL);
     canvas.line(9 + shift, 4, 11 + shift, 4, METAL_LIGHT);
 }
+
+pub(super) fn berries_stack(canvas: &mut Canvas, variant: u8) {
+    const OUTLINE: Rgba8 = Rgba8::rgb(48, 22, 38);
+    const DARK: Rgba8 = Rgba8::rgb(112, 31, 73);
+    const BERRY: Rgba8 = Rgba8::rgb(190, 48, 93);
+    const LIGHT: Rgba8 = Rgba8::rgb(246, 119, 142);
+    const LEAF: Rgba8 = Rgba8::rgb(72, 128, 62);
+    canvas.ellipse(8, 13, 5, 2, Rgba8::rgba(10, 10, 10, 95));
+    let shift = i32::from(variant & 1);
+    for (x, y) in [(5, 9), (9, 9), (7 + shift, 6), (11, 6), (8, 11)] {
+        canvas.circle(x, y, 2, OUTLINE);
+        canvas.circle(x, y, 1, BERRY);
+        canvas.pixel(x - 1, y - 1, LIGHT);
+        canvas.pixel(x + 1, y + 1, DARK);
+    }
+    canvas.line(7, 4, 9, 6, LEAF);
+    canvas.line(8, 4, 11, 4, LEAF);
+}

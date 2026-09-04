@@ -27,6 +27,7 @@ pub(crate) enum ProceduralAssetKind {
     WoodStack,
     StoneStack,
     PrimitiveTool,
+    BerriesStack,
     Workbench,
     StoneWallBlueprint,
     StoneWall,
@@ -145,6 +146,7 @@ pub(crate) fn item_asset(kind: ItemKind, id: EntityId) -> ProceduralAssetKey {
         ItemKind::Wood => ProceduralAssetKind::WoodStack,
         ItemKind::Stone => ProceduralAssetKind::StoneStack,
         ItemKind::PrimitiveTool => ProceduralAssetKind::PrimitiveTool,
+        ItemKind::Berries => ProceduralAssetKind::BerriesStack,
     };
     ProceduralAssetKey::new(kind, variant_for_entity(id))
 }
@@ -217,6 +219,7 @@ fn render_image(key: ProceduralAssetKey) -> Image {
         ProceduralAssetKind::WoodStack => asset_code::wood_stack(&mut canvas, key.variant),
         ProceduralAssetKind::StoneStack => asset_code::stone_stack(&mut canvas, key.variant),
         ProceduralAssetKind::PrimitiveTool => asset_code::primitive_tool(&mut canvas, key.variant),
+        ProceduralAssetKind::BerriesStack => asset_code::berries_stack(&mut canvas, key.variant),
         ProceduralAssetKind::Workbench => asset_code::workbench(&mut canvas, key.variant),
         ProceduralAssetKind::StoneWallBlueprint => {
             asset_code::stone_wall_blueprint(&mut canvas, key.variant)

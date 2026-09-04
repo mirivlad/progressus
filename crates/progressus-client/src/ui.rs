@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use progressus_app::{JobState, MovementState};
+use progressus_app::{JobState, MAX_SATIETY, MovementState};
 
 use crate::i18n::{Language, Locale, TextKey};
 use crate::interaction::TickScheduler;
@@ -373,7 +373,7 @@ pub(crate) fn sync_character_inspector(
     };
 
     let text = format!(
-        "{}: {}\n{}: {}\n{}: ({}, {})\n{}: {}\n{}: {}\n{}: {}",
+        "{}: {}\n{}: {}\n{}: ({}, {})\n{}: {}/{}\n{}: {}\n{}: {}\n{}: {}",
         locale.tr(TextKey::Character),
         character.name,
         locale.tr(TextKey::Identifier),
@@ -381,6 +381,9 @@ pub(crate) fn sync_character_inspector(
         locale.tr(TextKey::Cell),
         character.containing_cell.x(),
         character.containing_cell.y(),
+        locale.tr(TextKey::Satiety),
+        character.satiety,
+        MAX_SATIETY,
         locale.tr(TextKey::Movement),
         movement,
         locale.tr(TextKey::Work),

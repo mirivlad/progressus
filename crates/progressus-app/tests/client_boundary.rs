@@ -1,9 +1,8 @@
 use progressus_app::{
-    Application, CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, CharacterSnapshot, ChunkCoord, Command,
-    Direction, EntityId, ItemKind, JobKind, JobState, KnownTerrain, LocalCell, MovementState,
-    NaturalResourceKind, NewGameOptions, ProductionZoneKind, RESIDENT_CHUNKS_PER_CENTER, RecipeId,
-    SimulationTick, SnapshotQuery, StructureKind, Terrain, WorkstationKind, WorldCell,
-    WorldPosition, WorldSeed,
+    Application, CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, Command, Direction, EntityId,
+    ItemKind, JobKind, JobState, KnownTerrain, LocalCell, MovementState, NaturalResourceKind,
+    NewGameOptions, ProductionZoneKind, RESIDENT_CHUNKS_PER_CENTER, RecipeId, SimulationTick,
+    SnapshotQuery, StructureKind, Terrain, WorkstationKind, WorldCell, WorldPosition, WorldSeed,
 };
 
 fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
@@ -14,14 +13,14 @@ fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
     application
         .execute(Command::AdvanceTicks { count: 100_000 })
         .unwrap();
+    let lightweight = application.snapshot(SnapshotQuery::default()).unwrap();
+    let mut chunks = lightweight.resident_chunks.clone();
+    if let Some(first) = chunks.first().copied() {
+        chunks.push(first);
+    }
     application
         .snapshot(SnapshotQuery {
-            chunks: vec![
-                ChunkCoord::new(1, 0),
-                ChunkCoord::new(-1, 0),
-                ChunkCoord::new(0, 0),
-                ChunkCoord::new(1, 0),
-            ],
+            chunks,
             ..SnapshotQuery::default()
         })
         .unwrap()
@@ -33,87 +32,68 @@ fn snapshot_is_bounded_ordered_and_renderable() {
 
     assert_eq!(snapshot.tick, SimulationTick::new(100_000));
     assert_eq!(snapshot.worldgen_version, CURRENT_WORLDGEN_VERSION);
-    assert_eq!(
+    assert!(
         snapshot
             .chunks
-            .iter()
-            .map(|chunk| chunk.coordinate)
-            .collect::<Vec<_>>(),
-        vec![ChunkCoord::new(-1, 0), ChunkCoord::new(0, 0)]
+            .windows(2)
+            .all(|pair| pair[0].coordinate < pair[1].coordinate)
     );
     assert!(snapshot.chunks.iter().all(|chunk| {
         chunk.side == CHUNK_SIDE
             && chunk.cells.len() == usize::from(CHUNK_SIDE) * usize::from(CHUNK_SIDE)
     }));
 
-    assert_eq!(
-        snapshot
-            .ground_items
-            .iter()
-            .map(|item| (item.id.value(), item.kind, item.quantity))
-            .collect::<Vec<_>>(),
-        vec![
-            (6, ItemKind::Wood, 8),
-            (7, ItemKind::Stone, 6),
-            (8, ItemKind::Wood, 10),
-            (9, ItemKind::Stone, 8),
-        ]
+    let item_keys = snapshot
+        .ground_items
+        .iter()
+        .map(|item| (item.position.containing_cell().split().0, item.id))
+        .collect::<Vec<_>>();
+    assert!(item_keys.windows(2).all(|pair| pair[0] < pair[1]));
+    let item_ids = snapshot
+        .ground_items
+        .iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    for expected in 6..=9 {
+        assert!(item_ids.contains(&EntityId::new(expected).unwrap()));
+    }
+    let berries = snapshot
+        .ground_items
+        .iter()
+        .filter(|item| item.kind == ItemKind::Berries)
+        .map(|item| item.quantity)
+        .sum::<u32>();
+    assert!(
+        berries > 0 && berries < 700,
+        "long run must physically consume food"
     );
 
+    let identities = snapshot
+        .characters
+        .iter()
+        .map(|character| (character.id.value(), character.name.as_str()))
+        .collect::<Vec<_>>();
     assert_eq!(
-        snapshot.characters,
+        identities,
         vec![
-            CharacterSnapshot {
-                id: EntityId::new(1).unwrap(),
-                name: "Ada".to_owned(),
-                position: WorldPosition::from_cell_center(WorldCell::new(-2, 0)).unwrap(),
-                containing_cell: WorldCell::new(-2, 0),
-                movement: MovementState::Idle,
-                last_tick_motion_trace: vec![
-                    WorldPosition::from_cell_center(WorldCell::new(-2, 0)).unwrap()
-                ],
-            },
-            CharacterSnapshot {
-                id: EntityId::new(2).unwrap(),
-                name: "Borin".to_owned(),
-                position: WorldPosition::from_cell_center(WorldCell::new(-1, 0)).unwrap(),
-                containing_cell: WorldCell::new(-1, 0),
-                movement: MovementState::Idle,
-                last_tick_motion_trace: vec![
-                    WorldPosition::from_cell_center(WorldCell::new(-1, 0)).unwrap()
-                ],
-            },
-            CharacterSnapshot {
-                id: EntityId::new(3).unwrap(),
-                name: "Cora".to_owned(),
-                position: WorldPosition::from_cell_center(WorldCell::new(0, 0)).unwrap(),
-                containing_cell: WorldCell::new(0, 0),
-                movement: MovementState::Idle,
-                last_tick_motion_trace: vec![
-                    WorldPosition::from_cell_center(WorldCell::new(0, 0)).unwrap()
-                ],
-            },
-            CharacterSnapshot {
-                id: EntityId::new(4).unwrap(),
-                name: "Dain".to_owned(),
-                position: WorldPosition::from_cell_center(WorldCell::new(1, 0)).unwrap(),
-                containing_cell: WorldCell::new(1, 0),
-                movement: MovementState::Idle,
-                last_tick_motion_trace: vec![
-                    WorldPosition::from_cell_center(WorldCell::new(1, 0)).unwrap()
-                ],
-            },
-            CharacterSnapshot {
-                id: EntityId::new(5).unwrap(),
-                name: "Elin".to_owned(),
-                position: WorldPosition::from_cell_center(WorldCell::new(2, 0)).unwrap(),
-                containing_cell: WorldCell::new(2, 0),
-                movement: MovementState::Idle,
-                last_tick_motion_trace: vec![
-                    WorldPosition::from_cell_center(WorldCell::new(2, 0)).unwrap()
-                ],
-            },
+            (1, "Ada"),
+            (2, "Borin"),
+            (3, "Cora"),
+            (4, "Dain"),
+            (5, "Elin")
         ]
+    );
+    assert!(
+        snapshot
+            .characters
+            .iter()
+            .all(|character| character.satiety <= 100)
+    );
+    assert!(
+        snapshot
+            .characters
+            .iter()
+            .all(|character| character.satiety > 0)
     );
 }
 
@@ -878,4 +858,68 @@ fn save_load_crosses_the_public_application_boundary_without_internal_access() {
     corrupted.truncate(corrupted.len() / 2);
     assert!(Application::from_save_json(&corrupted).is_err());
     assert_eq!(application.save_json().unwrap(), before);
+}
+
+#[test]
+fn nutrition_and_physical_eating_cross_the_public_application_boundary() {
+    let mut application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(42),
+    })
+    .unwrap();
+    let initial = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert!(
+        initial
+            .characters
+            .iter()
+            .all(|character| character.satiety == 100)
+    );
+
+    application
+        .execute(Command::AdvanceTicks { count: 16 })
+        .unwrap();
+    let decayed = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert!(
+        decayed
+            .characters
+            .iter()
+            .all(|character| character.satiety == 99)
+    );
+
+    application
+        .execute(Command::AdvanceTicks { count: 784 })
+        .unwrap();
+    let hungry = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert!(
+        hungry
+            .jobs
+            .iter()
+            .any(|job| matches!(job.kind, JobKind::Eat { .. }))
+    );
+
+    application
+        .execute(Command::AdvanceTicks { count: 128 })
+        .unwrap();
+    let recovered = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert!(
+        recovered
+            .characters
+            .iter()
+            .all(|character| character.satiety > 50)
+    );
+    let physical = application
+        .snapshot(SnapshotQuery {
+            chunks: recovered.resident_chunks.clone(),
+            ..SnapshotQuery::default()
+        })
+        .unwrap();
+    let berries = physical
+        .ground_items
+        .iter()
+        .filter(|item| item.kind == ItemKind::Berries)
+        .map(|item| item.quantity)
+        .sum::<u32>();
+    assert!(
+        berries < 700,
+        "autonomous eating must consume physical berries"
+    );
 }

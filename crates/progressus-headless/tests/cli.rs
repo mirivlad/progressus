@@ -14,16 +14,14 @@ fn long_run_prints_deterministic_client_summary() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains(
-        "seed=42 tick=100000 worldgen_version=2 chunks=2 characters=5 resident_chunks=12"
+        "seed=42 tick=100000 worldgen_version=2 chunks=2 characters=5 resident_chunks=9"
     ));
     assert!(stdout.contains(
-        "character id=1 name=Ada position_subunits=(-1536, 512) containing_cell=(-2, 0)"
+        "character id=1 name=Ada position_subunits=(512, -1792) containing_cell=(0, -2)"
     ));
-    assert!(
-        stdout.contains(
-            "character id=5 name=Elin position_subunits=(2560, 512) containing_cell=(2, 0)"
-        )
-    );
+    assert!(stdout.contains(
+        "character id=5 name=Elin position_subunits=(1280, -2560) containing_cell=(1, -3)"
+    ));
     assert!(stdout.contains("terrain grass="));
     assert!(stdout.contains(" water="));
     assert!(stdout.contains(" rock="));
@@ -120,7 +118,7 @@ fn activity_smoke_exercises_physical_work_save_load_and_bounded_residency() {
     assert!(stdout.contains("tools=13"));
     assert!(stdout.contains("structures=3"));
     assert!(stdout.contains("save_reload_while_carrying=true"));
-    assert!(stdout.contains("resident_chunks=12"));
+    assert!(stdout.contains("resident_chunks=9"));
 }
 
 #[test]

@@ -3,11 +3,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::{EntityId, RecipeId, WorldCell};
 
 pub const HARVEST_WORK_TICKS: u32 = 4;
+pub const EAT_WORK_TICKS: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum JobKind {
     Harvest {
         source: WorldCell,
+    },
+    Eat {
+        character_id: EntityId,
+        item_id: EntityId,
     },
     Haul {
         item_id: EntityId,
@@ -92,6 +97,8 @@ impl Job {
 pub(crate) struct JobWorld {
     jobs: BTreeMap<EntityId, Job>,
     harvest_by_source: BTreeMap<WorldCell, EntityId>,
+    eat_by_character: BTreeMap<EntityId, EntityId>,
+    eat_by_item: BTreeMap<EntityId, EntityId>,
     haul_by_item: BTreeMap<EntityId, EntityId>,
     haul_by_destination: BTreeMap<WorldCell, EntityId>,
     production_supply_by_item: BTreeMap<EntityId, EntityId>,
@@ -127,6 +134,14 @@ impl JobWorld {
         self.harvest_by_source.get(&source).copied()
     }
 
+    pub(crate) fn eat_job_for_character(&self, character_id: EntityId) -> Option<EntityId> {
+        self.eat_by_character.get(&character_id).copied()
+    }
+
+    pub(crate) fn eat_job_for_item(&self, item_id: EntityId) -> Option<EntityId> {
+        self.eat_by_item.get(&item_id).copied()
+    }
+
     pub(crate) fn haul_job_for_item(&self, item_id: EntityId) -> Option<EntityId> {
         self.haul_by_item.get(&item_id).copied()
     }
@@ -151,6 +166,12 @@ impl JobWorld {
     pub(crate) fn logistics_job_for_item(&self, item_id: EntityId) -> Option<EntityId> {
         self.haul_job_for_item(item_id)
             .or_else(|| self.production_supply_job_for_item(item_id))
+    }
+
+    pub(crate) fn item_job_for_item(&self, item_id: EntityId) -> Option<EntityId> {
+        self.logistics_job_for_item(item_id)
+            .or_else(|| self.eat_job_for_item(item_id))
+            .or_else(|| self.craft_job_for_item(item_id))
     }
 
     pub(crate) fn logistics_job_for_destination(&self, destination: WorldCell) -> Option<EntityId> {
@@ -194,12 +215,25 @@ impl JobWorld {
                 }
                 self.harvest_by_source.insert(source, id);
             }
+            JobKind::Eat {
+                character_id,
+                item_id,
+            } => {
+                if self.eat_by_character.contains_key(&character_id) {
+                    return Err(JobWorldError::EatCharacterAlreadyDesignated(character_id));
+                }
+                if self.item_job_for_item(item_id).is_some() {
+                    return Err(JobWorldError::EatItemAlreadyReserved(item_id));
+                }
+                self.eat_by_character.insert(character_id, id);
+                self.eat_by_item.insert(item_id, id);
+            }
             JobKind::Haul {
                 item_id,
                 destination,
                 ..
             } => {
-                if self.logistics_job_for_item(item_id).is_some() {
+                if self.item_job_for_item(item_id).is_some() {
                     return Err(JobWorldError::HaulItemAlreadyReserved(item_id));
                 }
                 if self.logistics_job_for_destination(destination).is_some() {
@@ -213,7 +247,7 @@ impl JobWorld {
                 destination,
                 ..
             } => {
-                if self.logistics_job_for_item(item_id).is_some() {
+                if self.item_job_for_item(item_id).is_some() {
                     return Err(JobWorldError::ProductionSupplyItemAlreadyReserved(item_id));
                 }
                 if self.logistics_job_for_destination(destination).is_some() {
@@ -280,7 +314,7 @@ impl JobWorld {
             return Err(JobWorldError::IndexCorruption);
         }
         for item_id in &unique {
-            if self.craft_item_reservations.contains_key(item_id) {
+            if self.item_job_for_item(*item_id).is_some() {
                 return Err(JobWorldError::CraftItemAlreadyReserved(*item_id));
             }
         }
@@ -394,6 +428,16 @@ impl JobWorld {
                     return Err(JobWorldError::IndexCorruption);
                 }
             }
+            JobKind::Eat {
+                character_id,
+                item_id,
+            } => {
+                if self.eat_by_character.remove(&character_id) != Some(job_id)
+                    || self.eat_by_item.remove(&item_id) != Some(job_id)
+                {
+                    return Err(JobWorldError::IndexCorruption);
+                }
+            }
             JobKind::Haul {
                 item_id,
                 destination,
@@ -472,6 +516,16 @@ impl JobWorld {
                         return false;
                     }
                 }
+                JobKind::Eat {
+                    character_id,
+                    item_id,
+                } => {
+                    if self.eat_by_character.get(&character_id) != Some(id)
+                        || self.eat_by_item.get(&item_id) != Some(id)
+                    {
+                        return false;
+                    }
+                }
                 JobKind::Haul {
                     item_id,
                     destination,
@@ -539,6 +593,13 @@ impl JobWorld {
                 .values()
                 .filter(|job| matches!(job.kind(), JobKind::Harvest { .. }))
                 .count()
+            && self.eat_by_character.len()
+                == self
+                    .jobs
+                    .values()
+                    .filter(|job| matches!(job.kind(), JobKind::Eat { .. }))
+                    .count()
+            && self.eat_by_character.len() == self.eat_by_item.len()
             && self.haul_by_item.len()
                 == self
                     .jobs
@@ -595,6 +656,8 @@ pub(crate) enum JobWorldError {
     DuplicateJob(EntityId),
     UnknownJob(EntityId),
     HarvestSourceAlreadyDesignated(WorldCell),
+    EatCharacterAlreadyDesignated(EntityId),
+    EatItemAlreadyReserved(EntityId),
     HaulItemAlreadyReserved(EntityId),
     HaulDestinationAlreadyReserved(WorldCell),
     ProductionSupplyItemAlreadyReserved(EntityId),
@@ -646,6 +709,48 @@ mod tests {
 
         jobs.remove(id(10)).unwrap();
         assert_eq!(jobs.harvest_job_for_source(source), None);
+        assert!(jobs.indexes_are_consistent());
+    }
+
+    #[test]
+    fn eat_reserves_one_character_and_physical_item_until_removed() {
+        let mut jobs = JobWorld::default();
+        jobs.insert(Job::new(
+            id(20),
+            JobKind::Eat {
+                character_id: id(3),
+                item_id: id(6),
+            },
+        ))
+        .unwrap();
+        assert_eq!(jobs.eat_job_for_character(id(3)), Some(id(20)));
+        assert_eq!(jobs.eat_job_for_item(id(6)), Some(id(20)));
+        assert!(matches!(
+            jobs.insert(Job::new(
+                id(21),
+                JobKind::Eat {
+                    character_id: id(3),
+                    item_id: id(7),
+                },
+            )),
+            Err(super::JobWorldError::EatCharacterAlreadyDesignated(_))
+        ));
+        assert!(matches!(
+            jobs.insert(Job::new(
+                id(22),
+                JobKind::Haul {
+                    item_id: id(6),
+                    stockpile_id: id(30),
+                    destination: WorldCell::new(1, 1),
+                },
+            )),
+            Err(super::JobWorldError::HaulItemAlreadyReserved(_))
+        ));
+        assert!(jobs.indexes_are_consistent());
+
+        jobs.remove(id(20)).unwrap();
+        assert_eq!(jobs.eat_job_for_character(id(3)), None);
+        assert_eq!(jobs.eat_job_for_item(id(6)), None);
         assert!(jobs.indexes_are_consistent());
     }
 

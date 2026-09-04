@@ -21,12 +21,13 @@ pub use construction::{
     StructureKind,
 };
 pub use entity::{
-    Character, DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED, Direction, EntityId,
-    MovementSpeed, MovementState,
+    BERRIES_MEAL_SATIETY, Character, DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED,
+    Direction, EntityId, HUNGRY_SATIETY, MAX_SATIETY, MovementSpeed, MovementState,
+    SATIETY_DECAY_INTERVAL_TICKS,
 };
 pub use exploration::CHARACTER_VISION_RADIUS_CELLS;
 pub use item::{ItemKind, ItemLocation, ItemQuantity, ItemStack, MAX_STACK_QUANTITY};
-pub use job::{HARVEST_WORK_TICKS, Job, JobKind, JobState};
+pub use job::{EAT_WORK_TICKS, HARVEST_WORK_TICKS, Job, JobKind, JobState};
 pub use position::{
     InteractionRadius, SUBUNITS_PER_CELL, WorldPosition, WorldPositionError,
     within_interaction_range,
