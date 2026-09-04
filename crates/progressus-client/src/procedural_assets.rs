@@ -488,6 +488,11 @@ mod tests {
                 TerrainConnections::from_known(center, terrain, &known),
             ));
             assert_eq!(alpha_at(&image, 0, 0), 0);
+            // The rounded turn must be visibly larger than a one-pixel corner
+            // clip: both exposed edge strips are transparent near the corner.
+            assert_eq!(alpha_at(&image, 3, 0), 0);
+            assert_eq!(alpha_at(&image, 0, 3), 0);
+            assert_ne!(alpha_at(&image, 5, 5), 0);
             assert_ne!(alpha_at(&image, 8, 8), 0);
         }
     }
