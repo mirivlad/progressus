@@ -218,6 +218,10 @@ impl Simulation {
         self.explored_world.contains(position)
     }
 
+    pub fn has_explored_cells_in_chunk(&self, coordinate: ChunkCoord) -> bool {
+        self.explored_world.contains_chunk(coordinate)
+    }
+
     pub const fn exploration_revision(&self) -> u64 {
         self.explored_world.revision()
     }

@@ -233,6 +233,25 @@ fn spatial_snapshot_layers_can_be_requested_without_rebuilding_terrain() {
     assert!(resources_only.chunks.is_empty());
     assert!(resources_only.ground_items.is_empty());
     assert!(!resources_only.natural_resources.is_empty());
+
+    let with_distant_unknown_chunks = application
+        .snapshot(SnapshotQuery {
+            chunks: vec![
+                ChunkCoord::new(-1, 0),
+                ChunkCoord::new(0, 0),
+                ChunkCoord::new(100, 100),
+                ChunkCoord::new(-100, -100),
+            ],
+            include_terrain: false,
+            include_ground_items: false,
+            include_natural_resources: true,
+            ..SnapshotQuery::default()
+        })
+        .unwrap();
+    assert_eq!(
+        with_distant_unknown_chunks.natural_resources,
+        resources_only.natural_resources
+    );
 }
 
 #[test]

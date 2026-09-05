@@ -1,12 +1,13 @@
 use std::collections::BTreeSet;
 
-use crate::WorldCell;
+use crate::{ChunkCoord, WorldCell};
 
 pub const CHARACTER_VISION_RADIUS_CELLS: i64 = 5;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ExploredWorld {
     cells: BTreeSet<WorldCell>,
+    chunks: BTreeSet<ChunkCoord>,
     revision: u64,
 }
 
@@ -19,9 +20,16 @@ impl ExploredWorld {
         self.cells.iter().copied()
     }
 
+    pub(crate) fn contains_chunk(&self, chunk: ChunkCoord) -> bool {
+        self.chunks.contains(&chunk)
+    }
+
     pub(crate) fn restore_cells(cells: impl IntoIterator<Item = WorldCell>) -> Self {
+        let cells = cells.into_iter().collect::<BTreeSet<_>>();
+        let chunks = cells.iter().map(|cell| cell.split().0).collect();
         Self {
-            cells: cells.into_iter().collect(),
+            cells,
+            chunks,
             revision: 0,
         }
     }
@@ -45,7 +53,9 @@ impl ExploredWorld {
                 let Some(y) = center.y().checked_add(y_offset) else {
                     continue;
                 };
-                changed |= self.cells.insert(WorldCell::new(x, y));
+                let cell = WorldCell::new(x, y);
+                changed |= self.cells.insert(cell);
+                self.chunks.insert(cell.split().0);
             }
         }
         if changed {
@@ -79,5 +89,11 @@ mod tests {
         assert!(explored.reveal_around(WorldCell::new(-5, 0)));
         assert!(explored.contains(WorldCell::new(-10, 0)));
         assert!(explored.contains(WorldCell::new(5, 0)));
+        assert!(explored.contains_chunk(WorldCell::new(-10, 0).split().0));
+        assert!(!explored.contains_chunk(WorldCell::new(10_000, 10_000).split().0));
+
+        let restored = ExploredWorld::restore_cells(explored.cells());
+        assert!(restored.contains_chunk(WorldCell::new(-10, 0).split().0));
+        assert!(!restored.contains_chunk(WorldCell::new(10_000, 10_000).split().0));
     }
 }

@@ -255,27 +255,18 @@ impl Application {
         query.chunks.sort_unstable();
         query.chunks.dedup();
         let requested_chunks = query.chunks.clone();
+        let explored_requested_chunks = requested_chunks
+            .iter()
+            .copied()
+            .filter(|coordinate| self.simulation.has_explored_cells_in_chunk(*coordinate))
+            .collect::<Vec<_>>();
 
         let chunks = if query.include_terrain {
-            query
-                .chunks
-                .into_iter()
-                .filter_map(|coordinate| {
-                    let any_known = (0..CHUNK_SIDE).any(|y| {
-                        (0..CHUNK_SIDE).any(|x| {
-                            let cell = coordinate
-                                .world_cell(LocalCell::new(x, y))
-                                .expect("valid chunk-local cells produce world cells");
-                            self.simulation.is_explored(cell)
-                        })
-                    });
-                    if !any_known {
-                        return None;
-                    }
-                    let effective = match self.simulation.effective_chunk(coordinate) {
-                        Ok(chunk) => chunk,
-                        Err(error) => return Some(Err(error)),
-                    };
+            explored_requested_chunks
+                .iter()
+                .copied()
+                .map(|coordinate| {
+                    let effective = self.simulation.effective_chunk(coordinate)?;
                     let cells = (0..CHUNK_SIDE)
                         .flat_map(|y| (0..CHUNK_SIDE).map(move |x| LocalCell::new(x, y)))
                         .map(|local| {
@@ -293,13 +284,13 @@ impl Application {
                             }
                         })
                         .collect();
-                    Some(Ok(ChunkSnapshot {
+                    Ok(ChunkSnapshot {
                         coordinate,
                         side: CHUNK_SIDE,
                         cells,
-                    }))
+                    })
                 })
-                .collect::<Result<Vec<_>, _>>()?
+                .collect::<Result<Vec<_>, SimulationError>>()?
         } else {
             Vec::new()
         };
@@ -310,7 +301,7 @@ impl Application {
             .map(CarriedItemSnapshot::from_carried_item)
             .collect();
         let ground_items = if query.include_ground_items {
-            requested_chunks
+            explored_requested_chunks
                 .iter()
                 .copied()
                 .flat_map(|coordinate| self.simulation.ground_items_in_chunk(coordinate))
@@ -325,7 +316,7 @@ impl Application {
             Vec::new()
         };
         let natural_resources = if query.include_natural_resources {
-            requested_chunks
+            explored_requested_chunks
                 .into_iter()
                 .map(|coordinate| self.simulation.natural_resources_in_chunk(coordinate))
                 .collect::<Result<Vec<_>, _>>()?
