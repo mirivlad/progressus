@@ -1,0 +1,69 @@
+# Procedural settlement audio
+
+Date: 2026-09-08
+
+Status: sound direction approved by owner; written specification awaiting review. No audio implementation or listening validation yet.
+
+## Goal
+
+Give the existing settlement a quiet acoustic background and readable sounds of physical work. The owner selected locally generated acoustic ambient over orchestral music or externally generated AI tracks.
+
+## Alternatives considered
+
+1. Local procedural composition and synthesis: offline, reproducible, small distribution, controllable performance. Selected. Instrument realism is limited by the synthesis and must be judged by listening.
+2. Pre-generated AI recordings: potentially richer timbres, but introduces an external production workflow and recording/licensing decisions. Not selected.
+3. Recorded instrument stems with procedural arrangement: a useful later quality upgrade, but requires an authored sound library. Not needed for this first pass.
+
+## Music
+
+- Sparse plucked-string motifs, soft sustained harmonic support and restrained wooden percussion. No vocals or constant foreground melody.
+- A small fixed harmonic vocabulary and phrase templates constrain composition; independent presentation seeds vary notes, pauses and instrumentation.
+- Generate a bounded bank of phrases once when audio initializes, then arrange and crossfade cached phrases. Do not synthesize complete tracks in the frame update or allocate an indefinitely growing phrase cache.
+- Initial bank budget: at most four 16-second phrases, 24 kHz stereo PCM16, approximately 6.2 MB before decoder/backend overhead. Measure actual startup cost and decoded memory separately.
+- Use attack/release envelopes and overlapping fades to avoid clicks and obvious hard loop boundaries. Include quiet gaps and avoid persistent strong bass.
+- Music continues during simulation pause; it does not follow simulation acceleration. Exact musical phase is not saved.
+
+## Work effects
+
+Initial vocabulary:
+
+- Harvest: short soft cut/rustle impact; material-specific tree/stone/berry variants may be used only when that source kind is already available from an explored snapshot.
+- Construct: muted stone/wood taps.
+- Craft: restrained workbench/tool strikes.
+- Physical pickup/drop: small handling sound only when the carrier/location transition is actually observed.
+
+Effects describe observed physical activity. A designation click is not a completed building or a finished harvest. A disappeared job alone does not prove completion: cancellation also removes jobs. The first pass does not need completion fanfares.
+
+Derive work effects from detached `JobSnapshot` state/progress and worker positions at successfully observed authoritative ticks. Keep the previous observed tick/job progress in disposable client state. Do not invent an authoritative event log for audio.
+
+Do not replay effects on an ordinary frame, repeated snapshot, camera pan, startup or save load. Loading resets the observation baseline even when the loaded tick equals the previous tick. Pausing suppresses new work effects; existing short tails may finish.
+
+Cull work effects outside the visible camera area before allocating voices. Use modest horizontal panning within that area, rather than a new world-scale acoustic simulation. Bound work effects to eight simultaneous voices and four new voices per observed tick; drop excess cues rather than queueing an audible backlog. Reuse a small generated sample bank.
+
+## Controls and failure behavior
+
+- Add a localized Sound entry to the existing HUD/modal system.
+- Provide separate Music and Effects levels, each with a zero/mute position. Defaults must leave work effects readable without dominating the scene.
+- Settings are client session state initially. Do not add presentation settings to authoritative saves.
+- If an output device is unavailable, continue playing silently with a diagnostic. Audio initialization must not make a valid headless simulation depend on an audio device.
+
+## Boundaries
+
+All synthesis, arrangement, audio resources, voice limits and settings belong to `progressus-client`. Continue using `progressus-app` snapshots; no Bevy dependency, audio clock or audio RNG enters `progressus-sim` or `progressus-worldgen`.
+
+Use Bevy's audio integration with generated in-memory PCM/WAV assets. Check the locally pinned Bevy API and Linux audio build dependencies before selecting feature flags. Keep the client's direct dependencies constrained to Bevy and `progressus-app` as required by the existing boundary script.
+
+Likely files: new client `audio.rs` for Bevy playback/observation, new client `audio_synthesis.rs` for pure sample generation, client module/runtime registration, localized HUD/modal controls and Cargo audio features. No changes to authoritative save format or gameplay timing are needed for audio.
+
+## Acceptance
+
+1. Generate preview WAVs for the music and each effect family; verify valid PCM, finite samples, non-silence, no clipping and bounded durations. The owner can listen to these independently of launching Bevy.
+2. Test presentation-seed reproducibility and variation. This is a presentation guarantee within the supported build, not a cross-platform authoritative floating-point contract.
+3. Test that repeated frames/snapshots, pause, load and camera movement do not duplicate work effects. Test voice admission limits and off-screen culling.
+4. Compare authoritative save bytes for the same command/tick sequence with audio enabled and disabled; they must match.
+5. Verify independent mute/level controls, graceful no-device behavior, continuous music, fades, pickup/drop and work sounds in the native client. Compilation alone is not listening validation.
+6. Record generation wall time, steady-state frame/update cost and asset/voice counts. Retain raw observations; do not claim a performance improvement from this feature.
+
+## Order of work
+
+First fix and verify the audit's blocked-output and tick-remainder defects, keeping them in focused commits. Then implement the sample generator and previews, playback/observation, and controls. Run audio acceptance and the existing core/client gates. Stage B sleep/shelter starts after this pass, with its own need-priority and physical-rest design.
