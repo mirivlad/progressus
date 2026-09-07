@@ -39,7 +39,8 @@ impl TickScheduler {
         if self.elapsed < TICK_INTERVAL {
             return false;
         }
-        self.elapsed = Duration::ZERO;
+        self.elapsed =
+            Duration::from_nanos((self.elapsed.as_nanos() % TICK_INTERVAL.as_nanos()) as u64);
         true
     }
 }
@@ -72,16 +73,37 @@ mod tests {
     use bevy::prelude::{ButtonInput, KeyCode};
     use progressus_app::{Command, Direction, EntityId};
 
-    use super::{TickScheduler, movement_command};
+    use super::{TICK_INTERVAL, TickScheduler, movement_command};
 
     #[test]
     fn scheduler_emits_one_tick_and_discards_long_frame_backlog() {
         let mut scheduler = TickScheduler::default();
         assert!(!scheduler.advance(Duration::from_millis(249)));
+        assert!(scheduler.advance(Duration::from_millis(2)));
+        assert_eq!(scheduler.elapsed, Duration::from_millis(1));
+        assert!(!scheduler.advance(Duration::from_millis(248)));
         assert!(scheduler.advance(Duration::from_millis(1)));
-        assert!(!scheduler.advance(Duration::ZERO));
-        assert!(scheduler.advance(Duration::from_secs(3)));
-        assert!(!scheduler.advance(Duration::ZERO));
+        assert_eq!(scheduler.elapsed, Duration::ZERO);
+
+        assert!(scheduler.advance(Duration::from_millis(3_125)));
+        assert_eq!(scheduler.elapsed, Duration::from_millis(125));
+        assert!(!scheduler.advance(Duration::from_millis(124)));
+        assert!(scheduler.advance(Duration::from_millis(1)));
+        assert_eq!(scheduler.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn ordinary_frame_rates_preserve_exact_accumulated_time() {
+        for fps in [30_u64, 60, 144, 200] {
+            let mut scheduler = TickScheduler::default();
+            let delta = Duration::from_nanos(1_000_000_000 / fps);
+            let frames = fps * 60;
+            let ticks = (0..frames).filter(|_| scheduler.advance(delta)).count();
+            assert_eq!(
+                ticks as u128,
+                delta.as_nanos() * u128::from(frames) / TICK_INTERVAL.as_nanos()
+            );
+        }
     }
 
     #[test]

@@ -299,7 +299,7 @@ impl Simulation {
 
             let cycle = tick / IDLE_BEHAVIOR_INTERVAL_TICKS;
             let entropy = idle_entropy(seed, character_id.value(), cycle);
-            let route = if entropy % IDLE_SOCIAL_CHANCE_DIVISOR == 0 {
+            let route = if entropy.is_multiple_of(IDLE_SOCIAL_CHANCE_DIVISOR) {
                 self.plan_idle_social_route(character_id, entropy)?
                     .or(self.plan_idle_wander_route(character_id, entropy)?)
             } else {
@@ -473,7 +473,12 @@ impl Simulation {
     }
 
     fn decay_satiety_if_due(&mut self) {
-        if self.clock.tick().value() % SATIETY_DECAY_INTERVAL_TICKS != 0 {
+        if !self
+            .clock
+            .tick()
+            .value()
+            .is_multiple_of(SATIETY_DECAY_INTERVAL_TICKS)
+        {
             return;
         }
         for character in self.characters.values_mut() {
@@ -3720,14 +3725,17 @@ impl Simulation {
         let plan = self
             .craft_consumption_plan(job_id, recipe_id)
             .ok_or(SimulationError::JobInvariantViolation)?;
-        let output_cell = self
-            .production_zone_destination(
-                workstation_id,
-                ProductionZoneKind::Output,
-                recipe.output_kind,
-                recipe.output_quantity,
-            )?
-            .ok_or(SimulationError::ProductionOutputBlocked(workstation_id))?;
+        let Some(output_cell) = self.production_zone_destination(
+            workstation_id,
+            ProductionZoneKind::Output,
+            recipe.output_kind,
+            recipe.output_quantity,
+        )?
+        else {
+            // Completed work waits for physical output capacity without consuming
+            // its reserved inputs or aborting the rest of the simulation tick.
+            return Ok(());
+        };
         let merge_target = self.item_world.iter().find_map(|item| {
             (item.kind() == recipe.output_kind
                 && item
@@ -7130,6 +7138,130 @@ mod tests {
         );
         assert!(simulation.production_world.indexes_are_consistent());
         assert!(simulation.job_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn blocked_craft_output_preserves_completed_work_across_save_and_cancellation() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        clear_all_items(&mut simulation);
+        let workstation_id = simulation
+            .place_workstation(WorkstationKind::Workbench, WorldCell::new(0, 0))
+            .unwrap();
+        let (wood_id, stone_id) = seed_recipe_inputs(&mut simulation, workstation_id, 2, 1);
+        let output_cells =
+            production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Output);
+        let order_id = simulation
+            .add_production_order(
+                workstation_id,
+                RecipeId::PrimitiveTool,
+                ProductionTarget::finite(1),
+            )
+            .unwrap();
+        let job_id = simulation.job_world.craft_job_for_order(order_id).unwrap();
+
+        for _ in 0..128 {
+            simulation.advance_ticks(1).unwrap();
+            if matches!(
+                simulation.job_world.get(job_id).map(Job::state),
+                Some(JobState::Working {
+                    remaining_ticks: 1,
+                    ..
+                })
+            ) {
+                break;
+            }
+        }
+        assert!(matches!(
+            simulation.job_world.get(job_id).map(Job::state),
+            Some(JobState::Working {
+                remaining_ticks: 1,
+                ..
+            })
+        ));
+        let worker_id = simulation
+            .job_world
+            .get(job_id)
+            .unwrap()
+            .state()
+            .worker()
+            .unwrap();
+        let reserved = simulation
+            .job_world
+            .craft_reserved_items(job_id)
+            .unwrap()
+            .clone();
+
+        for cell in &output_cells {
+            simulation
+                .set_terrain_override(*cell, Terrain::Rock)
+                .unwrap();
+        }
+        simulation.advance_ticks(3).unwrap();
+
+        assert!(matches!(
+            simulation.job_world.get(job_id).map(Job::state),
+            Some(JobState::Working {
+                worker_id: active_worker,
+                remaining_ticks: 1,
+            }) if active_worker == worker_id
+        ));
+        assert_eq!(
+            simulation.job_world.craft_reserved_items(job_id),
+            Some(&reserved)
+        );
+        assert_eq!(
+            simulation.item_world.get(wood_id).unwrap().quantity().get(),
+            2
+        );
+        assert_eq!(
+            simulation
+                .item_world
+                .get(stone_id)
+                .unwrap()
+                .quantity()
+                .get(),
+            1
+        );
+        assert_eq!(total_item_quantity(&simulation, ItemKind::PrimitiveTool), 0);
+
+        let saved = simulation.save_json().unwrap();
+        let mut completed = Simulation::load_json(&saved).unwrap();
+        let mut cancelled = Simulation::load_json(&saved).unwrap();
+
+        for cell in &output_cells {
+            completed
+                .set_terrain_override(*cell, Terrain::Grass)
+                .unwrap();
+        }
+        completed.advance_ticks(1).unwrap();
+        assert_eq!(total_item_quantity(&completed, ItemKind::PrimitiveTool), 1);
+        assert_eq!(
+            completed
+                .production_world
+                .get(order_id)
+                .unwrap()
+                .remaining_runs(),
+            Some(0)
+        );
+        assert!(completed.job_world.get(job_id).is_none());
+        completed.advance_ticks(16).unwrap();
+        assert_eq!(total_item_quantity(&completed, ItemKind::PrimitiveTool), 1);
+
+        cancelled.remove_production_order(order_id).unwrap();
+        assert!(cancelled.job_world.get(job_id).is_none());
+        assert!(cancelled.job_world.craft_reserved_items(job_id).is_none());
+        for item_id in reserved {
+            assert_eq!(cancelled.job_world.craft_job_for_item(item_id), None);
+        }
+        assert_eq!(
+            cancelled.item_world.get(wood_id).unwrap().quantity().get(),
+            2
+        );
+        assert_eq!(
+            cancelled.item_world.get(stone_id).unwrap().quantity().get(),
+            1
+        );
+        assert!(cancelled.job_world.indexes_are_consistent());
     }
 
     #[test]
