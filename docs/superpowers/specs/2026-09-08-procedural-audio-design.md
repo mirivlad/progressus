@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: sound direction approved by owner; written specification awaiting review. No audio implementation or listening validation yet.
+Status: approved by owner on 2026-09-08, including the amendment below. Implementation and listening validation pending.
 
 ## Goal
 
@@ -17,10 +17,12 @@ Give the existing settlement a quiet acoustic background and readable sounds of 
 ## Music
 
 - Sparse plucked-string motifs, soft sustained harmonic support and restrained wooden percussion. No vocals or constant foreground melody.
-- A small fixed harmonic vocabulary and phrase templates constrain composition; independent presentation seeds vary notes, pauses and instrumentation.
-- Generate a bounded bank of phrases once when audio initializes, then arrange and crossfade cached phrases. Do not synthesize complete tracks in the frame update or allocate an indefinitely growing phrase cache.
-- Initial bank budget: at most four 16-second phrases, 24 kHz stereo PCM16, approximately 6.2 MB before decoder/backend overhead. Measure actual startup cost and decoded memory separately.
-- Use attack/release envelopes and overlapping fades to avoid clicks and obvious hard loop boundaries. Include quiet gaps and avoid persistent strong bass.
+- Play a newly composed approximately 120-second piece, then 20 seconds of silence, then a different piece. Work effects remain independent of this music silence.
+- Adjacent pieces must change composition family, harmonic progression, melody, arrangement and instrumentation; merely transposing or ornamenting one looping phrase does not satisfy this requirement.
+- Use several bounded composition families (for example open pastoral phrases, flowing harp-like figures, and spacious modal responses), with deterministic presentation-only variation inside each family. Return to a family only with a new composition seed.
+- Generate one next piece on a worker task, retain at most current and next PCM assets, and never synthesize a full piece in a frame update. If generation is late, extend the silence rather than blocking a frame or replaying the old piece.
+- Use 24 kHz stereo PCM16, about 11.52 MB per 120-second encoded piece. Measure backend/decoder memory separately. Fade into/out of each piece to avoid abrupt boundaries.
+- Deliver at least three independently listenable music examples and an effect sampler, plus an example of the 120-second music / 20-second silence / changed music sequence.
 - Music continues during simulation pause; it does not follow simulation acceleration. Exact musical phase is not saved.
 
 ## Work effects
@@ -61,7 +63,7 @@ Likely files: new client `audio.rs` for Bevy playback/observation, new client `a
 2. Test presentation-seed reproducibility and variation. This is a presentation guarantee within the supported build, not a cross-platform authoritative floating-point contract.
 3. Test that repeated frames/snapshots, pause, load and camera movement do not duplicate work effects. Test voice admission limits and off-screen culling.
 4. Compare authoritative save bytes for the same command/tick sequence with audio enabled and disabled; they must match.
-5. Verify independent mute/level controls, graceful no-device behavior, continuous music, fades, pickup/drop and work sounds in the native client. Compilation alone is not listening validation.
+5. Verify independent mute/level controls, graceful no-device behavior, the 120/20 music schedule, changed compositions, fades, pickup/drop and work sounds in the native client. Compilation alone is not listening validation.
 6. Record generation wall time, steady-state frame/update cost and asset/voice counts. Retain raw observations; do not claim a performance improvement from this feature.
 
 ## Order of work
