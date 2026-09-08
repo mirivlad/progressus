@@ -31,7 +31,7 @@
 - Produces: `pub fn candidate_pool(seed: u64) -> Vec<Motif>`
 - Produces: `pub fn shortlist(seed: u64, count: usize) -> Vec<Motif>`
 
-- [ ] **Step 1: Add failing grammar tests**
+- [x] **Step 1: Add failing grammar tests**
 
 Add module tests that require exactly 48 reproducible candidates, 3–7 notes, range at most six scale degrees, at most one leap larger than a third, matching duration counts, no immediate three-note repetition, role-compatible endings and no transposition-equivalent duplicates. Require a deterministic 10-item shortlist with distinct normalized `(degrees, durations)` signatures and coverage of every ending role.
 
@@ -53,7 +53,7 @@ fn shortlist_is_diverse_and_covers_ending_roles() {
 }
 ```
 
-- [ ] **Step 2: Run the focused test and observe failure**
+- [x] **Step 2: Run the focused test and observe failure**
 
 Run:
 
@@ -63,13 +63,13 @@ rustc --test --edition=2024 crates/progressus-client/src/motif_generation.rs -o 
 
 Expected: failure because the new interfaces are not implemented.
 
-- [ ] **Step 3: Implement the bounded grammar**
+- [x] **Step 3: Implement the bounded grammar**
 
 Use a local SplitMix64-style RNG. Generate scale-degree walks from neutral Dorian/pentatonic-compatible degrees with weighted steps `[-2, -1, 0, 1, 2]`, permitting one bounded `±3` leap. Generate relative durations from `[2, 3, 4, 6]`, classify endings by final motion and reject candidates until 48 normalized unique valid motifs exist. Give every loop a hard attempt bound and panic with a clear invariant message if the grammar cannot fill the pool.
 
 Shortlist deterministically by round-robin ending role, then maximize minimum distance from already selected normalized degree/rhythm signatures. Resolve equal scores by original candidate index.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -80,7 +80,7 @@ rustc --test --edition=2024 crates/progressus-client/src/motif_generation.rs -o 
 
 Expected: all motif grammar tests pass.
 
-- [ ] **Step 5: Commit and push the grammar**
+- [x] **Step 5: Commit and push the grammar**
 
 ```bash
 git add crates/progressus-client/src/motif_generation.rs
