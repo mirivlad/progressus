@@ -1,5 +1,5 @@
 //! Disposable observation of physical work; never issues simulation commands.
-use crate::audio_synthesis::{EffectKind, MUSIC_GAP_SECONDS};
+use crate::audio_synthesis::EffectKind;
 use progressus_app::{
     ChunkCoord, ClientSnapshot, EntityId, GroundItemSnapshot, JobKind, JobState, SimulationTick,
     WorldCell,
@@ -114,24 +114,6 @@ impl WorkObserver {
     }
 }
 
-#[derive(Default)]
-pub(crate) struct MusicSchedule {
-    playing: bool,
-    ready_at: f64,
-}
-impl MusicSchedule {
-    pub fn ready(&self, now: f64) -> bool {
-        !self.playing && now >= self.ready_at
-    }
-    pub fn started(&mut self) {
-        self.playing = true;
-    }
-    pub fn finished(&mut self, now: f64) {
-        self.playing = false;
-        self.ready_at = now + f64::from(MUSIC_GAP_SECONDS);
-    }
-}
-
 // Keep the admission rule independently testable without an audio device.
 pub(crate) fn audible_cues(
     cues: Vec<Cue>,
@@ -197,7 +179,10 @@ mod tests {
 
     #[test]
     fn audio_observation_and_synthesis_preserve_a_real_command_sequence() {
-        use crate::audio_synthesis::{effect_wav, music_wav};
+        use crate::{
+            ambient_synthesis::{AmbientLayer, layer_wav},
+            audio_synthesis::effect_wav,
+        };
         use progressus_app::Command;
         let new_game = || {
             Application::new_game(NewGameOptions {
@@ -209,8 +194,9 @@ mod tests {
         let mut silent = new_game();
         let mut observer = WorkObserver::default();
         observer.observe(&audible.snapshot(SnapshotQuery::default()).unwrap(), &[]);
-        let music = music_wav(1);
-        assert!(music.len() > 44);
+        for layer in AmbientLayer::ALL {
+            assert!(layer_wav(layer, 1).len() > 44);
+        }
         for command in [
             Command::CreateStockpile {
                 cell: WorldCell::new(2, 1),
@@ -301,18 +287,5 @@ mod tests {
             observer.observe(&snapshot, &[]).is_empty(),
             "cancellation is not a completion cue"
         );
-    }
-
-    #[test]
-    fn schedule_waits_twenty_seconds_after_playback_completion() {
-        let mut schedule = MusicSchedule::default();
-        assert!(schedule.ready(0.0));
-        schedule.started();
-        assert!(!schedule.ready(999.0));
-        schedule.finished(125.0);
-        assert!(!schedule.ready(144.999));
-        assert!(schedule.ready(145.0));
-        schedule.started();
-        assert!(!schedule.ready(9999.0));
     }
 }

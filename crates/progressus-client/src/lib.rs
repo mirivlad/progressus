@@ -1,3 +1,5 @@
+mod ambient_playback;
+mod ambient_synthesis;
 mod audio;
 mod audio_observer;
 mod audio_synthesis;

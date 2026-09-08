@@ -1,5 +1,7 @@
 # Procedural Audio Implementation Plan
 
+Historical plan: implemented in `481d25b` with the preceding correctness fixes in `634cb66`. The owner replaced the 120/20 music requirement with [continuous ambient](2026-09-08-continuous-ambient.md). The unchecked steps below are the original planning record; current work is tracked in the replacement plan.
+
 > **For agentic workers:** Use subagent-driven-development for bounded tasks and reviews. Execute continuously within the approved specification.
 
 **Goal:** Fix the audited correctness defects and deliver local acoustic music, work sounds and playable examples.

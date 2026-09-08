@@ -8,6 +8,8 @@
 
 **Tech Stack:** Rust, pinned Bevy 0.18.1 audio, stereo PCM16 at 24 kHz; no new direct dependencies.
 
+**Execution status, 2026-09-09:** Tasks 1 and 2 implemented and verified; source review, full gates, native continuity capture and unavailable-device checks passed. Detailed evidence and the remaining subjective/native-UI limitations are recorded in the approved specification. Publication is the final step.
+
 ## Global Constraints
 
 - Approved specification: `docs/superpowers/specs/2026-09-08-continuous-ambient-design.md`.

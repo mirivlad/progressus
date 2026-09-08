@@ -4,6 +4,8 @@ Date: 2026-09-08
 
 Status: implemented and technically validated on 2026-09-08. Owner listening review of the generated material remains requested.
 
+Historical version: the owner subsequently approved [continuous layered ambient](2026-09-08-continuous-ambient-design.md), which supersedes the music schedule and composition requirements below. Work observation and authoritative boundaries remain applicable.
+
 ## Goal
 
 Give the existing settlement a quiet acoustic background and readable sounds of physical work. The owner selected locally generated acoustic ambient over orchestral music or externally generated AI tracks.

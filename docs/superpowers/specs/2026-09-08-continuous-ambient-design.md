@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: approved by the owner on 2026-09-08; implementation in progress.
+Status: approved on 2026-09-08; implemented and technically validated on 2026-09-09. Subjective listening assessment remains with the owner.
 
 ## Requested change
 
@@ -62,4 +62,22 @@ No danger, combat, electricity or future technology state is introduced. The ava
 5. Retain the existing real command/tick sequence comparison proving identical authoritative saves with and without audio observation/synthesis. Run focused client tests and existing required project gates.
 6. Record raw generation times, asset/voice counts and native runtime observations. Distinguish technical checks from the owner's subjective listening assessment.
 
-The earlier audio specification remains the historical record of the previous version. This specification supersedes its 120/20 schedule. Do not claim the continuous generator exists until playback and examples have been verified.
+The earlier audio specification remains the historical record of the previous version. This specification supersedes its 120/20 schedule.
+
+## Implementation and validation record — 2026-09-09
+
+- Three independently prepared/mixed layers: 64-second harmonic foundation, 64-second non-looping melody, 43-second nature texture. Foundation/nature replacements start after 58/37 seconds with six-second linear crossfades; seamless source loops sustain the background if the next buffer is late. Outgoing voices fade only after the replacement sink is observed ready.
+- Nature uses actual filtered random noise in wind/leaf bands with slow envelopes. Harmony uses compatible D Dorian voicings; melodic phrases change contour, length, register and timbre. Three phrases fit each melody buffer; internal rests remain 10–25 seconds and normal cross-buffer rests 12–15 seconds. A late worker may extend the melody's rest without silencing the background.
+- Existing observed harvest/construction/crafting/pickup/drop cues provide the settlement activity layer. No fictional machinery or new gameplay state was added. Work voices have a fixed 0.08 mix gain before the Effects setting, reserving headroom for the eight-voice limit.
+- Exported 23 WAV files, including four-minute quiet and explicitly scripted work demonstrations, 45-second excerpts, isolated layers and work samples. PCM metadata, duration, headroom and non-silence checks passed. Both four-minute mixes had peak 0.047913 and minimum one-second RMS after fade-in 0.003922. Scripted effect panning approximates placement; it is not an exact reproduction of the native spatial backend.
+- `PROGRESSUS_RUN_CLIENT_TESTS=1 ./scripts/check-prototype-01.sh` passed: format, strict Clippy, 180 authoritative/app/headless/worldgen tests, 65 client-library tests plus one client CLI test, dependency boundaries and the three existing long-run headless scenarios. The real audio-observation command sequence preserves identical authoritative saves.
+- Eight pure synthesis tests passed independently. Regressions include 100 adjacent melody-buffer boundaries, combined headroom, finite raw float PCM, loop boundaries and variation. An actual Bevy-system test exercises 40 transition cycles with a deliberately pending worker and simulated backend-start observations; assets and entities retire correctly. This test does not claim to reproduce physical output-device behavior.
+- Native X11/PipeWire capture lasted 250.0007 seconds, covering four foundation, three melody and six nature replacements. Simulation was paused during the capture and ambient continued. No one-second bin after startup was silent; the longest near-zero stereo run after startup was 0.000125 seconds. Capture peak was 0.134979 with no clipping. Only the test process's own sink input was routed and recorded; the default system sink was not changed.
+- Fifteen-second native samples showed three or four ambient voices and 21/22 total audio assets, including the 15 cached work sounds; counts returned after overlaps. Static maximum is five ambient voices and eight ambient assets, plus the work bank. Pending-task/asset/voice cleanup on unavailable output and volume/fade independence are covered by client tests.
+- Native raw generation times included foundation index 0: 632.546065 ms, index 1: 494.501036 ms; melody index 0: 99.783216 ms; nature index 0: 136.931745 ms. Raw process-memory/CPU samples are retained separately and include renderer/allocator costs; they are not an audio-overhead measurement or a performance-improvement claim.
+- An ALSA configuration pointing at unavailable hardware produced the actual backend warning `No audio device found`, followed by the client's silent-continuation diagnostic. The application remained alive until the explicit 12-second timeout.
+- Independent source review found and verified the cross-buffer-rest fix; no actionable source findings remained. Music/Effects/mute and changing crossfade gain were verified through the real level-application system. A fresh native click-through of every Sound-modal control was not completed in this run; the UI itself is unchanged from the preceding audio implementation.
+
+Local evidence and playable outputs: `target/continuous-ambient-20260908/` in the main checkout. It contains `generation.log`, `preview-verification.json`, `native-client.log`, `native-verification.json`, `native-process-samples.txt`, `no-device.log`, `final-gates.log`, previews and the native capture. These generated artifacts are not repository assets.
+
+Recovery note: the former `/tmp` worktree disappeared between sessions before implementation was committed. The successful source patches were recovered from the session journal into the persistent `.worktrees/continuous-ambient` checkout, then reviewed and verified again. The approved design commit had already been pushed.
