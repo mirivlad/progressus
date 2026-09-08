@@ -20,6 +20,7 @@ pub(crate) enum ModalKind {
     Workstation(EntityId),
     Stockpile(EntityId),
     Saves,
+    Sound,
 }
 
 #[derive(Resource, Debug, Default)]
@@ -141,10 +142,12 @@ pub(crate) struct SaveModalState<'w> {
     motion: ResMut<'w, VisualMotion>,
     cache: ResMut<'w, PresentationCache>,
     scheduler: ResMut<'w, TickScheduler>,
+    audio: ResMut<'w, crate::audio::SettlementAudio>,
 }
 
 #[derive(SystemParam)]
 pub(crate) struct ModalRenderState<'w> {
+    audio_settings: Res<'w, crate::audio::AudioSettings>,
     authoritative: Res<'w, AuthoritativeClient>,
     save_store: Res<'w, SaveStore>,
     modal: ResMut<'w, ModalState>,
@@ -272,6 +275,7 @@ pub(crate) fn save_modal_interaction(
             state.selected.0 = None;
             state.selected_stockpile.0 = None;
             state.motion.clear();
+            state.audio.reset_observer();
             state.tool.mode = ToolMode::Select;
             state.tool.cancel_drag();
             state.cache.invalidate_loaded_world();
@@ -358,6 +362,12 @@ pub(crate) fn sync_modal(
             };
             spawn_stockpile_modal(&mut commands, stockpile, *state.locale, &state.font)
         }
+        ModalKind::Sound => spawn_sound_modal(
+            &mut commands,
+            &state.audio_settings,
+            *state.locale,
+            &state.font,
+        ),
         ModalKind::Saves => {
             spawn_saves_modal(&mut commands, &state.save_store, *state.locale, &state.font)
         }
@@ -1482,4 +1492,137 @@ fn refresh(authoritative: &mut AuthoritativeClient) {
     if let Err(error) = authoritative.refresh_lightweight_snapshot(None) {
         error!("authoritative snapshot failed after modal action: {error}");
     }
+}
+
+#[derive(Component)]
+pub(crate) struct AdjustSound {
+    channel: crate::audio::AudioChannel,
+    delta: i16,
+}
+
+pub(crate) fn sound_interaction(
+    menu: Query<&Interaction, (Changed<Interaction>, With<crate::audio::SoundMenuButton>)>,
+    buttons: Query<(&Interaction, &AdjustSound), Changed<Interaction>>,
+    mut modal: ResMut<ModalState>,
+    mut settings: ResMut<crate::audio::AudioSettings>,
+) {
+    if menu.iter().any(|i| *i == Interaction::Pressed) {
+        modal.open = Some(ModalKind::Sound);
+        modal.dirty = true;
+    }
+    for (interaction, button) in &buttons {
+        if *interaction == Interaction::Pressed {
+            settings.adjust(button.channel, button.delta);
+            modal.dirty = true;
+        }
+    }
+}
+
+fn spawn_sound_modal(
+    commands: &mut Commands,
+    settings: &crate::audio::AudioSettings,
+    locale: Locale,
+    font: &UiFont,
+) -> Entity {
+    use crate::audio::AudioChannel;
+    let ru = locale.language == crate::i18n::Language::Ru;
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: percent(100),
+                height: percent(100),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
+            GlobalZIndex(100),
+            Interaction::default(),
+            UiCapture,
+        ))
+        .with_children(|backdrop| {
+            backdrop
+                .spawn((
+                    Node {
+                        width: px(430),
+                        padding: UiRect::all(px(20)),
+                        row_gap: px(18),
+                        flex_direction: FlexDirection::Column,
+                        ..default()
+                    },
+                    BackgroundColor(PANEL),
+                    UiCapture,
+                ))
+                .with_children(|panel| {
+                    panel.spawn(text_bundle(
+                        if ru { "Звук" } else { "Sound" },
+                        font,
+                        22.0,
+                        TEXT,
+                    ));
+                    for (channel, label, value) in [
+                        (
+                            AudioChannel::Music,
+                            if ru { "Музыка" } else { "Music" },
+                            settings.music,
+                        ),
+                        (
+                            AudioChannel::Effects,
+                            if ru { "Эффекты" } else { "Effects" },
+                            settings.effects,
+                        ),
+                    ] {
+                        panel
+                            .spawn(Node {
+                                width: percent(100),
+                                justify_content: JustifyContent::SpaceBetween,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            })
+                            .with_children(|row| {
+                                row.spawn(text_bundle(
+                                    format!("{label}: {value}%"),
+                                    font,
+                                    18.0,
+                                    TEXT,
+                                ));
+                                for (text, delta) in [("−", -25), ("+", 25)] {
+                                    row.spawn((
+                                        Button,
+                                        AdjustSound { channel, delta },
+                                        UiCapture,
+                                        button_node(),
+                                        BackgroundColor(BUTTON),
+                                    ))
+                                    .with_children(|button| {
+                                        button.spawn(text_bundle(text, font, 20.0, TEXT));
+                                    });
+                                }
+                            });
+                    }
+                    panel.spawn(text_bundle(
+                        if ru {
+                            "0% — выключено. Музыка играет с паузами."
+                        } else {
+                            "0% mutes the channel. Music includes quiet intervals."
+                        },
+                        font,
+                        14.0,
+                        MUTED,
+                    ));
+                    panel
+                        .spawn((
+                            Button,
+                            ModalCloseButton,
+                            UiCapture,
+                            button_node(),
+                            BackgroundColor(BUTTON),
+                        ))
+                        .with_children(|button| {
+                            button.spawn(text_bundle(locale.tr(TextKey::Close), font, 16.0, TEXT));
+                        });
+                });
+        })
+        .id()
 }

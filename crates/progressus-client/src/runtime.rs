@@ -920,6 +920,8 @@ pub fn run_with_options(seed: u64, diagnostics_enabled: bool) -> Result<(), Clie
     let mut app = App::new();
     app.insert_resource(AuthoritativeClient::new_with_seed(WorldSeed::new(seed))?)
         .insert_resource(TickScheduler::default())
+        .init_resource::<crate::audio::SettlementAudio>()
+        .init_resource::<crate::audio::AudioSettings>()
         .insert_resource(PresentationCache::default())
         .insert_resource(ProceduralAssetRegistry::default())
         .insert_resource(NavigationDebug::default())
@@ -951,6 +953,7 @@ pub fn run_with_options(seed: u64, diagnostics_enabled: bool) -> Result<(), Clie
         (
             setup_ui_font,
             setup_camera,
+            crate::audio::setup_audio,
             setup_toolbar,
             setup_character_inspector,
             setup_stockpile_inspector,
@@ -964,6 +967,7 @@ pub fn run_with_options(seed: u64, diagnostics_enabled: bool) -> Result<(), Clie
             sync_display_frame_pacing,
             (
                 language_toggle_interaction,
+                crate::modal::sound_interaction,
                 pause_toggle_interaction,
                 zone_visibility_interaction,
                 modal_keyboard,
@@ -983,6 +987,8 @@ pub fn run_with_options(seed: u64, diagnostics_enabled: bool) -> Result<(), Clie
             (
                 advance_authority,
                 sync_presentation,
+                crate::audio::update_audio,
+                crate::audio::apply_audio_levels,
                 sync_character_inspector,
                 sync_stockpile_inspector,
                 crate::render::interpolate_character_visuals,
@@ -1035,8 +1041,16 @@ mod tests {
         Direction::West,
     ];
 
-    fn presentation_app(authoritative: AuthoritativeClient) -> App {
+    fn test_app() -> App {
         let mut app = App::new();
+        app.init_resource::<bevy::diagnostic::DiagnosticsStore>()
+            .init_resource::<crate::ui::ZoneVisibility>()
+            .init_resource::<crate::modal::ModalState>();
+        app
+    }
+
+    fn presentation_app(authoritative: AuthoritativeClient) -> App {
+        let mut app = test_app();
         app.insert_resource(authoritative)
             .insert_resource(PresentationCache::default())
             .insert_resource(SelectedCharacter::default())
@@ -1099,7 +1113,7 @@ mod tests {
 
     #[test]
     fn paused_scheduler_stops_authoritative_ticks_and_resume_has_no_backlog() {
-        let mut app = App::new();
+        let mut app = test_app();
         app.insert_resource(AuthoritativeClient::new().unwrap())
             .insert_resource(TickScheduler::default())
             .insert_resource(SelectedCharacter::default())
@@ -1179,7 +1193,7 @@ mod tests {
             .retain(|character| character.id != super::cora_id());
 
         let ada_id = EntityId::new(1).unwrap();
-        let mut app = App::new();
+        let mut app = test_app();
         let ada_visual = app
             .world_mut()
             .spawn((CharacterVisual { id: ada_id }, Transform::default()))
@@ -1447,6 +1461,11 @@ mod tests {
         let terrain = terrain_children(&app, root);
         assert!(!terrain.is_empty());
 
+        let ground_before = app
+            .world()
+            .resource::<PresentationCache>()
+            .ground_items
+            .clone();
         for _ in 0..8 {
             app.update();
         }
@@ -1455,7 +1474,8 @@ mod tests {
         assert_eq!(cache.terrain_root, Some(root));
         assert_eq!(terrain_children(&app, root), terrain);
         assert_eq!(cache.characters.len(), 5);
-        assert_eq!(cache.ground_items.len(), 4);
+        assert_eq!(cache.ground_items.len(), 5); // Includes the Stage A bootstrap Berries.
+        assert_eq!(cache.ground_items, ground_before);
         assert!(!cache.natural_resources.is_empty());
         for entity in cache.characters.values() {
             assert!(app.world().get_entity(*entity).is_ok());
@@ -1687,7 +1707,7 @@ mod tests {
         let blocked_target = blocked_direction.adjacent(blocked_from).unwrap();
         assert_ne!(terrain_at(&authoritative, blocked_target), Terrain::Grass);
 
-        let mut app = App::new();
+        let mut app = test_app();
         app.insert_resource(authoritative)
             .insert_resource(TickScheduler::default())
             .insert_resource(PresentationCache::default())

@@ -2,7 +2,7 @@
 
 Date: 2026-09-08
 
-Status: approved by owner on 2026-09-08, including the amendment below. Implementation and listening validation pending.
+Status: implemented and technically validated on 2026-09-08. Owner listening review of the generated material remains requested.
 
 ## Goal
 
@@ -69,3 +69,11 @@ Likely files: new client `audio.rs` for Bevy playback/observation, new client `a
 ## Order of work
 
 First fix and verify the audit's blocked-output and tick-remainder defects, keeping them in focused commits. Then implement the sample generator and previews, playback/observation, and controls. Run audio acceptance and the existing core/client gates. Stage B sleep/shelter starts after this pass, with its own need-priority and physical-rest design.
+
+## Validation record
+
+- Generated three complete 120-second 24 kHz stereo PCM16 compositions (`01-pastoral`, `02-harp-waltz`, and `03-modal-rest`), their 30-second excerpts, five three-variant effect families, an effect sampler, and a `120 s music → 20 s silence → changed 120 s music` WAV example. Every exported file was parsed as WAV, had finite non-silent PCM under the clipping limit, and had the expected duration.
+- Unit tests cover score reproducibility and structural differences across composition families; PCM duration, fades, headroom and effects; observation baseline/load/pause behavior; cue culling and voice limits; and two matching real authoritative command/tick sequences with and without audio observation/synthesis. The sequences serialize to identical save bytes throughout.
+- Native client validation ran against the active X11 and PipeWire sessions. The visual Sound modal showed independently adjustable Music and Effects levels. A 160-second isolated audio capture contained an 80-second tail of a running piece, 23 seconds of digital silence, and the beginning of the next generated piece. The capture began after the current piece had already started, hence the partial first piece.
+- With its PulseAudio server environment deliberately pointed at a nonexistent socket, the native client remained alive for nine seconds and did not terminate. This checks graceful startup under that unavailable-server configuration; it does not prove behavior for every native backend or physical device failure.
+- Backend/decoder memory and subjective listening quality remain platform- and owner-dependent. The generated preview files are the review artifact for timbre, mix and musical variety.

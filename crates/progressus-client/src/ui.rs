@@ -94,6 +94,7 @@ pub(crate) enum HudTooltipKind {
     Palette(HudPalette),
     Pause,
     Saves,
+    Sound,
     Language,
     ZoneVisibility,
 }
@@ -290,6 +291,20 @@ pub(crate) fn setup_toolbar(
                 ))
                 .with_children(|button| {
                     button.spawn(text_bundle("S", &font, 15.0, Color::srgb(0.91, 0.93, 0.94)));
+                });
+
+            toolbar
+                .spawn((
+                    Button,
+                    crate::audio::SoundMenuButton,
+                    HudTooltipSource(HudTooltipKind::Sound),
+                    UiCapture,
+                    hud_button_node(),
+                    BackgroundColor(NORMAL_BUTTON),
+                    BorderColor::all(Color::srgb(0.30, 0.34, 0.36)),
+                ))
+                .with_children(|button| {
+                    button.spawn(text_bundle("♪", &font, 18.0, Color::srgb(0.91, 0.93, 0.94)));
                 });
 
             toolbar
@@ -1056,6 +1071,10 @@ fn hud_tooltip_text(
             "Pause or resume simulation time.",
             Some("P"),
         ),
+        (Language::Ru, HudTooltipKind::Sound) => {
+            ("Звук", "Настроить громкость музыки и эффектов.", None)
+        }
+        (Language::En, HudTooltipKind::Sound) => ("Sound", "Adjust music and effect levels.", None),
         (Language::En, HudTooltipKind::Saves) => ("Saves", "Open save and load controls.", None),
         (Language::En, HudTooltipKind::Language) => {
             ("Language", "Switch the interface language.", None)

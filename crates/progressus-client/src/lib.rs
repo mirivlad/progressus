@@ -1,3 +1,6 @@
+mod audio;
+mod audio_observer;
+mod audio_synthesis;
 mod client_diagnostics;
 mod i18n;
 mod interaction;
