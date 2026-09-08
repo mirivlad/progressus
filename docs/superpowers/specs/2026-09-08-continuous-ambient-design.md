@@ -81,3 +81,9 @@ The earlier audio specification remains the historical record of the previous ve
 Local evidence and playable outputs: `target/continuous-ambient-20260908/` in the main checkout. It contains `generation.log`, `preview-verification.json`, `native-client.log`, `native-verification.json`, `native-process-samples.txt`, `no-device.log`, `final-gates.log`, previews and the native capture. These generated artifacts are not repository assets.
 
 Recovery note: the former `/tmp` worktree disappeared between sessions before implementation was committed. The successful source patches were recovered from the session journal into the persistent `.worktrees/continuous-ambient` checkout, then reviewed and verified again. The approved design commit had already been pushed.
+
+## Listening revision — 2026-09-09
+
+The owner reported that the continuous background resembled a refrigerator hum. Isolated-layer and spectrum checks traced this to the foundation's uninterrupted D2/A2 fundamentals at approximately 73/110 Hz. Low-pass RMS below 130 Hz was 0.013840, exceeding the 0.011786 upper-band RMS.
+
+The foundation now starts at D3, reduces its sustained gain and gives its four voices independent 17/23/29/31-second swells. This keeps the nature layer continuous while the harmonic voices breathe instead of holding an appliance-like low tone. The regenerated foundation measures 0.002659 below 130 Hz versus 0.005884 above it; overall foundation RMS fell from 0.018179 to 0.006457. A regression checks all four voicings for restrained low-frequency energy and meaningful four-second energy variation. Subjective acceptance depends on the owner's review of the regenerated example.

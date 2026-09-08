@@ -82,32 +82,34 @@ fn render_foundation(pcm: &mut [f32], index: u64) {
     // Every voicing draws from D Dorian. Common D/A tones keep independently
     // selected layers compatible while register and colour rotate by index.
     const VOICINGS: [[f32; 4]; 4] = [
-        [38.0, 45.0, 52.0, 55.0],
-        [38.0, 45.0, 50.0, 57.0],
-        [38.0, 45.0, 53.0, 59.0],
-        [38.0, 45.0, 55.0, 60.0],
+        [50.0, 57.0, 64.0, 67.0],
+        [50.0, 57.0, 62.0, 69.0],
+        [50.0, 57.0, 65.0, 71.0],
+        [50.0, 57.0, 67.0, 72.0],
     ];
     let voicing = VOICINGS[index as usize % VOICINGS.len()];
     let brightness = 0.75 + (index.wrapping_mul(17) % 7) as f32 * 0.045;
     for frame in 0..pcm.len() / 2 {
         let t = frame as f32 / SAMPLE_RATE as f32;
-        let motion = 0.78
-            + 0.08 * (TAU * t / 17.0 + index as f32 * 0.31).sin()
-            + 0.06 * (TAU * t / 23.0 + index as f32 * 0.17).sin()
-            + 0.04 * (TAU * t / 29.0 + index as f32 * 0.11).sin();
+        let motion = 0.76 + 0.10 * (TAU * t / 29.0 + index as f32 * 0.11).sin();
         let mut left = 0.0;
         let mut right = 0.0;
         for (voice, midi) in voicing.into_iter().enumerate() {
             let hz = midi_hz(midi);
             let phase = TAU * hz * t + voice as f32 * 1.7;
             let drift = 0.012 * (TAU * t / (17.0 + voice as f32 * 3.0)).sin();
+            let period = [17.0, 23.0, 29.0, 31.0][voice];
+            let swell = ((TAU * t / period + index as f32 * 0.37 + voice as f32 * 1.8).sin() * 0.5
+                + 0.5)
+                .powi(3);
             let tone = (phase + drift).sin()
                 + brightness * 0.16 * (phase * 2.0 + 0.4).sin()
                 + (1.0 - brightness * 0.4) * 0.07 * (phase * 3.0 + 1.1).sin();
             let (l, r) = pan_gains((voice as f32 - 1.5) * 0.22);
-            let gain = if voice < 2 { 0.026 } else { 0.019 };
-            left += tone * gain * l;
-            right += tone * gain * r;
+            let gain = if voice < 2 { 0.020 } else { 0.016 };
+            let voice_gain = gain * (0.06 + swell * 0.94);
+            left += tone * voice_gain * l;
+            right += tone * voice_gain * r;
         }
         pcm[frame * 2] = left * motion;
         pcm[frame * 2 + 1] = right * motion;
@@ -448,6 +450,35 @@ mod tests {
                 .iter()
                 .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
             assert!(peak < 0.4, "{layer:?} raw peak was {peak}");
+        }
+    }
+
+    #[test]
+    fn foundation_avoids_stationary_low_frequency_hum() {
+        for index in 0..4 {
+            let pcm = layer_pcm(AmbientLayer::Foundation, index);
+            let alpha = 1.0 - (-TAU * 130.0 / SAMPLE_RATE as f32).exp();
+            let mut low_pass = [0.0_f32; 2];
+            let (mut low_energy, mut upper_energy) = (0.0_f64, 0.0_f64);
+            for pair in pcm.chunks_exact(2) {
+                for channel in 0..2 {
+                    low_pass[channel] += alpha * (pair[channel] - low_pass[channel]);
+                    let upper = pair[channel] - low_pass[channel];
+                    low_energy += f64::from(low_pass[channel] * low_pass[channel]);
+                    upper_energy += f64::from(upper * upper);
+                }
+            }
+            let windows: Vec<f64> = pcm
+                .chunks_exact(SAMPLE_RATE as usize * 4 * 2)
+                .map(|window| window.iter().map(|sample| f64::from(sample * sample)).sum())
+                .collect();
+            assert!(
+                low_energy < upper_energy * 0.45,
+                "foundation {index} low-frequency energy resembles a motor hum: {low_energy} vs {upper_energy}"
+            );
+            let quiet = windows.iter().copied().fold(f64::INFINITY, f64::min);
+            let loud = windows.iter().copied().fold(0.0_f64, f64::max);
+            assert!(loud > quiet * 1.6, "foundation {index} is too stationary");
         }
     }
 }
