@@ -33,6 +33,12 @@ fn midi_hz(midi: f32) -> f32 {
     440.0 * 2.0_f32.powf((midi - 69.0) / 12.0)
 }
 
+fn felt_string_frequencies(midi: f32) -> [f32; 3] {
+    const CENTS: [f32; 3] = [-3.0, 0.0, 3.5];
+    let base = midi_hz(midi);
+    CENTS.map(|cents| base * 2.0_f32.powf(cents / 1_200.0))
+}
+
 fn pan_gains(pan: f32) -> (f32, f32) {
     (((1.0 - pan) * 0.5).sqrt(), ((1.0 + pan) * 0.5).sqrt())
 }
@@ -175,21 +181,28 @@ fn add_felt_piano(pcm: &mut [f32], event: NoteEvent, pan: f32, seed: u64) {
     let first = (event.start * SAMPLE_RATE as f32) as usize;
     let tail = event.duration + 4.2;
     let last = (((event.start + tail) * SAMPLE_RATE as f32) as usize).min(pcm.len() / 2);
-    let hz = midi_hz(event.midi);
+    let frequencies = felt_string_frequencies(event.midi);
     let (left, right) = pan_gains(pan);
     let mut rng = Rng(seed);
-    let phase = rng.unit() * TAU;
+    let phases = [rng.unit() * TAU, rng.unit() * TAU, rng.unit() * TAU];
     for frame in first..last {
         let time = frame as f32 / SAMPLE_RATE as f32 - event.start;
         let attack = (time / 0.055).clamp(0.0, 1.0).powi(2);
         let fundamental_decay = (-time / 3.5).exp();
         let upper_decay = (-time / 1.15).exp();
-        let body = (TAU * hz * time + phase).sin() * 0.72 * fundamental_decay
-            + (TAU * hz * 2.002 * time + phase * 0.7).sin() * 0.18 * upper_decay
-            + (TAU * hz * 3.006 * time + phase * 1.3).sin() * 0.07 * upper_decay
-            + (TAU * hz * 0.501 * time + phase * 0.3).sin() * 0.03 * fundamental_decay;
+        let mut body = 0.0;
+        for string in 0..3 {
+            let phase = TAU * frequencies[string] * time + phases[string];
+            body += phase.sin() * 0.72 * fundamental_decay
+                + (phase * 2.002).sin() * 0.18 * upper_decay
+                + (phase * 3.006).sin() * 0.07 * upper_decay;
+        }
+        body /= 3.0;
+        let soundboard = (TAU * frequencies[1] * 0.501 * time + phases[1] * 0.3).sin()
+            * 0.03
+            * fundamental_decay;
         let hammer = (rng.unit() * 2.0 - 1.0) * (-time / 0.06).exp() * 0.025;
-        let sample = (body + hammer) * attack * 0.15;
+        let sample = (body + soundboard + hammer) * attack * 0.15;
         pcm[frame * 2] += sample * left;
         pcm[frame * 2 + 1] += sample * right;
     }
@@ -345,16 +358,51 @@ mod tests {
             .collect()
     }
 
-    fn first_difference_energy(pcm: &[f32]) -> f32 {
-        let mut sum = 0.0;
-        let mut previous = 0.0;
-        for frame in pcm.chunks_exact(2) {
-            let mono = (frame[0] + frame[1]) * 0.5;
-            let difference = mono - previous;
-            sum += difference * difference;
-            previous = mono;
+    fn split_band_energy(pcm: &[f32], cutoff_hz: f32) -> (f32, f32) {
+        let omega = TAU * cutoff_hz / SAMPLE_RATE as f32;
+        let cosine = omega.cos();
+        let alpha = omega.sin() / 2.0_f32.sqrt();
+        let a0 = 1.0 + alpha;
+        let a1 = -2.0 * cosine / a0;
+        let a2 = (1.0 - alpha) / a0;
+        let low_coefficients = (
+            (1.0 - cosine) * 0.5 / a0,
+            (1.0 - cosine) / a0,
+            (1.0 - cosine) * 0.5 / a0,
+        );
+        let upper_coefficients = (
+            (1.0 + cosine) * 0.5 / a0,
+            -(1.0 + cosine) / a0,
+            (1.0 + cosine) * 0.5 / a0,
+        );
+        let mut low_state = [[0.0_f32; 4]; 2];
+        let mut upper_state = [[0.0_f32; 4]; 2];
+        let mut low_energy = 0.0;
+        let mut upper_energy = 0.0;
+        for (frame_index, frame) in pcm.chunks_exact(2).enumerate() {
+            for channel in 0..2 {
+                let [low_x1, low_x2, low_y1, low_y2] = low_state[channel];
+                let low = low_coefficients.0 * frame[channel]
+                    + low_coefficients.1 * low_x1
+                    + low_coefficients.2 * low_x2
+                    - a1 * low_y1
+                    - a2 * low_y2;
+                low_state[channel] = [frame[channel], low_x1, low, low_y1];
+
+                let [upper_x1, upper_x2, upper_y1, upper_y2] = upper_state[channel];
+                let upper = upper_coefficients.0 * frame[channel]
+                    + upper_coefficients.1 * upper_x1
+                    + upper_coefficients.2 * upper_x2
+                    - a1 * upper_y1
+                    - a2 * upper_y2;
+                upper_state[channel] = [frame[channel], upper_x1, upper, upper_y1];
+                if frame_index >= SAMPLE_RATE as usize {
+                    low_energy += low * low;
+                    upper_energy += upper * upper;
+                }
+            }
         }
-        sum / (pcm.len() / 2) as f32
+        (low_energy, upper_energy)
     }
 
     fn decode_wav(wav: &[u8]) -> Vec<f32> {
@@ -386,6 +434,14 @@ mod tests {
                 0 | 2 | 4 | 5 | 7 | 9 | 11
             )
         }));
+        let wide_leaps = events
+            .windows(2)
+            .filter(|pair| pair[1].start - (pair[0].start + pair[0].duration) <= 2.0)
+            .map(|pair| (pair[1].midi - pair[0].midi).abs())
+            .filter(|interval| *interval > 4.0)
+            .collect::<Vec<_>>();
+        assert!(wide_leaps.len() <= 1);
+        assert!(wide_leaps.iter().all(|interval| *interval <= 5.0));
         assert!(events.windows(2).any(|pair| {
             pair[0].midi.round() as i32 % 12 == 11
                 && pair[1].midi.round() as i32 % 12 == 0
@@ -400,6 +456,32 @@ mod tests {
     }
 
     #[test]
+    fn felt_piano_uses_three_close_but_distinct_strings() {
+        let frequencies = felt_string_frequencies(60.0);
+        assert!(frequencies.windows(2).all(|pair| pair[0] != pair[1]));
+        let spread_cents = 1_200.0 * (frequencies[2] / frequencies[0]).log2();
+        assert!(spread_cents > 2.0 && spread_cents < 12.0);
+    }
+
+    #[test]
+    fn band_measurement_separates_tones_around_130_hz() {
+        let tone = |hz: f32| {
+            let mut pcm = Vec::with_capacity(SAMPLE_RATE as usize * 4 * 2);
+            for frame in 0..SAMPLE_RATE as usize * 4 {
+                let sample = (TAU * hz * frame as f32 / SAMPLE_RATE as f32).sin() * 0.1;
+                pcm.extend_from_slice(&[sample, sample]);
+            }
+            pcm
+        };
+        for hz in [80.0, 100.0, 120.0] {
+            let (low, upper) = split_band_energy(&tone(hz), 130.0);
+            assert!(low > upper, "{hz} Hz must belong to the low band");
+        }
+        let (low, upper) = split_band_energy(&tone(260.0), 130.0);
+        assert!(upper > low);
+    }
+
+    #[test]
     fn background_evolves_for_the_full_comparison_without_low_hum() {
         let pcm = background_pcm(COMPARISON_SEED);
         assert_eq!(pcm.len(), COMPARISON_SECONDS * SAMPLE_RATE as usize * 2);
@@ -410,9 +492,8 @@ mod tests {
         let maximum = rms[1..].iter().copied().fold(0.0, f32::max);
         assert!(maximum / minimum > 1.5);
 
-        let signal_energy =
-            pcm.iter().map(|sample| sample * sample).sum::<f32>() / pcm.len() as f32;
-        assert!(first_difference_energy(&pcm) > signal_energy * 0.0003);
+        let (low_energy, upper_energy) = split_band_energy(&pcm, 130.0);
+        assert!(low_energy < upper_energy);
     }
 
     #[test]
@@ -461,6 +542,8 @@ mod tests {
             assert!(pcm.iter().all(|sample| sample.is_finite()));
             assert!(pcm.iter().all(|sample| sample.abs() < 0.82));
             assert!(rms_windows(&pcm)[1..].iter().all(|rms| *rms > 0.0002));
+            let (low_energy, upper_energy) = split_band_energy(&pcm, 130.0);
+            assert!(low_energy < upper_energy);
             rendered.push(wav);
         }
         assert_ne!(rendered[0], rendered[1]);
