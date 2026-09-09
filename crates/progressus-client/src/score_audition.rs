@@ -415,6 +415,27 @@ fn background_duck_gain(time: f32, phrases: &[PhrasePlan]) -> f32 {
     gain
 }
 
+fn background_duck_envelope(frames: usize, phrases: &[PhrasePlan]) -> Vec<f32> {
+    let mut envelope = vec![1.0_f32; frames];
+    for phrase in phrases {
+        let first = phrase.notes[0].start;
+        let last = phrase.notes.last().unwrap();
+        let end = last.start + last.duration + 2.8;
+        let first_frame = ((first - 0.8).max(0.0) * SAMPLE_RATE as f32) as usize;
+        let last_frame = (((end + 1.2) * SAMPLE_RATE as f32).ceil() as usize).min(frames);
+        for (frame, gain) in envelope
+            .iter_mut()
+            .enumerate()
+            .take(last_frame)
+            .skip(first_frame)
+        {
+            let time = frame as f32 / SAMPLE_RATE as f32;
+            *gain = gain.min(background_duck_gain(time, std::slice::from_ref(phrase)));
+        }
+    }
+    envelope
+}
+
 fn render_phrase_dry(pcm: &mut [f32], phrase: &PhrasePlan, seed: u64) {
     for (note_index, note) in phrase.notes.iter().enumerate() {
         let event = NoteEvent {
@@ -491,24 +512,31 @@ fn add_delay_send(wet: &mut [f32], dry: &[f32], phrase: &PhrasePlan, effect: Phr
 
 fn continuous_layers_from_plan(seed: u64, plan: &AmbientPlan, seconds: usize) -> RenderedLayers {
     let unscaled_background = continuous_background(plan, seconds);
+    let duck_envelope = background_duck_envelope(unscaled_background.len() / 2, &plan.phrases);
     let background = unscaled_background
         .chunks_exact(2)
         .enumerate()
         .flat_map(|(frame, samples)| {
-            let time = frame as f32 / SAMPLE_RATE as f32;
-            let gain = 0.8 * background_duck_gain(time, &plan.phrases);
+            let gain = 0.8 * duck_envelope[frame];
             [samples[0] * gain, samples[1] * gain]
         })
         .collect::<Vec<_>>();
     let mut foreground = vec![0.0; unscaled_background.len()];
     let mut wet = vec![0.0; unscaled_background.len()];
+    let mut phrase_dry = vec![0.0; unscaled_background.len()];
+    let mut previous_range = 0..0;
     for phrase in &plan.phrases {
-        let mut phrase_dry = vec![0.0; unscaled_background.len()];
+        phrase_dry[previous_range.clone()].fill(0.0);
         render_phrase_dry(&mut phrase_dry, phrase, seed);
-        foreground
-            .iter_mut()
-            .zip(&phrase_dry)
-            .for_each(|(output, input)| *output += input);
+        let first_frame = (phrase.notes[0].start * SAMPLE_RATE as f32).floor() as usize;
+        let last = phrase.notes.last().unwrap();
+        let last_frame = (((last.start + last.duration + 4.3) * SAMPLE_RATE as f32).ceil()
+            as usize)
+            .min(unscaled_background.len() / 2);
+        let phrase_range = first_frame * 2..last_frame * 2;
+        for index in phrase_range.clone() {
+            foreground[index] += phrase_dry[index];
+        }
         match phrase.effect {
             PhraseEffect::Dry => {}
             PhraseEffect::Reverb { send, tail } => {
@@ -518,6 +546,7 @@ fn continuous_layers_from_plan(seed: u64, plan: &AmbientPlan, seconds: usize) ->
                 add_delay_send(&mut wet, &phrase_dry, phrase, effect)
             }
         }
+        previous_range = phrase_range;
     }
     RenderedLayers {
         unscaled_background,

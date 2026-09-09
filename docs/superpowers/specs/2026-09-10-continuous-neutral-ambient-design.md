@@ -6,7 +6,7 @@
 
 ## Purpose
 
-Extend the accepted alternating piano-and-strings audition into an effectively nonrepeating ambient stream. The background must stay behind the foreground, spatial effects must appear only on selected phrases, and the result must remain suitable for later client integration without affecting authoritative simulation.
+Extend the accepted alternating piano-and-strings audition into an ambient stream that remains varied throughout a normal multi-hour play session. The background must stay behind the foreground, spatial effects must appear only on selected phrases, and the result must remain suitable for later client integration without affecting authoritative simulation.
 
 This stage produces a review recording only. It does not register the generator in `progressus-client` runtime audio.
 
@@ -29,7 +29,7 @@ While a foreground phrase is active, a smooth gain envelope reduces the backgrou
 
 Foreground gain remains at the accepted level unless final peak protection requires one shared reduction across the complete mix. No compressor or limiter may change the relative A/B timbre balance.
 
-## Unbounded musical timeline
+## Multi-hour musical timeline
 
 An `AmbientTimeline` owns presentation-only state:
 
@@ -40,7 +40,7 @@ An `AmbientTimeline` owns presentation-only state:
 - recent motif fingerprints;
 - independent deterministic counters for harmony, phrase, background and effect decisions.
 
-The timeline can extend to any requested absolute time. It generates finite look-ahead plans, so neither memory use nor generation work grows with the age of the session. The three-minute export uses the same extension API that later client playback can call repeatedly.
+The timeline is required to remain ordered and varied for at least six continuous hours, comfortably beyond the expected listening horizon. It generates finite look-ahead plans, and its retained generation state remains bounded as the session advances. The three-minute export uses the same extension API that later client playback can call repeatedly.
 
 Randomness is deterministic for a given presentation seed and event index. It never consumes or changes authoritative simulation RNG.
 
@@ -95,7 +95,7 @@ Focused tests must prove:
 
 - identical seed and duration produce identical score plans and WAV bytes;
 - different seeds produce different plans;
-- the timeline extends beyond 75 and 180 seconds without cycling its first section;
+- the timeline extends through a six-hour session while event times remain ordered;
 - recent motif fingerprints satisfy the 12-phrase exclusion rule;
 - piano and strings alternate by complete phrase;
 - effect decisions include dry, extra-reverb and delay treatments in the three-minute fixture, with no identical treatment on consecutive phrases;

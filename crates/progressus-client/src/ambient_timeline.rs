@@ -110,37 +110,33 @@ fn effect_kind(effect: PhraseEffect) -> u8 {
     }
 }
 
-pub struct AmbientTimeline {
-    seed: u64,
-    region_index: u64,
-    region_start: f32,
-    chord_index: usize,
-    last_cadence: i64,
-    phrase_index: u64,
-    phrase_start: f32,
-    recent_fingerprints: VecDeque<MotifFingerprint>,
-    previous_effect_kind: Option<u8>,
+fn fingerprints_conflict(recent: &MotifFingerprint, candidate: &MotifFingerprint) -> bool {
+    recent == candidate
+        || (recent.intervals == candidate.intervals
+            && (recent.rhythm == candidate.rhythm || recent.ending_role == candidate.ending_role))
 }
 
-impl AmbientTimeline {
-    pub fn new(seed: u64) -> Self {
-        let mut rng = event_rng(seed, 0x5048_5241_5345_3030, 0, 0);
+#[derive(Clone, Copy)]
+struct RegionCursor {
+    index: u64,
+    start: f32,
+    chord_index: usize,
+    last_cadence: i64,
+}
+
+impl RegionCursor {
+    const fn new() -> Self {
         Self {
-            seed,
-            region_index: 0,
-            region_start: 0.0,
+            index: 0,
+            start: 0.0,
             chord_index: 0,
             last_cadence: -4,
-            phrase_index: 0,
-            phrase_start: 6.0 + rng.unit() * 2.0,
-            recent_fingerprints: VecDeque::with_capacity(12),
-            previous_effect_kind: None,
         }
     }
 
-    pub fn next_region(&mut self) -> HarmonyRegion {
-        let index = self.region_index;
-        let mut rng = event_rng(self.seed, 0x4841_524d_4f4e_5931, index, 0);
+    fn next(&mut self, seed: u64) -> HarmonyRegion {
+        let index = self.index;
+        let mut rng = event_rng(seed, 0x4841_524d_4f4e_5931, index, 0);
         if index > 0 {
             let choices = TRANSITIONS[self.chord_index];
             let mut next = choices[rng.next() as usize % choices.len()];
@@ -158,20 +154,60 @@ impl AmbientTimeline {
         }
         let duration = 13.0 + rng.unit() * 6.0;
         let gain = (0.68
-            + (index as f32 * 0.73 + self.seed as f32 * 0.000_000_1).sin() * 0.16
+            + (index as f32 * 0.73 + seed as f32 * 0.000_000_1).sin() * 0.16
             + (rng.unit() - 0.5) * 0.12)
             .clamp(0.42, 0.9);
         let region = HarmonyRegion {
             index,
-            start: self.region_start,
+            start: self.start,
             duration,
             chord: VOICINGS[self.chord_index],
             gain,
         };
         let overlap = 3.5 + rng.unit() * 2.0;
-        self.region_start += duration - overlap;
-        self.region_index += 1;
+        let next_start = self.start + duration - overlap;
+        assert!(next_start > self.start, "harmony timeline must advance");
+        self.start = next_start;
+        self.index += 1;
         region
+    }
+}
+
+pub struct AmbientTimeline {
+    seed: u64,
+    region_cursor: RegionCursor,
+    phrase_region_cursor: RegionCursor,
+    phrase_current_region: HarmonyRegion,
+    phrase_next_region: HarmonyRegion,
+    phrase_index: u64,
+    phrase_start: f32,
+    recent_fingerprints: VecDeque<MotifFingerprint>,
+    previous_effect_kind: Option<u8>,
+    effect_counts: [u16; 3],
+}
+
+impl AmbientTimeline {
+    pub fn new(seed: u64) -> Self {
+        let mut rng = event_rng(seed, 0x5048_5241_5345_3030, 0, 0);
+        let mut phrase_region_cursor = RegionCursor::new();
+        let phrase_current_region = phrase_region_cursor.next(seed);
+        let phrase_next_region = phrase_region_cursor.next(seed);
+        Self {
+            seed,
+            region_cursor: RegionCursor::new(),
+            phrase_region_cursor,
+            phrase_current_region,
+            phrase_next_region,
+            phrase_index: 0,
+            phrase_start: 6.0 + rng.unit() * 2.0,
+            recent_fingerprints: VecDeque::with_capacity(12),
+            previous_effect_kind: None,
+            effect_counts: [0; 3],
+        }
+    }
+
+    pub fn next_region(&mut self) -> HarmonyRegion {
+        self.region_cursor.next(self.seed)
     }
 
     pub fn next_phrase(&mut self) -> PhrasePlan {
@@ -181,7 +217,11 @@ impl AmbientTimeline {
         } else {
             PhraseTimbre::BowedStrings
         };
-        let chord = chord_at_time(self.seed, self.phrase_start);
+        while self.phrase_next_region.start <= self.phrase_start {
+            self.phrase_current_region = self.phrase_next_region;
+            self.phrase_next_region = self.phrase_region_cursor.next(self.seed);
+        }
+        let chord = self.phrase_current_region.chord;
         let chord_classes = chord.map(|midi| midi.round() as i32 % 12);
         let mut selected = None;
         for attempt in 0..128 {
@@ -237,12 +277,10 @@ impl AmbientTimeline {
                 ending_role: (ending.1.round() as i32 % 12) as u8,
                 timbre,
             };
-            let conflicts = self.recent_fingerprints.iter().any(|recent| {
-                recent == &fingerprint
-                    || (recent.intervals == fingerprint.intervals
-                        && recent.rhythm == fingerprint.rhythm
-                        && recent.ending_role == fingerprint.ending_role)
-            });
+            let conflicts = self
+                .recent_fingerprints
+                .iter()
+                .any(|recent| fingerprints_conflict(recent, &fingerprint));
             if !conflicts {
                 selected = Some((pitches, durations, fingerprint, rng));
                 break;
@@ -266,14 +304,38 @@ impl AmbientTimeline {
             .collect::<Vec<_>>();
 
         let mut effect = effect_for_phrase(self.seed, index);
-        if self.previous_effect_kind == Some(effect_kind(effect)) {
-            effect = if matches!(effect, PhraseEffect::Dry) {
-                reverb_for_phrase(self.seed, index)
-            } else {
-                PhraseEffect::Dry
-            };
+        if !matches!(effect, PhraseEffect::Dry)
+            && self.previous_effect_kind == Some(effect_kind(effect))
+        {
+            effect = PhraseEffect::Dry;
+        }
+        if index < 8 {
+            let remaining_after = 7 - index as usize;
+            let deficits = [
+                4_usize.saturating_sub(self.effect_counts[0] as usize),
+                usize::from(self.effect_counts[1] == 0),
+                usize::from(self.effect_counts[2] == 0),
+            ];
+            if deficits.iter().sum::<usize>() > remaining_after {
+                let mut rng = event_rng(self.seed, 0x4546_4645_4354_4642, index, 0);
+                let mut required = (0..3)
+                    .filter(|kind| deficits[*kind] > 0)
+                    .collect::<Vec<_>>();
+                let rotation = rng.next() as usize % required.len();
+                required.rotate_left(rotation);
+                let selected_kind = required
+                    .into_iter()
+                    .find(|kind| *kind == 0 || Some(*kind as u8) != self.previous_effect_kind)
+                    .unwrap_or(0);
+                effect = match selected_kind {
+                    0 => PhraseEffect::Dry,
+                    1 => reverb_for_phrase(self.seed, index),
+                    _ => delay_for_phrase(self.seed, index),
+                };
+            }
         }
         self.previous_effect_kind = Some(effect_kind(effect));
+        self.effect_counts[effect_kind(effect) as usize] += 1;
         self.recent_fingerprints.push_back(fingerprint.clone());
         if self.recent_fingerprints.len() > 12 {
             self.recent_fingerprints.pop_front();
@@ -292,6 +354,11 @@ impl AmbientTimeline {
     #[cfg(test)]
     fn recent_fingerprint_count(&self) -> usize {
         self.recent_fingerprints.len()
+    }
+
+    #[cfg(test)]
+    fn phrase_harmony_region_index(&self) -> u64 {
+        self.phrase_region_cursor.index
     }
 }
 
@@ -315,35 +382,12 @@ fn delay_for_phrase(seed: u64, index: u64) -> PhraseEffect {
 }
 
 fn effect_for_phrase(seed: u64, index: u64) -> PhraseEffect {
-    match index {
-        0 => PhraseEffect::Dry,
-        1 => reverb_for_phrase(seed, index),
-        2 => delay_for_phrase(seed, index),
-        _ => {
-            let mut rng = event_rng(seed, 0x4546_4645_4354_3031, index, 0);
-            match rng.next() % 100 {
-                0..=49 => PhraseEffect::Dry,
-                50..=84 => reverb_for_phrase(seed, index),
-                _ => delay_for_phrase(seed, index),
-            }
-        }
+    let mut rng = event_rng(seed, 0x4546_4645_4354_3031, index, 0);
+    match rng.next() % 100 {
+        0..=49 => PhraseEffect::Dry,
+        50..=84 => reverb_for_phrase(seed, index),
+        _ => delay_for_phrase(seed, index),
     }
-}
-
-fn chord_at_time(seed: u64, time: f32) -> [f32; 3] {
-    let mut timeline = AmbientTimeline::new(seed);
-    let mut chord = VOICINGS[0];
-    loop {
-        let region = timeline.next_region();
-        if region.start > time {
-            break;
-        }
-        chord = region.chord;
-        if region.start + region.duration >= time && region.start > time - 5.5 {
-            break;
-        }
-    }
-    chord
 }
 
 pub fn collect_plan(seed: u64, seconds: f32) -> AmbientPlan {
@@ -400,10 +444,28 @@ mod tests {
         }));
 
         let mut timeline = AmbientTimeline::new(TEST_SEED);
-        for _ in 0..100 {
+        for _ in 0..1_000 {
             timeline.next_phrase();
         }
         assert_eq!(timeline.recent_fingerprint_count(), 12);
+        assert!(timeline.phrase_harmony_region_index() < 3_000);
+    }
+
+    #[test]
+    fn six_hour_session_keeps_advancing() {
+        let plan = collect_plan(TEST_SEED, 6.0 * 60.0 * 60.0);
+        assert!(plan.regions.len() > 1_000);
+        assert!(plan.phrases.len() > 800);
+        assert!(
+            plan.regions
+                .windows(2)
+                .all(|pair| pair[0].start < pair[1].start)
+        );
+        assert!(
+            plan.phrases
+                .windows(2)
+                .all(|pair| pair[0].notes[0].start < pair[1].notes[0].start)
+        );
     }
 
     #[test]
@@ -427,6 +489,19 @@ mod tests {
                 .collect::<Vec<_>>();
             assert!(wide_leaps.len() <= 1);
             assert!(wide_leaps.iter().all(|interval| *interval <= 5.0));
+            let active_region = plan
+                .regions
+                .iter()
+                .filter(|region| region.start <= phrase.notes[0].start)
+                .next_back()
+                .unwrap();
+            let chord_classes = active_region
+                .chord
+                .map(|midi| (midi.round() as i32).rem_euclid(12));
+            for anchor in [phrase.notes.first().unwrap(), phrase.notes.last().unwrap()] {
+                let pitch_class = (anchor.midi.round() as i32).rem_euclid(12);
+                assert!(chord_classes.contains(&pitch_class));
+            }
         }
         for (index, phrase) in plan.phrases.iter().enumerate() {
             let recent_start = index.saturating_sub(12);
@@ -467,14 +542,32 @@ mod tests {
                 .any(|phrase| matches!(phrase.effect, PhraseEffect::Delay { .. }))
         );
         assert!(plan.phrases.windows(2).all(|pair| {
-            std::mem::discriminant(&pair[0].effect) != std::mem::discriminant(&pair[1].effect)
+            matches!(pair[0].effect, PhraseEffect::Dry)
+                || matches!(pair[1].effect, PhraseEffect::Dry)
+                || std::mem::discriminant(&pair[0].effect)
+                    != std::mem::discriminant(&pair[1].effect)
         }));
-        assert!(
-            plan.phrases
-                .iter()
-                .filter(|phrase| !matches!(phrase.effect, PhraseEffect::Dry))
-                .count()
-                < plan.phrases.len()
-        );
+        let dry_count = plan
+            .phrases
+            .iter()
+            .filter(|phrase| matches!(phrase.effect, PhraseEffect::Dry))
+            .count();
+        assert!(dry_count * 2 >= plan.phrases.len());
+    }
+
+    #[test]
+    fn near_match_requires_both_rhythm_and_ending_to_change() {
+        let base = MotifFingerprint {
+            intervals: vec![2, 2, -1],
+            rhythm: vec![17, 22, 27, 22],
+            ending_role: 0,
+            timbre: PhraseTimbre::FeltPiano,
+        };
+        let mut candidate = base.clone();
+        candidate.timbre = PhraseTimbre::BowedStrings;
+        candidate.ending_role = 4;
+        assert!(fingerprints_conflict(&base, &candidate));
+        candidate.rhythm = vec![22, 17, 22, 27];
+        assert!(!fingerprints_conflict(&base, &candidate));
     }
 }

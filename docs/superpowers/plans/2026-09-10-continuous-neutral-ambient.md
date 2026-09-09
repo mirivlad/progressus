@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Produce a deterministic three-minute audition from an unbounded alternating piano-and-strings timeline with a 20-percent quieter background, smooth phrase ducking and sparse phrase-specific reverb or delay.
+**Goal:** Produce a deterministic three-minute audition from a multi-hour alternating piano-and-strings timeline with a 20-percent quieter background, smooth phrase ducking and sparse phrase-specific reverb or delay.
 
 **Architecture:** A bounded-state `AmbientTimeline` emits absolute-time harmony regions and phrase plans without a fixed cycle. The existing standalone score renderer consumes those plans into separate background, foreground and wet buses, then mixes and encodes a review WAV. The code remains example-only and is not registered in client runtime audio.
 
@@ -23,7 +23,7 @@
 
 ---
 
-### Task 1: Bounded unbounded-timeline planner
+### Task 1: Bounded multi-hour timeline planner
 
 **Files:**
 - Create: `crates/progressus-client/src/ambient_timeline.rs`
