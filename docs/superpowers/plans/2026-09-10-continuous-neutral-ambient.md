@@ -39,7 +39,7 @@
 - Produces: `pub struct AmbientTimeline` with `pub fn new(seed: u64) -> Self`, `pub fn next_region(&mut self) -> HarmonyRegion`, `pub fn next_phrase(&mut self) -> PhrasePlan`, and test-only `fn recent_fingerprint_count(&self) -> usize`.
 - Produces: `pub fn collect_plan(seed: u64, seconds: f32) -> AmbientPlan`
 
-- [ ] **Step 1: Write failing deterministic timeline tests**
+- [x] **Step 1: Write failing deterministic timeline tests**
 
 Add tests in `ambient_timeline.rs` that collect regions and phrases until 240 seconds and require deterministic same-seed output, changed different-seed output, strictly increasing absolute times, alternating timbres, legal MIDI pitch classes and bounded recent history:
 
@@ -60,7 +60,7 @@ fn timeline_extends_deterministically_with_bounded_state() {
 }
 ```
 
-- [ ] **Step 2: Run the standalone test and observe missing-interface failures**
+- [x] **Step 2: Run the standalone test and observe missing-interface failures**
 
 Run:
 
@@ -70,7 +70,7 @@ rustc --test --edition=2024 crates/progressus-client/src/ambient_timeline.rs -o 
 
 Expected: compilation fails because `AmbientTimeline` and plan types do not exist.
 
-- [ ] **Step 3: Implement deterministic counters and harmony transitions**
+- [x] **Step 3: Implement deterministic counters and harmony transitions**
 
 Use a local SplitMix-style RNG with independently derived streams. Keep only current timing/index/chord state and a `VecDeque<MotifFingerprint>` of length 12. Choose region duration in `[13.0, 19.0]`, overlap its start by `3.5-5.5` seconds, reject the current chord, and select from these close-position voicings:
 
@@ -87,7 +87,7 @@ const VOICINGS: [[f32; 3]; 6] = [
 
 Derive region gain from a slow sine energy arc plus bounded random variation. Prevent tonic-cadence regions from occurring less than three regions apart.
 
-- [ ] **Step 4: Implement phrase generation and recent-history rejection**
+- [x] **Step 4: Implement phrase generation and recent-history rejection**
 
 Start phrases after gaps in `[10.0, 22.0]`. Build four-to-six-note phrases from chord tones and adjacent diatonic passing tones, require a chord-tone ending, cap each leap at five semitones and permit at most one five-semitone leap. Normalize intervals and quantized duration ratios into `MotifFingerprint`; retry candidates that exactly match recent history or match intervals while also retaining rhythm and ending role. Select effects with a deterministic weighted distribution and reject the previous additional effect treatment:
 
@@ -101,7 +101,7 @@ match effect_roll {
 
 The fixed three-minute fixture must contain all three treatments; use deterministic fallback assignment by phrase index if weighted selection has not produced a missing treatment by the final fixture phrase.
 
-- [ ] **Step 5: Run planner tests and commit**
+- [x] **Step 5: Run planner tests and commit**
 
 Run:
 

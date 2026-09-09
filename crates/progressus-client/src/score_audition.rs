@@ -1,5 +1,8 @@
 //! Deterministic, presentation-only score generation for timbre auditions.
 
+#[path = "ambient_timeline.rs"]
+pub mod ambient_timeline;
+
 use std::f32::consts::TAU;
 
 pub const SAMPLE_RATE: u32 = 24_000;
