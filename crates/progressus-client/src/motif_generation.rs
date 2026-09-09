@@ -76,10 +76,14 @@ fn is_valid(motif: &Motif) -> bool {
         .durations
         .windows(2)
         .all(|durations| durations[0] == durations[1]);
+    let final_degree = motif.degrees[motif.degrees.len() - 1];
+    let previous_degree = motif.degrees[motif.degrees.len() - 2];
     let ending_valid = match motif.role {
-        EndingRole::Resolving => motif.degrees.last() == Some(&0),
-        EndingRole::Resting => matches!(motif.degrees.last(), Some(2 | 4)),
-        EndingRole::Open => matches!(motif.degrees.last(), Some(1 | 3 | 5 | 6)),
+        EndingRole::Resolving => final_degree == 0 && previous_degree > final_degree,
+        EndingRole::Resting => matches!(final_degree, 2 | 4) && previous_degree != final_degree,
+        EndingRole::Open => {
+            matches!(final_degree, 1 | 3 | 5 | 6) && previous_degree != final_degree
+        }
     };
     range <= 5
         && large_leaps <= 1
@@ -98,18 +102,23 @@ pub fn candidate_pool(seed: u64) -> Vec<Motif> {
     let mut rng = Rng(seed);
     let mut result = Vec::with_capacity(48);
     let mut signatures = HashSet::with_capacity(48);
+    let mut role_counts = [0_usize; EndingRole::ALL.len()];
     for attempt in 0..20_000 {
         if result.len() == 48 {
             break;
         }
-        let role = EndingRole::ALL[attempt % EndingRole::ALL.len()];
+        let role_index = attempt % EndingRole::ALL.len();
+        if role_counts[role_index] == 16 {
+            continue;
+        }
+        let role = EndingRole::ALL[role_index];
         let note_count = 3 + rng.next() as usize % 5;
         let mut degrees = vec![(rng.next() % 7) as i8];
         while degrees.len() + 1 < note_count {
             let previous = *degrees.last().unwrap();
             degrees.push((previous + rng.choose(&STEPS)).clamp(0, 6));
         }
-        let endings = ENDINGS[attempt % ENDINGS.len()];
+        let endings = ENDINGS[role_index];
         degrees.push(rng.choose(endings));
         let durations = (0..note_count)
             .map(|_| rng.choose(&DURATIONS))
@@ -121,6 +130,7 @@ pub fn candidate_pool(seed: u64) -> Vec<Motif> {
         };
         let signature = normalized_signature(&motif);
         if is_valid(&motif) && signatures.insert(signature) {
+            role_counts[role_index] += 1;
             result.push(motif);
         }
     }
@@ -437,6 +447,10 @@ mod tests {
             .degrees
             .windows(3)
             .any(|notes| notes[0] == notes[1] && notes[1] == notes[2]);
+        let fixed_pulse = motif
+            .durations
+            .windows(2)
+            .all(|durations| durations[0] == durations[1]);
         let ending_valid = match motif.role {
             EndingRole::Resolving => motif.degrees.last() == Some(&0),
             EndingRole::Resting => matches!(motif.degrees.last(), Some(2 | 4)),
@@ -449,6 +463,7 @@ mod tests {
             && leaps_are_bounded
             && !repeated_triplet
             && !repeated_note
+            && !fixed_pulse
             && ending_valid
     }
 
@@ -498,6 +513,29 @@ mod tests {
             .map(normalized_signature)
             .collect::<HashSet<_>>();
         assert_eq!(signatures.len(), selected.len());
+    }
+
+    #[test]
+    fn every_pool_has_equal_capacity_for_each_ending_role() {
+        for seed in [NEUTRAL_SEED, 5_737] {
+            let pool = candidate_pool(seed);
+            let counts =
+                EndingRole::ALL.map(|role| pool.iter().filter(|motif| motif.role == role).count());
+            assert_eq!(counts, [16, 16, 16], "unbalanced pool for seed {seed}");
+            assert_eq!(shortlist(seed, 48).len(), 48);
+        }
+    }
+
+    #[test]
+    fn ending_roles_require_a_final_motion() {
+        for motif in candidate_pool(NEUTRAL_SEED) {
+            let last = motif.degrees[motif.degrees.len() - 1];
+            let previous = motif.degrees[motif.degrees.len() - 2];
+            assert_ne!(previous, last);
+            if motif.role == EndingRole::Resolving {
+                assert!(previous > last, "resolution must move down into the tonic");
+            }
+        }
     }
 
     #[test]
