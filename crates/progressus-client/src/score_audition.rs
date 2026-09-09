@@ -146,6 +146,176 @@ pub fn background_pcm(seed: u64) -> Vec<f32> {
     pcm
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ForegroundTimbre {
+    FeltPiano,
+    BowedStrings,
+    Alternating,
+}
+
+impl ForegroundTimbre {
+    pub const fn filename(self) -> &'static str {
+        match self {
+            Self::FeltPiano => "01-felt-piano.wav",
+            Self::BowedStrings => "02-bowed-strings.wav",
+            Self::Alternating => "03-alternating.wav",
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::FeltPiano => "felt piano",
+            Self::BowedStrings => "bowed strings",
+            Self::Alternating => "alternating phrases",
+        }
+    }
+}
+
+fn add_felt_piano(pcm: &mut [f32], event: NoteEvent, pan: f32, seed: u64) {
+    let first = (event.start * SAMPLE_RATE as f32) as usize;
+    let tail = event.duration + 4.2;
+    let last = (((event.start + tail) * SAMPLE_RATE as f32) as usize).min(pcm.len() / 2);
+    let hz = midi_hz(event.midi);
+    let (left, right) = pan_gains(pan);
+    let mut rng = Rng(seed);
+    let phase = rng.unit() * TAU;
+    for frame in first..last {
+        let time = frame as f32 / SAMPLE_RATE as f32 - event.start;
+        let attack = (time / 0.055).clamp(0.0, 1.0).powi(2);
+        let fundamental_decay = (-time / 3.5).exp();
+        let upper_decay = (-time / 1.15).exp();
+        let body = (TAU * hz * time + phase).sin() * 0.72 * fundamental_decay
+            + (TAU * hz * 2.002 * time + phase * 0.7).sin() * 0.18 * upper_decay
+            + (TAU * hz * 3.006 * time + phase * 1.3).sin() * 0.07 * upper_decay
+            + (TAU * hz * 0.501 * time + phase * 0.3).sin() * 0.03 * fundamental_decay;
+        let hammer = (rng.unit() * 2.0 - 1.0) * (-time / 0.06).exp() * 0.025;
+        let sample = (body + hammer) * attack * 0.15;
+        pcm[frame * 2] += sample * left;
+        pcm[frame * 2 + 1] += sample * right;
+    }
+}
+
+fn add_bowed_strings(pcm: &mut [f32], event: NoteEvent, pan: f32, seed: u64) {
+    let first = (event.start * SAMPLE_RATE as f32) as usize;
+    let tail = event.duration + 3.2;
+    let last = (((event.start + tail) * SAMPLE_RATE as f32) as usize).min(pcm.len() / 2);
+    let base_hz = midi_hz(event.midi);
+    let (left, right) = pan_gains(pan);
+    let mut rng = Rng(seed);
+    let phases = [rng.unit() * TAU, rng.unit() * TAU, rng.unit() * TAU];
+    let cents = [-4.0_f32, 0.5, 3.5];
+    let vibrato_rate = 4.6 + rng.unit() * 0.5;
+    let mut bow_noise = 0.0;
+    for frame in first..last {
+        let time = frame as f32 / SAMPLE_RATE as f32 - event.start;
+        let attack = (time / 0.48).clamp(0.0, 1.0);
+        let release = ((tail - time) / 2.7).clamp(0.0, 1.0).powi(2);
+        let vibrato = 0.42 * (TAU * vibrato_rate * time).sin();
+        let mut ensemble = 0.0;
+        for voice in 0..3 {
+            let hz = base_hz * 2.0_f32.powf(cents[voice] / 1_200.0);
+            let phase = TAU * hz * time + vibrato + phases[voice];
+            ensemble += phase.sin() * 0.68
+                + (phase * 2.0).sin() * 0.2
+                + (phase * 3.0).sin() * 0.08
+                + (phase * 4.0).sin() * 0.04;
+        }
+        let white = rng.unit() * 2.0 - 1.0;
+        bow_noise += (white - bow_noise) * 0.16;
+        let sample = (ensemble / 3.0 + bow_noise * 0.025) * attack * release * 0.115;
+        pcm[frame * 2] += sample * left;
+        pcm[frame * 2 + 1] += sample * right;
+    }
+}
+
+fn foreground_pcm(seed: u64, timbre: ForegroundTimbre) -> Vec<f32> {
+    let events = phrase_events(seed);
+    let mut pcm = vec![0.0; COMPARISON_SECONDS * SAMPLE_RATE as usize * 2];
+    let mut phrase_index = 0;
+    for (event_index, event) in events.iter().copied().enumerate() {
+        if event_index > 0 {
+            let previous = events[event_index - 1];
+            if event.start - (previous.start + previous.duration) > 2.0 {
+                phrase_index += 1;
+            }
+        }
+        let selected = match timbre {
+            ForegroundTimbre::FeltPiano => ForegroundTimbre::FeltPiano,
+            ForegroundTimbre::BowedStrings => ForegroundTimbre::BowedStrings,
+            ForegroundTimbre::Alternating if phrase_index % 2 == 0 => ForegroundTimbre::FeltPiano,
+            ForegroundTimbre::Alternating => ForegroundTimbre::BowedStrings,
+        };
+        let pan = -0.22 + (event_index % 4) as f32 * 0.14;
+        let event_seed = seed ^ (event_index as u64 + 1).wrapping_mul(0xd134_2543_de82_ef95);
+        match selected {
+            ForegroundTimbre::FeltPiano => add_felt_piano(&mut pcm, event, pan, event_seed),
+            ForegroundTimbre::BowedStrings => add_bowed_strings(&mut pcm, event, pan, event_seed),
+            ForegroundTimbre::Alternating => unreachable!(),
+        }
+    }
+    pcm
+}
+
+fn comparison_layers(seed: u64, timbre: ForegroundTimbre) -> (Vec<f32>, Vec<f32>) {
+    (background_pcm(seed), foreground_pcm(seed, timbre))
+}
+
+fn apply_room(pcm: &mut [f32]) {
+    let first_delay = (SAMPLE_RATE as f32 * 0.23) as usize * 2;
+    let second_delay = (SAMPLE_RATE as f32 * 0.41) as usize * 2;
+    for index in first_delay..pcm.len() {
+        pcm[index] += pcm[index - first_delay] * 0.13;
+        if index >= second_delay {
+            pcm[index] += pcm[index - second_delay] * 0.07;
+        }
+    }
+    for channel in 0..2 {
+        let mut previous_input = 0.0;
+        let mut previous_output = 0.0;
+        for frame in 0..COMPARISON_SECONDS * SAMPLE_RATE as usize {
+            let index = frame * 2 + channel;
+            let input = pcm[index];
+            let output = input - previous_input + 0.997 * previous_output;
+            pcm[index] = output;
+            previous_input = input;
+            previous_output = output;
+        }
+    }
+}
+
+fn encode_wav(pcm: &[f32]) -> Vec<u8> {
+    let data_bytes = u32::try_from(pcm.len() * 2).expect("comparison PCM fits WAV");
+    let mut wav = Vec::with_capacity(pcm.len() * 2 + 44);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(data_bytes + 36).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&2_u16.to_le_bytes());
+    wav.extend_from_slice(&SAMPLE_RATE.to_le_bytes());
+    wav.extend_from_slice(&(SAMPLE_RATE * 4).to_le_bytes());
+    wav.extend_from_slice(&4_u16.to_le_bytes());
+    wav.extend_from_slice(&16_u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_bytes.to_le_bytes());
+    for sample in pcm {
+        let encoded = (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
+        wav.extend_from_slice(&encoded.to_le_bytes());
+    }
+    wav
+}
+
+pub fn comparison_wav(seed: u64, timbre: ForegroundTimbre) -> Vec<u8> {
+    let (background, foreground) = comparison_layers(seed, timbre);
+    let mut mixed = background
+        .iter()
+        .zip(foreground)
+        .map(|(background, foreground)| background + foreground)
+        .collect::<Vec<_>>();
+    apply_room(&mut mixed);
+    encode_wav(&mixed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,6 +355,21 @@ mod tests {
             previous = mono;
         }
         sum / (pcm.len() / 2) as f32
+    }
+
+    fn decode_wav(wav: &[u8]) -> Vec<f32> {
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(u16::from_le_bytes([wav[22], wav[23]]), 2);
+        assert_eq!(
+            u32::from_le_bytes(wav[24..28].try_into().unwrap()),
+            SAMPLE_RATE
+        );
+        assert_eq!(u16::from_le_bytes([wav[34], wav[35]]), 16);
+        wav[44..]
+            .chunks_exact(2)
+            .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]) as f32 / 32768.0)
+            .collect()
     }
 
     #[test]
@@ -228,5 +413,58 @@ mod tests {
         let signal_energy =
             pcm.iter().map(|sample| sample * sample).sum::<f32>() / pcm.len() as f32;
         assert!(first_difference_energy(&pcm) > signal_energy * 0.0003);
+    }
+
+    #[test]
+    fn comparison_variants_share_score_and_background_but_sound_distinct() {
+        let (felt_background, felt_foreground) =
+            comparison_layers(COMPARISON_SEED, ForegroundTimbre::FeltPiano);
+        let (bowed_background, bowed_foreground) =
+            comparison_layers(COMPARISON_SEED, ForegroundTimbre::BowedStrings);
+        let (alternating_background, alternating_foreground) =
+            comparison_layers(COMPARISON_SEED, ForegroundTimbre::Alternating);
+
+        assert_eq!(felt_background, bowed_background);
+        assert_eq!(felt_background, alternating_background);
+        assert_ne!(felt_foreground, bowed_foreground);
+        assert_ne!(felt_foreground, alternating_foreground);
+        assert_ne!(bowed_foreground, alternating_foreground);
+
+        for event in phrase_events(COMPARISON_SEED) {
+            let first = (event.start * SAMPLE_RATE as f32) as usize * 2;
+            let last = first + SAMPLE_RATE as usize * 2;
+            let energy = felt_foreground[first..last]
+                .iter()
+                .map(|sample| sample * sample)
+                .sum::<f32>()
+                / (last - first) as f32;
+            assert!(energy > 0.00001);
+        }
+    }
+
+    #[test]
+    fn comparison_wavs_are_deterministic_safe_and_continuous() {
+        let variants = [
+            ForegroundTimbre::FeltPiano,
+            ForegroundTimbre::BowedStrings,
+            ForegroundTimbre::Alternating,
+        ];
+        let mut rendered = Vec::new();
+        for variant in variants {
+            let wav = comparison_wav(COMPARISON_SEED, variant);
+            assert_eq!(wav, comparison_wav(COMPARISON_SEED, variant));
+            assert_eq!(
+                wav.len(),
+                44 + COMPARISON_SECONDS * SAMPLE_RATE as usize * 4
+            );
+            let pcm = decode_wav(&wav);
+            assert!(pcm.iter().all(|sample| sample.is_finite()));
+            assert!(pcm.iter().all(|sample| sample.abs() < 0.82));
+            assert!(rms_windows(&pcm)[1..].iter().all(|rms| *rms > 0.0002));
+            rendered.push(wav);
+        }
+        assert_ne!(rendered[0], rendered[1]);
+        assert_ne!(rendered[0], rendered[2]);
+        assert_ne!(rendered[1], rendered[2]);
     }
 }

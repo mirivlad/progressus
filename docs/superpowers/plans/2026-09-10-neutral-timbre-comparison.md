@@ -84,23 +84,23 @@ Run the command from Step 2 followed by `/tmp/progressus-score-audition-tests` a
 - Produces: `pub fn comparison_wav(seed: u64, timbre: ForegroundTimbre) -> Vec<u8>`
 - Produces CLI: `cargo run -p progressus-client --example timbre_preview -- <output-directory>`
 
-- [ ] **Step 1: Write failing comparison tests**
+- [x] **Step 1: Write failing comparison tests**
 
 Require three deterministic, distinct, valid 75-second WAVs. Decode them and subtract independently rendered foregrounds to prove the background input is identical. Require peak below `0.82`, no clipped/non-finite samples, audible foreground energy around every phrase and no silent one-second window.
 
-- [ ] **Step 2: Observe failures for the absent timbre API**
+- [x] **Step 2: Observe failures for the absent timbre API**
 
 Run the standalone score-audition test command and confirm the new tests fail for missing interfaces.
 
-- [ ] **Step 3: Implement the foreground voices**
+- [x] **Step 3: Implement the foreground voices**
 
 Felt piano uses a soft hammer envelope driving three lightly detuned strings per note, high partials decaying faster than the fundamental and a restrained soundboard response. Bowed strings use slow attack, three detuned ensemble voices, bounded vibrato, harmonic rolloff and low bow noise. Alternating assigns complete phrases, rather than individual notes, to piano/string in sequence. All variants mix the same `background_pcm(seed)` and `phrase_events(seed)` with fixed gains before one common high-passed room stage.
 
-- [ ] **Step 4: Implement the exporter and generate the comparison**
+- [x] **Step 4: Implement the exporter and generate the comparison**
 
 Export `01-felt-piano.wav`, `02-bowed-strings.wav`, `03-alternating.wav`, `manifest.txt`, `generation.log` and `verification.json` under the requested external review directory.
 
-- [ ] **Step 5: Verify output and project boundaries**
+- [x] **Step 5: Verify output and project boundaries**
 
 ```bash
 cargo fmt --all --check
