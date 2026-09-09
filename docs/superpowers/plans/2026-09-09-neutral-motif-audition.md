@@ -171,6 +171,6 @@ git commit -m "feat: generate neutral motif auditions"
 git push origin main
 ```
 
-- [ ] **Step 8: Deliver the listening pack**
+- [x] **Step 8: Deliver the listening pack**
 
 Present the isolated and contextual samplers inline, link the numbered WAV files and explain that signal checks passed while musical acceptance remains the owner's listening decision. Do not integrate any candidate into the game during this task.
