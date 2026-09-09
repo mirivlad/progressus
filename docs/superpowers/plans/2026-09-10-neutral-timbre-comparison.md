@@ -32,7 +32,7 @@
 - Produces: `pub fn phrase_events(seed: u64) -> Vec<NoteEvent>`
 - Produces: `pub fn background_pcm(seed: u64) -> Vec<f32>`
 
-- [ ] **Step 1: Write failing score tests**
+- [x] **Step 1: Write failing score tests**
 
 Require deterministic events in five separated phrases, only C-major/A-minor diatonic pitch classes, at least one `B -> C` resolution, every phrase ending on a current chord tone, and no event below A3. Require a 75-second stereo background whose one-second RMS windows after the initial fade are all nonzero and vary by at least 1.5×, with energy below 130 Hz lower than upper-band energy.
 
@@ -57,17 +57,17 @@ fn background_evolves_for_the_full_comparison_without_low_hum() {
 }
 ```
 
-- [ ] **Step 2: Run the standalone test and observe missing-interface failures**
+- [x] **Step 2: Run the standalone test and observe missing-interface failures**
 
 ```bash
 rustc --test --edition=2024 crates/progressus-client/src/score_audition.rs -o /tmp/progressus-score-audition-tests
 ```
 
-- [ ] **Step 3: Implement the deterministic score and background**
+- [x] **Step 3: Implement the deterministic score and background**
 
 Use five 15-second harmonic regions with close-position C/Am/F/G-derived voicings above A3. Crossfade breath/ensemble voices across every boundary, vary their amplitude envelopes on nonmatching periods, and high-pass the shared room return. Generate five four-to-six-note phrases near seconds 7, 21, 35, 50 and 64. Select chord tones plus stepwise diatonic passing notes, cap leaps at a third except one fourth per complete excerpt, and force one final `B4 -> C5` resolution.
 
-- [ ] **Step 4: Run the focused tests until they pass**
+- [x] **Step 4: Run the focused tests until they pass**
 
 Run the command from Step 2 followed by `/tmp/progressus-score-audition-tests` and require zero failures.
 
