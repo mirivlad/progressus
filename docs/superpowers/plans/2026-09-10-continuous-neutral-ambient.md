@@ -256,7 +256,7 @@ CARGO_TARGET_DIR=/home/mirivlad/git/progressus/target cargo test -p progressus-c
 
 Expected: every command exits zero. Independently parse the WAV and require 180.000 seconds, stereo, 24 kHz, PCM16, peak below `0.82`, zero clipped samples, no silent one-second window and low-band energy below upper-band energy at 130 Hz.
 
-- [ ] **Step 4: Review, publish and clean generated iterations**
+- [x] **Step 4: Review, publish and clean generated iterations**
 
 Request independent review of the complete diff from `origin/main`. Fix all Critical and Important findings, rerun affected checks, then commit and push. Fast-forward verified commits into `main` and confirm `HEAD == origin/main`.
 
