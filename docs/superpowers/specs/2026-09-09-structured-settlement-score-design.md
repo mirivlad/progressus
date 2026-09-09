@@ -2,7 +2,7 @@
 
 Date: 2026-09-09
 
-Status: approved on 2026-09-09. Stage 1 motif audition implemented and technically validated on 2026-09-10; owner listening review remains pending.
+Status: approved on 2026-09-09. Stage 1 motif audition was technically validated and rejected by owner listening review on 2026-09-10. A neutral foreground timbre comparison is approved as the next listening gate.
 
 ## Problem
 
@@ -155,3 +155,19 @@ The current ambient remains a historical implementation until Stage 3 is accepte
 - Six standalone generator tests pass. They cover deterministic candidate generation, structural validity, transposition-equivalent uniqueness, per-role capacity across the fixed audition seed and a former sparse-role regression seed, shortlist diversity, role-directed final motion, deterministic WAV output, dynamic rests and restrained low-frequency energy.
 - Strict client Clippy, all 66 client library tests and both core dependency-boundary checks pass. The new source module is included only by the standalone preview example; `lib.rs`, runtime playback, authoritative simulation and saves are unchanged.
 - Independent review found sparse resolving-role capacity and false repeated-tonic resolutions. Both were reproduced with failing tests and fixed before publication. Subjective musical and timbral acceptance depends on the owner's review of the exported samplers.
+
+## Stage 1 owner review and replacement — 2026-09-10
+
+The owner rejected the plucked-wood foreground because both its Karplus–Strong attack and its Dorian/pentatonic-compatible note material evoked an East Asian string instrument. The air-like harmonic background was directionally acceptable. The short motif examples also stopped after one phrase and tail, leaving several seconds of complete silence; they did not demonstrate the requested continuous musical experience.
+
+The replacement audition keeps one identical 75-second background and score while changing only the foreground treatment:
+
+1. soft felt-piano;
+2. soft bowed-string ensemble;
+3. the same two voices alternating by phrase.
+
+The shared score uses ordinary seven-note diatonic material with harmony-aware passing notes, chord-tone arrivals and occasional leading-tone resolution. It does not use the former modal/pentatonic compatibility rule. Five phrases appear across the excerpt, separated by musical space while overlapping mid-register background voices prevent full-background silence. The background changes voicing approximately every 15 seconds and uses crossfaded attacks/releases rather than a constant low oscillator.
+
+The three files must contain byte-identical background PCM before foreground mixing. This makes the comparison about foreground timbre rather than a different random composition. Each file is 75 seconds, contains the same note events and has no silent one-second window after fade-in. Signal checks must still reject clipping, non-finite samples and low-frequency dominance.
+
+The former Stage 1 preview files are deleted after the replacement artifacts pass verification. Final review WAVs are stored outside Cargo `target` so `cargo clean` can remove build products without deleting the listening material. No audition generator is registered with the game client.
