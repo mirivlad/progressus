@@ -2,7 +2,7 @@
 
 Date: 2026-09-09
 
-Status: design selected; written specification awaiting owner review before implementation.
+Status: approved on 2026-09-09. Stage 1 motif audition implemented and technically validated on 2026-09-10; owner listening review remains pending.
 
 ## Problem
 
@@ -147,3 +147,11 @@ Implementation is divided by listening gates because signal-level tests cannot e
 - Confirm Music/Effects controls, pause/load behavior and graceful no-device startup in the native client.
 
 The current ambient remains a historical implementation until Stage 3 is accepted. Stage B sleep and shelter remains the next authoritative gameplay milestone and is unaffected by this presentation-only revision.
+
+## Stage 1 validation record — 2026-09-10
+
+- The isolated generator deterministically fills a 48-candidate pool with exactly 16 Open, 16 Resting and 16 Resolving motifs, then selects ten structurally separated auditions. Every motif has three to seven notes, a maximum sixth range, at most one three-step leap, a nonuniform relative pulse and a role-compatible final motion.
+- Ten 12-second isolated plucked-wood auditions, ten 18-second harmonic-context auditions and two samplers were exported under `target/neutral-motif-audition-20260909/`. All 22 WAV files are 24 kHz stereo PCM16 with nonzero RMS, fixed headroom and no clipped samples. Peaks range from 0.071413 to 0.108585.
+- Six standalone generator tests pass. They cover deterministic candidate generation, structural validity, transposition-equivalent uniqueness, per-role capacity across the fixed audition seed and a former sparse-role regression seed, shortlist diversity, role-directed final motion, deterministic WAV output, dynamic rests and restrained low-frequency energy.
+- Strict client Clippy, all 66 client library tests and both core dependency-boundary checks pass. The new source module is included only by the standalone preview example; `lib.rs`, runtime playback, authoritative simulation and saves are unchanged.
+- Independent review found sparse resolving-role capacity and false repeated-tonic resolutions. Both were reproduced with failing tests and fixed before publication. Subjective musical and timbral acceptance depends on the owner's review of the exported samplers.
