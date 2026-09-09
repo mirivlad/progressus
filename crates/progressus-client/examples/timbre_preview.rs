@@ -1,13 +1,17 @@
-//! Export a fair A/B/C timbre comparison without registering it in the game client.
+//! Export the continuous neutral ambient audition without runtime registration.
+#[allow(dead_code)]
 #[path = "../src/score_audition.rs"]
 mod score_audition;
 
 use score_audition::{
-    COMPARISON_SECONDS, ForegroundTimbre, SAMPLE_RATE, comparison_wav, phrase_events,
+    SAMPLE_RATE,
+    ambient_timeline::{PhraseEffect, collect_plan},
+    continuous_wav,
 };
 use std::{error::Error, fs, path::PathBuf, time::Instant};
 
-const COMPARISON_SEED: u64 = 0x5052_4f47_5245_5353;
+const PREVIEW_SEED: u64 = 0x5052_4f47_5245_5353;
+const PREVIEW_SECONDS: usize = 180;
 
 struct WavStats {
     peak: f32,
@@ -45,56 +49,42 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     fs::create_dir_all(&output)?;
 
-    let variants = [
-        ForegroundTimbre::FeltPiano,
-        ForegroundTimbre::BowedStrings,
-        ForegroundTimbre::Alternating,
-    ];
-    let mut log = String::new();
-    let mut verification = format!(
-        "{{\n  \"sample_rate\": {SAMPLE_RATE},\n  \"channels\": 2,\n  \"bits_per_sample\": 16,\n  \"duration_seconds\": {COMPARISON_SECONDS},\n  \"files\": [\n"
-    );
-    for (index, variant) in variants.iter().copied().enumerate() {
-        let timer = Instant::now();
-        let wav = comparison_wav(COMPARISON_SEED, variant);
-        let elapsed_ms = timer.elapsed().as_secs_f64() * 1_000.0;
-        let stats = wav_stats(&wav);
-        fs::write(output.join(variant.filename()), &wav)?;
-        log.push_str(&format!(
-            "file={} generation_ms={elapsed_ms:.3} bytes={}\n",
-            variant.filename(),
-            wav.len()
-        ));
-        verification.push_str(&format!(
-            "    {{\"file\": \"{}\", \"peak\": {:.6}, \"rms\": {:.6}, \"clipped_samples\": {}}}{}\n",
-            variant.filename(),
-            stats.peak,
-            stats.rms,
-            stats.clipped_samples,
-            if index + 1 == variants.len() { "" } else { "," }
-        ));
-    }
-    verification.push_str("  ]\n}\n");
+    let timer = Instant::now();
+    let wav = continuous_wav(PREVIEW_SEED, PREVIEW_SECONDS);
+    let elapsed_ms = timer.elapsed().as_secs_f64() * 1_000.0;
+    let stats = wav_stats(&wav);
+    let filename = "continuous-alternating-180s.wav";
+    fs::write(output.join(filename), &wav)?;
 
-    let events = phrase_events(COMPARISON_SEED);
-    let mut manifest = format!(
-        "Progressus neutral timbre comparison\nseed=0x{COMPARISON_SEED:016x}\nduration_seconds={COMPARISON_SECONDS}\nsample_rate={SAMPLE_RATE}\nchannels=2\n\n"
+    let plan = collect_plan(PREVIEW_SEED, PREVIEW_SECONDS as f32);
+    let dry = plan
+        .phrases
+        .iter()
+        .filter(|phrase| matches!(phrase.effect, PhraseEffect::Dry))
+        .count();
+    let reverb = plan
+        .phrases
+        .iter()
+        .filter(|phrase| matches!(phrase.effect, PhraseEffect::Reverb { .. }))
+        .count();
+    let delay = plan
+        .phrases
+        .iter()
+        .filter(|phrase| matches!(phrase.effect, PhraseEffect::Delay { .. }))
+        .count();
+
+    let manifest = format!(
+        "Progressus continuous neutral ambient audition\nseed=0x{PREVIEW_SEED:016x}\nduration_seconds={PREVIEW_SECONDS}\nsample_rate={SAMPLE_RATE}\nchannels=2\nbackground_gain=0.8\nducking=8-12%\nphrases={}\ndry_phrases={dry}\nreverb_phrases={reverb}\ndelay_phrases={delay}\nforeground=alternating felt piano and bowed strings\n",
+        plan.phrases.len()
     );
-    manifest.push_str("All versions use the same score and continuous background.\n");
-    for variant in variants {
-        manifest.push_str(&format!(
-            "{}: foreground={}\n",
-            variant.filename(),
-            variant.label()
-        ));
-    }
-    manifest.push_str("\nScore events (seconds, MIDI, duration):\n");
-    for event in events {
-        manifest.push_str(&format!(
-            "{:.3} {:.0} {:.2}\n",
-            event.start, event.midi, event.duration
-        ));
-    }
+    let log = format!(
+        "file={filename} generation_ms={elapsed_ms:.3} bytes={}\n",
+        wav.len()
+    );
+    let verification = format!(
+        "{{\n  \"file\": \"{filename}\",\n  \"sample_rate\": {SAMPLE_RATE},\n  \"channels\": 2,\n  \"bits_per_sample\": 16,\n  \"duration_seconds\": {PREVIEW_SECONDS},\n  \"peak\": {:.6},\n  \"rms\": {:.6},\n  \"clipped_samples\": {}\n}}\n",
+        stats.peak, stats.rms, stats.clipped_samples
+    );
     fs::write(output.join("manifest.txt"), manifest)?;
     fs::write(output.join("generation.log"), &log)?;
     fs::write(output.join("verification.json"), verification)?;

@@ -176,7 +176,7 @@ impl AmbientTimeline {
 
     pub fn next_phrase(&mut self) -> PhrasePlan {
         let index = self.phrase_index;
-        let timbre = if index % 2 == 0 {
+        let timbre = if index.is_multiple_of(2) {
             PhraseTimbre::FeltPiano
         } else {
             PhraseTimbre::BowedStrings

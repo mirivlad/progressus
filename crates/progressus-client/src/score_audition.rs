@@ -454,16 +454,17 @@ fn add_reverb_send(wet: &mut [f32], dry: &[f32], phrase: &PhrasePlan, send: f32,
     }
 }
 
-fn add_delay_send(
-    wet: &mut [f32],
-    dry: &[f32],
-    phrase: &PhrasePlan,
-    send: f32,
-    seconds: f32,
-    feedback: f32,
-    repeats: u8,
-    pan: f32,
-) {
+fn add_delay_send(wet: &mut [f32], dry: &[f32], phrase: &PhrasePlan, effect: PhraseEffect) {
+    let PhraseEffect::Delay {
+        send,
+        seconds,
+        feedback,
+        repeats,
+        pan,
+    } = effect
+    else {
+        unreachable!("delay renderer requires a delay plan");
+    };
     let first_frame = (phrase.notes[0].start * SAMPLE_RATE as f32) as usize;
     let last = phrase.notes.last().unwrap();
     let source_end =
@@ -489,7 +490,7 @@ fn add_delay_send(
 }
 
 fn continuous_layers_from_plan(seed: u64, plan: &AmbientPlan, seconds: usize) -> RenderedLayers {
-    let unscaled_background = continuous_background(&plan, seconds);
+    let unscaled_background = continuous_background(plan, seconds);
     let background = unscaled_background
         .chunks_exact(2)
         .enumerate()
@@ -513,22 +514,9 @@ fn continuous_layers_from_plan(seed: u64, plan: &AmbientPlan, seconds: usize) ->
             PhraseEffect::Reverb { send, tail } => {
                 add_reverb_send(&mut wet, &phrase_dry, phrase, send, tail)
             }
-            PhraseEffect::Delay {
-                send,
-                seconds,
-                feedback,
-                repeats,
-                pan,
-            } => add_delay_send(
-                &mut wet,
-                &phrase_dry,
-                phrase,
-                send,
-                seconds,
-                feedback,
-                repeats,
-                pan,
-            ),
+            effect @ PhraseEffect::Delay { .. } => {
+                add_delay_send(&mut wet, &phrase_dry, phrase, effect)
+            }
         }
     }
     RenderedLayers {

@@ -225,11 +225,11 @@ git push
 - Produces CLI: `cargo run -p progressus-client --example timbre_preview -- <output-directory>`
 - Produces: `continuous-alternating-180s.wav`, `manifest.txt`, `generation.log`, `verification.json`
 
-- [ ] **Step 1: Change exporter to one continuous 180-second artifact**
+- [x] **Step 1: Change exporter to one continuous 180-second artifact**
 
 Set `PREVIEW_SECONDS: usize = 180`, call `continuous_wav(COMPARISON_SEED, PREVIEW_SECONDS)`, and record phrase count plus dry/reverb/delay counts in the manifest. Write independent decoded statistics for duration, channels, sample rate, peak, RMS and clipping count into `verification.json`.
 
-- [ ] **Step 2: Generate the review artifact**
+- [x] **Step 2: Generate the review artifact**
 
 Run:
 
@@ -239,7 +239,7 @@ CARGO_TARGET_DIR=/home/mirivlad/git/progressus/target cargo run -p progressus-cl
 
 Expected: the new directory contains one 180-second WAV plus the three text verification files.
 
-- [ ] **Step 3: Run final source and artifact gates**
+- [x] **Step 3: Run final source and artifact gates**
 
 Run:
 
