@@ -113,6 +113,6 @@ cargo test -p progressus-client --lib
 
 Parse all three WAVs independently and record duration, format, peak, RMS and clipping counts. Confirm no changes to `lib.rs`, runtime audio, simulation or saves.
 
-- [ ] **Step 6: Remove replaced artifacts and build products**
+- [x] **Step 6: Remove replaced artifacts and build products**
 
 Delete `target/neutral-motif-audition-20260909/` after the new external review files pass. Commit and push the verified source, then run `cargo clean` in the main checkout. Report exact reclaimed disk space and preserve only the external review files.
