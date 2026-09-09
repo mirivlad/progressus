@@ -100,7 +100,7 @@ git push origin main
 - Produces: `pub fn audition_wav(motif: &Motif, index: u64, kind: AuditionKind) -> Vec<u8>`
 - Produces: CLI `cargo run -p progressus-client --example motif_preview -- <output-directory>`
 
-- [ ] **Step 1: Add failing synthesis tests**
+- [x] **Step 1: Add failing synthesis tests**
 
 Require valid 24 kHz stereo PCM16 RIFF output, deterministic bytes, distinct isolated/contextual renders, non-silence, peak below `0.82`, and no long stationary low-frequency foundation. Check that the contextual render has audible energy before and after the motif while its quietest one-second window remains materially below its loudest window.
 
@@ -117,11 +117,11 @@ fn audition_wavs_are_deterministic_distinct_and_bounded() {
 }
 ```
 
-- [ ] **Step 2: Observe the focused failure**
+- [x] **Step 2: Observe the focused failure**
 
 Run the same standalone `rustc --test` command and confirm failure on the absent rendering API.
 
-- [ ] **Step 3: Implement acoustic rendering**
+- [x] **Step 3: Implement acoustic rendering**
 
 Render a 9-to-14-second isolated example with a deterministic Karplus–Strong plucked-string voice layered quietly with a short modal wood resonator. Render the contextual version with the same motif plus two sparse upper-register harmonic responses and a shared synthetic room tail. Use excitation envelopes and decays; do not sustain a low oscillator. Encode fixed-headroom stereo PCM16 without per-file normalization.
 
@@ -138,7 +138,7 @@ generation.log
 
 The manifest records scale-degree intervals, relative durations and ending role for each numbered candidate. Samplers insert two seconds of silence between examples.
 
-- [ ] **Step 4: Run focused tests and export examples**
+- [x] **Step 4: Run focused tests and export examples**
 
 ```bash
 rustc --test --edition=2024 crates/progressus-client/src/motif_generation.rs -o /tmp/progressus-motif-tests
@@ -148,11 +148,11 @@ cargo run -p progressus-client --example motif_preview -- target/neutral-motif-a
 
 Expected: tests pass and 22 WAV files plus `manifest.txt` and `generation.log` are written.
 
-- [ ] **Step 5: Verify review artifacts**
+- [x] **Step 5: Verify review artifacts**
 
 Parse every WAV and record duration, peak, RMS, non-finite sample count and clipping count in `target/neutral-motif-audition-20260909/verification.json`. Require stereo PCM16 at 24 kHz, nonzero RMS, zero non-finite samples, zero clipped samples and peak below `0.82`. Confirm `git diff` contains no runtime audio registration or playback changes.
 
-- [ ] **Step 6: Run project checks**
+- [x] **Step 6: Run project checks**
 
 ```bash
 cargo fmt --all --check
@@ -163,7 +163,7 @@ cargo test -p progressus-client --lib
 
 Expected: every command exits zero.
 
-- [ ] **Step 7: Commit and push the renderer/exporter**
+- [x] **Step 7: Commit and push the renderer/exporter**
 
 ```bash
 git add crates/progressus-client/src/motif_generation.rs crates/progressus-client/examples/motif_preview.rs docs/superpowers/plans/2026-09-09-neutral-motif-audition.md
