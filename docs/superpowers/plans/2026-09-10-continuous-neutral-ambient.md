@@ -131,7 +131,7 @@ git push
 - Produces: private `fn continuous_pcm(seed: u64, seconds: usize) -> Vec<f32>` and test-only `fn render_overlapping_windows(seed: u64, window_seconds: usize, total_seconds: usize) -> Vec<f32>`
 - Produces: `pub fn continuous_wav(seed: u64, seconds: usize) -> Vec<u8>`
 
-- [ ] **Step 1: Write failing balance, effects and continuity tests**
+- [x] **Step 1: Write failing balance, effects and continuity tests**
 
 Add focused tests in `score_audition.rs`:
 
@@ -167,7 +167,7 @@ fn arbitrary_windows_match_one_shot_render_at_the_join() {
 }
 ```
 
-- [ ] **Step 2: Run focused tests and observe failures**
+- [x] **Step 2: Run focused tests and observe failures**
 
 Run:
 
@@ -177,7 +177,7 @@ rustc --test --edition=2024 crates/progressus-client/src/score_audition.rs -o /t
 
 Expected: compilation fails for absent continuous rendering APIs.
 
-- [ ] **Step 3: Generalize background and foreground rendering to absolute plans**
+- [x] **Step 3: Generalize background and foreground rendering to absolute plans**
 
 Parameterize PCM allocation by `seconds`, render `HarmonyRegion` values instead of the fixed five-region array, and preserve the existing air/ensemble and instrument synthesis functions. Keep an unscaled background buffer. Create the audible background as:
 
@@ -188,15 +188,15 @@ background[index] = unscaled_background[index] * 0.8 * duck;
 
 Use a cosine attack/release envelope at least 600 ms long around each phrase so adjacent-sample gain changes remain below the test threshold. Render foreground timbre from each complete `PhrasePlan`.
 
-- [ ] **Step 4: Implement bounded reverb and stereo delay sends**
+- [x] **Step 4: Implement bounded reverb and stereo delay sends**
 
 Copy only the selected phrase's dry foreground interval and instrument tail to a temporary send. For `Reverb`, use three decorrelated delay taps plus bounded feedback for the requested 2.0-4.5 second tail. For `Delay`, alternate stereo taps at the planned 280-620 ms interval for exactly `repeats` iterations and multiply each repeat by the planned feedback. Scale the complete wet bus if necessary so its peak remains below the dry foreground peak; do not alter the background bus.
 
-- [ ] **Step 5: Implement overlap-window equivalence and WAV output**
+- [x] **Step 5: Implement overlap-window equivalence and WAV output**
 
 Render windows using absolute plan/event time and a six-second overlap margin. Keep only the requested center frames and use equal-power overlap weights. `continuous_wav(seed, seconds)` renders the same timeline as the windowed path and encodes exactly `seconds * SAMPLE_RATE * 2` samples.
 
-- [ ] **Step 6: Run focused tests and commit**
+- [x] **Step 6: Run focused tests and commit**
 
 Run:
 

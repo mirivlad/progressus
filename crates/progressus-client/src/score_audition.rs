@@ -3,7 +3,8 @@
 #[path = "ambient_timeline.rs"]
 pub mod ambient_timeline;
 
-use std::f32::consts::TAU;
+use ambient_timeline::{AmbientPlan, PhraseEffect, PhrasePlan, PhraseTimbre, collect_plan};
+use std::f32::consts::{PI, TAU};
 
 pub const SAMPLE_RATE: u32 = 24_000;
 pub const COMPARISON_SECONDS: usize = 75;
@@ -36,6 +37,13 @@ fn midi_hz(midi: f32) -> f32 {
     440.0 * 2.0_f32.powf((midi - 69.0) / 12.0)
 }
 
+fn stateless_unit(seed: u64, sample_index: u64) -> f32 {
+    let mut value = seed ^ sample_index.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    ((value ^ (value >> 31)) >> 40) as f32 / 16_777_216.0
+}
+
 fn felt_string_frequencies(midi: f32) -> [f32; 3] {
     const CENTS: [f32; 3] = [-3.0, 0.0, 3.5];
     let base = midi_hz(midi);
@@ -44,6 +52,16 @@ fn felt_string_frequencies(midi: f32) -> [f32; 3] {
 
 fn pan_gains(pan: f32) -> (f32, f32) {
     (((1.0 - pan) * 0.5).sqrt(), ((1.0 + pan) * 0.5).sqrt())
+}
+
+fn sample_bounds(start: f32, duration: f32, total_frames: usize) -> (usize, usize, i64) {
+    let start_sample = (start * SAMPLE_RATE as f32).round() as i64;
+    let duration_samples = (duration * SAMPLE_RATE as f32).round() as i64;
+    let first = start_sample.max(0).min(total_frames as i64) as usize;
+    let last = (start_sample + duration_samples)
+        .max(0)
+        .min(total_frames as i64) as usize;
+    (first, last, start_sample)
 }
 
 pub fn phrase_events(seed: u64) -> Vec<NoteEvent> {
@@ -83,8 +101,7 @@ fn add_background_voice(
     pan: f32,
     seed: u64,
 ) {
-    let first = (start.max(0.0) * SAMPLE_RATE as f32) as usize;
-    let last = (((start + duration) * SAMPLE_RATE as f32) as usize).min(pcm.len() / 2);
+    let (first, last, start_sample) = sample_bounds(start, duration, pcm.len() / 2);
     let hz = midi_hz(midi);
     let (left, right) = pan_gains(pan);
     let mut rng = Rng(seed);
@@ -93,7 +110,7 @@ fn add_background_voice(
     let slow_period = 13.0 + rng.unit() * 18.0;
     let mut breath = 0.0;
     for frame in first..last {
-        let time = frame as f32 / SAMPLE_RATE as f32 - start;
+        let time = (frame as i64 - start_sample) as f32 / SAMPLE_RATE as f32;
         let attack = (time / 4.5).clamp(0.0, 1.0);
         let release = ((duration - time) / 5.5).clamp(0.0, 1.0);
         let envelope = attack * attack * release * release;
@@ -101,7 +118,8 @@ fn add_background_voice(
         let fundamental = (TAU * hz * time + phase).sin();
         let second = (TAU * hz * 2.003 * time + phase * 0.61).sin();
         let third = (TAU * hz * 3.997 * time + phase * 1.17).sin();
-        let white = rng.unit() * 2.0 - 1.0;
+        let sample_index = (time * SAMPLE_RATE as f32).max(0.0) as u64;
+        let white = stateless_unit(seed ^ 0x4252_4541_5448, sample_index) * 2.0 - 1.0;
         breath += (white - breath) * 0.075;
         let sample = (fundamental * 0.72 + second * 0.18 + third * 0.06 + breath * 0.04)
             * envelope
@@ -181,15 +199,14 @@ impl ForegroundTimbre {
 }
 
 fn add_felt_piano(pcm: &mut [f32], event: NoteEvent, pan: f32, seed: u64) {
-    let first = (event.start * SAMPLE_RATE as f32) as usize;
     let tail = event.duration + 4.2;
-    let last = (((event.start + tail) * SAMPLE_RATE as f32) as usize).min(pcm.len() / 2);
+    let (first, last, start_sample) = sample_bounds(event.start, tail, pcm.len() / 2);
     let frequencies = felt_string_frequencies(event.midi);
     let (left, right) = pan_gains(pan);
     let mut rng = Rng(seed);
     let phases = [rng.unit() * TAU, rng.unit() * TAU, rng.unit() * TAU];
     for frame in first..last {
-        let time = frame as f32 / SAMPLE_RATE as f32 - event.start;
+        let time = (frame as i64 - start_sample) as f32 / SAMPLE_RATE as f32;
         let attack = (time / 0.055).clamp(0.0, 1.0).powi(2);
         let fundamental_decay = (-time / 3.5).exp();
         let upper_decay = (-time / 1.15).exp();
@@ -204,7 +221,10 @@ fn add_felt_piano(pcm: &mut [f32], event: NoteEvent, pan: f32, seed: u64) {
         let soundboard = (TAU * frequencies[1] * 0.501 * time + phases[1] * 0.3).sin()
             * 0.03
             * fundamental_decay;
-        let hammer = (rng.unit() * 2.0 - 1.0) * (-time / 0.06).exp() * 0.025;
+        let sample_index = (time * SAMPLE_RATE as f32).max(0.0) as u64;
+        let hammer = (stateless_unit(seed ^ 0x4841_4d4d_4552, sample_index) * 2.0 - 1.0)
+            * (-time / 0.06).exp()
+            * 0.025;
         let sample = (body + soundboard + hammer) * attack * 0.15;
         pcm[frame * 2] += sample * left;
         pcm[frame * 2 + 1] += sample * right;
@@ -212,9 +232,8 @@ fn add_felt_piano(pcm: &mut [f32], event: NoteEvent, pan: f32, seed: u64) {
 }
 
 fn add_bowed_strings(pcm: &mut [f32], event: NoteEvent, pan: f32, seed: u64) {
-    let first = (event.start * SAMPLE_RATE as f32) as usize;
     let tail = event.duration + 3.2;
-    let last = (((event.start + tail) * SAMPLE_RATE as f32) as usize).min(pcm.len() / 2);
+    let (first, last, start_sample) = sample_bounds(event.start, tail, pcm.len() / 2);
     let base_hz = midi_hz(event.midi);
     let (left, right) = pan_gains(pan);
     let mut rng = Rng(seed);
@@ -223,7 +242,7 @@ fn add_bowed_strings(pcm: &mut [f32], event: NoteEvent, pan: f32, seed: u64) {
     let vibrato_rate = 4.6 + rng.unit() * 0.5;
     let mut bow_noise = 0.0;
     for frame in first..last {
-        let time = frame as f32 / SAMPLE_RATE as f32 - event.start;
+        let time = (frame as i64 - start_sample) as f32 / SAMPLE_RATE as f32;
         let attack = (time / 0.48).clamp(0.0, 1.0);
         let release = ((tail - time) / 2.7).clamp(0.0, 1.0).powi(2);
         let vibrato = 0.42 * (TAU * vibrato_rate * time).sin();
@@ -236,7 +255,8 @@ fn add_bowed_strings(pcm: &mut [f32], event: NoteEvent, pan: f32, seed: u64) {
                 + (phase * 3.0).sin() * 0.08
                 + (phase * 4.0).sin() * 0.04;
         }
-        let white = rng.unit() * 2.0 - 1.0;
+        let sample_index = (time * SAMPLE_RATE as f32).max(0.0) as u64;
+        let white = stateless_unit(seed ^ 0x424f_575f_4e4f_4953, sample_index) * 2.0 - 1.0;
         bow_noise += (white - bow_noise) * 0.16;
         let sample = (ensemble / 3.0 + bow_noise * 0.025) * attack * release * 0.115;
         pcm[frame * 2] += sample * left;
@@ -288,7 +308,7 @@ fn apply_room(pcm: &mut [f32]) {
     for channel in 0..2 {
         let mut previous_input = 0.0;
         let mut previous_output = 0.0;
-        for frame in 0..COMPARISON_SECONDS * SAMPLE_RATE as usize {
+        for frame in 0..pcm.len() / 2 {
             let index = frame * 2 + channel;
             let input = pcm[index];
             let output = input - previous_input + 0.997 * previous_output;
@@ -330,6 +350,254 @@ pub fn comparison_wav(seed: u64, timbre: ForegroundTimbre) -> Vec<u8> {
         .collect::<Vec<_>>();
     apply_room(&mut mixed);
     encode_wav(&mixed)
+}
+
+pub struct RenderedLayers {
+    pub unscaled_background: Vec<f32>,
+    pub background: Vec<f32>,
+    pub foreground: Vec<f32>,
+    pub wet: Vec<f32>,
+}
+
+fn continuous_background(plan: &AmbientPlan, seconds: usize) -> Vec<f32> {
+    let mut pcm = vec![0.0; seconds * SAMPLE_RATE as usize * 2];
+    for region in &plan.regions {
+        const PANS: [f32; 3] = [-0.42, 0.08, 0.48];
+        for (voice, midi) in region.chord.iter().enumerate() {
+            add_background_voice(
+                &mut pcm,
+                region.start,
+                region.duration,
+                *midi,
+                region.gain * 0.075,
+                PANS[voice],
+                0x4241_434b_4752_4f55 ^ region.index.wrapping_mul(7).wrapping_add(voice as u64),
+            );
+        }
+    }
+    for channel in 0..2 {
+        let mut previous_input = 0.0;
+        let mut previous_output = 0.0;
+        for frame in 0..seconds * SAMPLE_RATE as usize {
+            let index = frame * 2 + channel;
+            let input = pcm[index];
+            let output = input - previous_input + 0.995 * previous_output;
+            pcm[index] = output;
+            previous_input = input;
+            previous_output = output;
+        }
+    }
+    pcm
+}
+
+fn smoothstep_cosine(value: f32) -> f32 {
+    0.5 - 0.5 * (PI * value.clamp(0.0, 1.0)).cos()
+}
+
+fn background_duck_gain(time: f32, phrases: &[PhrasePlan]) -> f32 {
+    let mut gain: f32 = 1.0;
+    for phrase in phrases {
+        let first = phrase.notes[0].start;
+        let last = phrase.notes.last().unwrap();
+        let end = last.start + last.duration + 2.8;
+        let depth = 0.08 + (phrase.index % 5) as f32 * 0.01;
+        let phrase_gain = if (first - 0.8..first).contains(&time) {
+            1.0 - depth * smoothstep_cosine((time - first + 0.8) / 0.8)
+        } else if (first..=end).contains(&time) {
+            1.0 - depth
+        } else if (end..end + 1.2).contains(&time) {
+            1.0 - depth * (1.0 - smoothstep_cosine((time - end) / 1.2))
+        } else {
+            1.0
+        };
+        gain = gain.min(phrase_gain);
+    }
+    gain
+}
+
+fn render_phrase_dry(pcm: &mut [f32], phrase: &PhrasePlan, seed: u64) {
+    for (note_index, note) in phrase.notes.iter().enumerate() {
+        let event = NoteEvent {
+            start: note.start,
+            midi: note.midi,
+            duration: note.duration,
+        };
+        let pan = -0.22 + (note_index % 4) as f32 * 0.14;
+        let note_seed = seed ^ phrase.index.wrapping_mul(0xd134_2543_de82_ef95) ^ note_index as u64;
+        match phrase.timbre {
+            PhraseTimbre::FeltPiano => add_felt_piano(pcm, event, pan, note_seed),
+            PhraseTimbre::BowedStrings => add_bowed_strings(pcm, event, pan, note_seed),
+        }
+    }
+}
+
+fn add_reverb_send(wet: &mut [f32], dry: &[f32], phrase: &PhrasePlan, send: f32, tail: f32) {
+    let first_frame = (phrase.notes[0].start * SAMPLE_RATE as f32) as usize;
+    let last = phrase.notes.last().unwrap();
+    let source_end =
+        (((last.start + last.duration) * SAMPLE_RATE as f32) as usize).min(dry.len() / 2);
+    let repeats = (tail / 0.31).ceil() as usize;
+    for repeat in 1..=repeats {
+        let left_delay = ((0.17 + repeat as f32 * 0.31) * SAMPLE_RATE as f32) as usize;
+        let right_delay = ((0.21 + repeat as f32 * 0.293) * SAMPLE_RATE as f32) as usize;
+        let gain = send * 0.58_f32.powi(repeat as i32);
+        for frame in first_frame..source_end {
+            let left_destination = frame + left_delay;
+            if left_destination < wet.len() / 2 {
+                wet[left_destination * 2] += dry[frame * 2] * gain;
+            }
+            let right_destination = frame + right_delay;
+            if right_destination < wet.len() / 2 {
+                wet[right_destination * 2 + 1] += dry[frame * 2 + 1] * gain;
+            }
+        }
+    }
+}
+
+fn add_delay_send(
+    wet: &mut [f32],
+    dry: &[f32],
+    phrase: &PhrasePlan,
+    send: f32,
+    seconds: f32,
+    feedback: f32,
+    repeats: u8,
+    pan: f32,
+) {
+    let first_frame = (phrase.notes[0].start * SAMPLE_RATE as f32) as usize;
+    let last = phrase.notes.last().unwrap();
+    let source_end =
+        (((last.start + last.duration) * SAMPLE_RATE as f32) as usize).min(dry.len() / 2);
+    let delay_frames = (seconds * SAMPLE_RATE as f32) as usize;
+    let (left, right) = pan_gains(pan);
+    for repeat in 1..=repeats as usize {
+        let gain = send * feedback.powi((repeat - 1) as i32);
+        for frame in first_frame..source_end {
+            let destination = frame + delay_frames * repeat;
+            if destination >= wet.len() / 2 {
+                break;
+            }
+            if repeat % 2 == 1 {
+                wet[destination * 2] += dry[frame * 2 + 1] * gain * left;
+                wet[destination * 2 + 1] += dry[frame * 2] * gain * right;
+            } else {
+                wet[destination * 2] += dry[frame * 2] * gain * right;
+                wet[destination * 2 + 1] += dry[frame * 2 + 1] * gain * left;
+            }
+        }
+    }
+}
+
+fn continuous_layers_from_plan(seed: u64, plan: &AmbientPlan, seconds: usize) -> RenderedLayers {
+    let unscaled_background = continuous_background(&plan, seconds);
+    let background = unscaled_background
+        .chunks_exact(2)
+        .enumerate()
+        .flat_map(|(frame, samples)| {
+            let time = frame as f32 / SAMPLE_RATE as f32;
+            let gain = 0.8 * background_duck_gain(time, &plan.phrases);
+            [samples[0] * gain, samples[1] * gain]
+        })
+        .collect::<Vec<_>>();
+    let mut foreground = vec![0.0; unscaled_background.len()];
+    let mut wet = vec![0.0; unscaled_background.len()];
+    for phrase in &plan.phrases {
+        let mut phrase_dry = vec![0.0; unscaled_background.len()];
+        render_phrase_dry(&mut phrase_dry, phrase, seed);
+        foreground
+            .iter_mut()
+            .zip(&phrase_dry)
+            .for_each(|(output, input)| *output += input);
+        match phrase.effect {
+            PhraseEffect::Dry => {}
+            PhraseEffect::Reverb { send, tail } => {
+                add_reverb_send(&mut wet, &phrase_dry, phrase, send, tail)
+            }
+            PhraseEffect::Delay {
+                send,
+                seconds,
+                feedback,
+                repeats,
+                pan,
+            } => add_delay_send(
+                &mut wet,
+                &phrase_dry,
+                phrase,
+                send,
+                seconds,
+                feedback,
+                repeats,
+                pan,
+            ),
+        }
+    }
+    RenderedLayers {
+        unscaled_background,
+        background,
+        foreground,
+        wet,
+    }
+}
+
+pub fn continuous_layers(seed: u64, seconds: usize) -> RenderedLayers {
+    let plan = collect_plan(seed, seconds as f32);
+    continuous_layers_from_plan(seed, &plan, seconds)
+}
+
+fn continuous_pcm_from_plan(seed: u64, plan: &AmbientPlan, seconds: usize) -> Vec<f32> {
+    let layers = continuous_layers_from_plan(seed, plan, seconds);
+    let mut mixed = layers
+        .background
+        .into_iter()
+        .zip(layers.foreground)
+        .zip(layers.wet)
+        .map(|((background, foreground), wet)| background + foreground + wet)
+        .collect::<Vec<_>>();
+    apply_room(&mut mixed);
+    mixed
+}
+
+fn continuous_pcm(seed: u64, seconds: usize) -> Vec<f32> {
+    let plan = collect_plan(seed, seconds as f32);
+    continuous_pcm_from_plan(seed, &plan, seconds)
+}
+
+#[cfg(test)]
+fn render_overlapping_windows(seed: u64, window_seconds: usize, total_seconds: usize) -> Vec<f32> {
+    const MARGIN_SECONDS: usize = 6;
+    let complete_plan = collect_plan(seed, total_seconds as f32);
+    let mut output = Vec::with_capacity(total_seconds * SAMPLE_RATE as usize * 2);
+    for requested_start in (0..total_seconds).step_by(window_seconds) {
+        let requested_end = (requested_start + window_seconds).min(total_seconds);
+        let render_start = requested_start.saturating_sub(MARGIN_SECONDS);
+        let render_end = (requested_end + MARGIN_SECONDS).min(total_seconds);
+        let mut local_plan = complete_plan.clone();
+        local_plan.regions.retain(|region| {
+            region.start < render_end as f32 && region.start + region.duration > render_start as f32
+        });
+        for region in &mut local_plan.regions {
+            region.start -= render_start as f32;
+        }
+        local_plan.phrases.retain(|phrase| {
+            let first = phrase.notes[0].start;
+            let last = phrase.notes.last().unwrap();
+            first < render_end as f32 && last.start + last.duration + 5.0 > render_start as f32
+        });
+        for phrase in &mut local_plan.phrases {
+            for note in &mut phrase.notes {
+                note.start -= render_start as f32;
+            }
+        }
+        let local = continuous_pcm_from_plan(seed, &local_plan, render_end - render_start);
+        let first = (requested_start - render_start) * SAMPLE_RATE as usize * 2;
+        let count = (requested_end - requested_start) * SAMPLE_RATE as usize * 2;
+        output.extend_from_slice(&local[first..first + count]);
+    }
+    output
+}
+
+pub fn continuous_wav(seed: u64, seconds: usize) -> Vec<u8> {
+    encode_wav(&continuous_pcm(seed, seconds))
 }
 
 #[cfg(test)]
@@ -552,5 +820,102 @@ mod tests {
         assert_ne!(rendered[0], rendered[1]);
         assert_ne!(rendered[0], rendered[2]);
         assert_ne!(rendered[1], rendered[2]);
+    }
+
+    #[test]
+    fn continuous_mix_reduces_and_smoothly_ducks_the_background() {
+        let plan = ambient_timeline::collect_plan(COMPARISON_SEED, 180.0);
+        let layers = continuous_layers(COMPARISON_SEED, 180);
+        assert_eq!(layers.background.len(), 180 * SAMPLE_RATE as usize * 2);
+        for frame in (0..180 * SAMPLE_RATE as usize).step_by(211) {
+            let time = frame as f32 / SAMPLE_RATE as f32;
+            let gain = background_duck_gain(time, &plan.phrases);
+            assert!((0.88..=1.0).contains(&gain));
+            if layers.unscaled_background[frame * 2].abs() > 0.000_001 {
+                let expected = layers.unscaled_background[frame * 2] * 0.8 * gain;
+                assert!((layers.background[frame * 2] - expected).abs() < 0.000_001);
+            }
+        }
+        for frame in 1..180 * SAMPLE_RATE as usize {
+            let now = background_duck_gain(frame as f32 / SAMPLE_RATE as f32, &plan.phrases);
+            let previous =
+                background_duck_gain((frame - 1) as f32 / SAMPLE_RATE as f32, &plan.phrases);
+            assert!((now - previous).abs() < 0.000_02);
+        }
+        for phrase in &plan.phrases {
+            let first = ((phrase.notes[0].start + 0.5) * SAMPLE_RATE as f32) as usize;
+            let last_note = phrase.notes.last().unwrap();
+            let last = ((last_note.start + last_note.duration) * SAMPLE_RATE as f32) as usize;
+            let foreground_energy = layers.foreground[first * 2..last * 2]
+                .iter()
+                .map(|sample| sample * sample)
+                .sum::<f32>();
+            let background_energy = layers.background[first * 2..last * 2]
+                .iter()
+                .map(|sample| sample * sample)
+                .sum::<f32>();
+            assert!(
+                foreground_energy > background_energy,
+                "phrase {} must remain in front: foreground={foreground_energy} background={background_energy}",
+                phrase.index
+            );
+        }
+    }
+
+    #[test]
+    fn spatial_bus_is_bounded_and_does_not_change_background_generation() {
+        let plan = ambient_timeline::collect_plan(COMPARISON_SEED, 180.0);
+        let layers = continuous_layers(COMPARISON_SEED, 180);
+        assert_eq!(
+            layers.unscaled_background,
+            continuous_background(&plan, 180)
+        );
+        let wet_peak = layers
+            .wet
+            .iter()
+            .map(|sample| sample.abs())
+            .fold(0.0, f32::max);
+        let foreground_peak = layers
+            .foreground
+            .iter()
+            .map(|sample| sample.abs())
+            .fold(0.0, f32::max);
+        assert!(wet_peak > 0.001);
+        assert!(wet_peak < foreground_peak);
+    }
+
+    #[test]
+    fn continuous_wav_is_deterministic_safe_and_not_a_repeated_block() {
+        let wav = continuous_wav(COMPARISON_SEED, 180);
+        assert_eq!(wav, continuous_wav(COMPARISON_SEED, 180));
+        assert_eq!(wav.len(), 44 + 180 * SAMPLE_RATE as usize * 4);
+        let pcm = decode_wav(&wav);
+        assert!(pcm.iter().all(|sample| sample.abs() < 0.82));
+        assert!(rms_windows(&pcm)[1..].iter().all(|rms| *rms > 0.0002));
+        let block_frames = COMPARISON_SECONDS * SAMPLE_RATE as usize;
+        assert_ne!(
+            &pcm[..block_frames * 2],
+            &pcm[block_frames * 2..block_frames * 4]
+        );
+        let (low_energy, upper_energy) = split_band_energy(&pcm, 130.0);
+        assert!(low_energy < upper_energy);
+    }
+
+    #[test]
+    fn bounded_overlapping_windows_match_the_one_shot_mix() {
+        let whole = continuous_pcm(COMPARISON_SEED, 90);
+        let joined = render_overlapping_windows(COMPARISON_SEED, 30, 90);
+        assert_eq!(whole.len(), joined.len());
+        let (maximum_index, maximum_difference) = whole
+            .iter()
+            .zip(joined)
+            .enumerate()
+            .map(|(index, (one_shot, windowed))| (index, (one_shot - windowed).abs()))
+            .max_by(|left, right| left.1.total_cmp(&right.1))
+            .unwrap();
+        assert!(
+            maximum_difference < 0.000_01,
+            "difference={maximum_difference} index={maximum_index}"
+        );
     }
 }
