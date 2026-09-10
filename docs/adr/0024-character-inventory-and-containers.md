@@ -22,13 +22,17 @@ The owner asked to defer weapon and clothing slots, but to design so that adding
 
 The work is one architecture delivered in three stages. `ItemLocation` grows from two variants to four — on the ground, in the hands, equipped in a slot, or inside a container — and everything else follows from that.
 
-### Stage A — mass, and a limit on hands
+### Stage A — a limit on hands, measured in stacks
 
-Every item definition declares a `unit_mass`. A character declares a `carry_capacity` in the same unit. What a character holds in their hands must not exceed it.
+**A full stack of anything is one load.** Stack quantity is a relative measure, not a count of physical objects, and the existing `MAX_STACK_QUANTITY` of 1024 is what one load means for every item alike. A character declares a `carry_capacity` in the same unit; the total quantity in their hands may not exceed it. Hands hold one load.
 
-Mass rather than a count of stacks: a count would make one berry and a thousand stone equal cargo, which is precisely the abstraction [`INV-002`](0001-core-invariants.md) rejects. The vision's logistics chapter asks for capacity to matter; this is where it starts mattering.
+This is a deliberate game convention, chosen over per-material mass. Mass would be more literal, but it would demand a balanced number on every definition forever, and the content the design bible describes ends in nails, bearings and fasteners. Weighing those is simulation the game does not need and a maintenance burden that grows with every content update.
 
-This changes existing behaviour and the change is the point. A haul job that meets a stack heavier than the worker can lift splits it and moves what fits, using the stack splitting that production supply already performs. Item conservation is unaffected: splitting preserves total quantity, and the existing conservation tests must be extended to cover the split-on-pickup path.
+It costs nothing in the model: quantity is already tracked exactly, so **no new field appears on any item definition**. Capacity is a property of the character and of containers, and the measure is the quantity that already exists.
+
+It also keeps [`INV-002`](0001-core-invariants.md) intact. Quantities remain exact, transport remains physical, and nothing teleports. What the convention fixes is only *how much fits*, which was never specified before.
+
+Because one full stack is exactly one load, a worker carrying a single stack — which is what every haul, delivery and supply job does today — is unaffected. The limit bites only where a character would have accumulated more than a load across several stacks, and there a job takes what fits and splits the remainder, using the splitting that production supply already performs. Splitting preserves total quantity, and the conservation tests must be extended to cover the split-on-pickup path.
 
 ### Stage B — equipment slots, and extraction that requires a tool
 
@@ -46,24 +50,25 @@ With this, stone becomes minable from rock terrain itself. Surface outcrops rema
 
 ### Stage C — containers
 
-`ItemLocation::Contained { container_item_id }` joins the enum. An item definition may declare a `capacity`, in the same mass unit, which makes it a container. A character's effective carrying capacity is their hands plus whatever their equipped container holds.
+`ItemLocation::Contained { container_item_id }` joins the enum. An item definition may declare a `capacity`, in the same load unit, which makes it a container: a basket holds a load, a cart several. A character's effective carrying capacity is their hands plus whatever their equipped container holds.
 
 Containment turns item location from a flat set into a tree, so the rules that keep it physical are stated here rather than discovered later:
 
 - **No cycles.** An item may not be inside itself, directly or transitively. Enforced by walking the containment chain before every insertion, which is cheap because of the depth bound.
 - **Bounded depth.** Containers nest at most two deep: a bucket may ride in a cart, a cart may not ride in a cart. Provisional, like the discovery radius, and stated as a number rather than left implicit.
-- **Contents obey capacity.** The combined mass inside a container may not exceed its declared capacity.
+- **Contents obey capacity.** The combined quantity inside a container may not exceed its declared capacity.
 - **Dropping a container drops it loaded.** Contents stay inside and are not spilled onto the ground. Their location remains the container; the container's location becomes the ground.
 - **Nothing is destroyed silently.** Container destruction is not in scope, but when it becomes possible the contents must be placed on the ground, never deleted. [`INV-012`](0001-core-invariants.md) applies.
 - **Reservation follows access.** A job may reserve an item inside a container only when that container is on the ground or equipped by the worker doing the reserving. Material inside a cart another person is pushing is not available to anyone else.
 - **Spatial queries surface the container, not its contents.** Items inside a container standing on the ground are not published as ground items; the client sees the container.
 
-The flat `ItemWorld` map continues to hold every stack whatever its location, so existing conservation scans keep working unchanged. They must additionally learn to count mass held inside containers, or a container would become a place where quantity quietly accumulates unaudited.
+The flat `ItemWorld` map continues to hold every stack whatever its location, so existing conservation scans keep working unchanged. They must additionally learn to count what is held inside containers, or a container would become a place where quantity quietly accumulates unaudited.
 
 ### What is deliberately not built
 
 - **Weapon and clothing slots.** Combat is an explicit non-goal of the current milestone, and clothing without temperature or protection is decoration. A slot that no system reads is the placeholder that [`AGENTS.md` §16](../../AGENTS.md) forbids. The design admits them; the registry does not list them yet.
 - **Vehicles.** A hand cart is a carried container and nothing more. Anything with its own movement rules, speed, or pathing is transport, which the milestone defers.
+- **Per-material bulk.** Every item occupies the same space per unit of stack. Should some content later need to be genuinely bulkier than the rest, a `bulk` multiplier defaulting to one is a single field on the definition and changes no system — the door stays open at no cost, and stays shut until something needs it.
 - **Tool durability, tool assignment policy, and per-character tool ownership.** A tool is reserved and equipped like any other physical item.
 - **Skills.** The requirement list is shaped to accept them; the skill system itself is Stage C of the milestone.
 
@@ -76,6 +81,6 @@ The cost is stated so it can be checked: a new slot is one row in the slot regis
 - The first production chain in the game acquires a purpose: the tool it makes is what lets a settlement mine.
 - Stone stops competing for open ground. It comes from rock terrain, which is not a cell that anything else wanted, and surface outcrops become the pre-tool bootstrap. This is the shape that keeps the map from filling up as resource kinds multiply.
 - Carrying becomes a real constraint, and the logistics ladder from the vision has its first two rungs: hands, then a container.
-- Haul behaviour changes in Stage A, and long-run scenario output will change with it. That is a genuine gameplay change, not drift, and the milestone's conservation and reservation tests are what must confirm nothing leaks.
+- Stage A is close to behaviour-preserving. One full stack is one load, so every job that moves a single stack is untouched; only a character who would have held more than a load across several stacks is now limited. Long-run scenario output may still shift where that happened, and the conservation and reservation tests are what must confirm nothing leaks.
 - Save format gains two `ItemLocation` variants and character equipment. The project is pre-alpha, so this is written directly with no migration, per [`ADR-0021`](0021-content-registry.md).
 - Containment is the largest piece and the one that can quietly break physical accounting. It is last for that reason, and it does not begin until Stage A and Stage B are complete and their tests are green.
