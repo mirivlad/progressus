@@ -1,7 +1,5 @@
 //! Authoritative hunger: deterministic satiety decay and the physical Eat job.
 
-use progressus_content::{item, natural_resource};
-
 use super::*;
 
 impl Simulation {
@@ -40,9 +38,10 @@ impl Simulation {
                 .characters
                 .get(&character_id)
                 .is_some_and(Character::is_hungry);
-            let valid_food = self.item_world.get(item_id).is_some_and(|item| {
-                item.kind() == item::BERRIES && item.ground_position().is_some()
-            });
+            let valid_food = self
+                .item_world
+                .get(item_id)
+                .is_some_and(|item| item.kind().is_food() && item.ground_position().is_some());
             if !valid_character || !valid_food {
                 self.cancel_job(job_id)?;
             }
@@ -70,7 +69,7 @@ impl Simulation {
                 .iter()
                 .filter_map(|item| {
                     let position = item.ground_position()?;
-                    (item.kind() == item::BERRIES
+                    (item.kind().is_food()
                         && self.is_explored(position.containing_cell())
                         && self.job_world.item_job_for_item(item.id()).is_none())
                     .then_some((
@@ -184,7 +183,7 @@ impl Simulation {
                 let Some(resource) = self.natural_resource_at(cell)? else {
                     continue;
                 };
-                if resource.kind() == natural_resource::BERRY_BUSH
+                if resource.kind().definition().yields.is_food()
                     && self.job_world.harvest_job_for_source(cell).is_none()
                 {
                     candidates.push((cell_manhattan_distance(character_cell, cell), cell));
@@ -228,7 +227,8 @@ impl Simulation {
             return Ok(());
         }
         let Some(item_position) = self.item_world.get(item_id).and_then(|item| {
-            (item.kind() == item::BERRIES)
+            item.kind()
+                .is_food()
                 .then(|| item.ground_position())
                 .flatten()
         }) else {
@@ -257,6 +257,7 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::simulation::test_support::*;
+    use progressus_content::{item, natural_resource};
 
     #[test]
     fn satiety_decays_only_on_the_global_interval() {
