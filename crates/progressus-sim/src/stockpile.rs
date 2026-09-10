@@ -139,7 +139,12 @@ impl StockpileWorld {
         if !stockpile.cells.remove(&cell) {
             return Ok(false);
         }
-        debug_assert_eq!(self.owner_by_cell.remove(&cell), Some(stockpile_id));
+        let previous_owner = self.owner_by_cell.remove(&cell);
+        assert_eq!(
+            previous_owner,
+            Some(stockpile_id),
+            "stockpile cell ownership index disagreed with the stockpile"
+        );
         let remove_stockpile = stockpile.cells.is_empty();
         if remove_stockpile {
             self.stockpiles.remove(&stockpile_id);
