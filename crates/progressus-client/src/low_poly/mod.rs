@@ -50,7 +50,7 @@ impl Palette {
                 | ModelKind::ConstructionWall
                 | ModelKind::ConstructionDoor
         );
-        let variant = if structure { variant & 15 } else { variant % 4 };
+        let variant = variant % kind.variant_count();
         self.models
             .entry((kind, variant))
             .or_insert_with(|| {

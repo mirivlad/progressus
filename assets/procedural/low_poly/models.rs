@@ -30,9 +30,62 @@ pub enum ModelKind {
     Placeholder,
 }
 
+impl ModelKind {
+    /// Every kind, so tests cover a new model without being edited. Nothing in
+    /// the running client needs to enumerate kinds.
+    #[cfg(test)]
+    pub const ALL: [Self; 17] = [
+        Self::Tree,
+        Self::StoneOutcrop,
+        Self::BerryBush,
+        Self::Character,
+        Self::Workbench,
+        Self::Wall,
+        Self::Door,
+        Self::OpenDoor,
+        Self::ConstructionWall,
+        Self::ConstructionDoor,
+        Self::Wood,
+        Self::Stone,
+        Self::PrimitiveTool,
+        Self::Berries,
+        Self::CopperVein,
+        Self::CopperOre,
+        Self::Placeholder,
+    ];
+
+    /// How many distinct shapes this kind has. Bounded per ADR-0005: the mesh
+    /// cache holds one entry per kind and variant, never one per world cell.
+    /// Numerous, closely spaced things carry more shapes than rare ones.
+    pub const fn variant_count(self) -> u8 {
+        match self {
+            Self::Tree => 6,
+            Self::BerryBush | Self::StoneOutcrop | Self::CopperVein => 5,
+            Self::Character => 4,
+            Self::Wood | Self::Stone | Self::Berries | Self::CopperOre => 3,
+            Self::PrimitiveTool | Self::Workbench | Self::Placeholder => 2,
+            // Structure variants are connectivity masks, not shapes.
+            Self::Wall
+            | Self::Door
+            | Self::OpenDoor
+            | Self::ConstructionWall
+            | Self::ConstructionDoor => 16,
+        }
+    }
+
+    /// Whether a placed instance may be turned and resized for variety.
+    /// Built things may not: their orientation carries meaning.
+    pub const fn accepts_pose_variety(self) -> bool {
+        matches!(
+            self,
+            Self::Tree | Self::StoneOutcrop | Self::BerryBush | Self::CopperVein
+        )
+    }
+}
+
 pub fn model_mesh(kind: ModelKind, variant: u8) -> Mesh {
     let mut geometry = Geometry::default();
-    let variant = variant % 4;
+    let variant = variant % kind.variant_count();
     match kind {
         ModelKind::Tree => tree(&mut geometry, variant),
         ModelKind::StoneOutcrop => stone_outcrop(&mut geometry, variant),
@@ -261,86 +314,250 @@ fn shade(mut color: Rgba, factor: f32) -> Rgba {
     color
 }
 
+/// Six individual trees rather than six heights. Trunk proportion, crown
+/// shape, blob count, lean and leaf tone all move together, so two neighbours
+/// read as different trees at play distance instead of as a repeated stamp.
 fn tree(g: &mut Geometry, variant: u8) {
-    let height = 1.85 + variant as f32 * 0.12;
-    g.prism(Vec3::new(0., 0., 0.), height * 0.58, 0.13, 0.085, 6, BARK);
-    for (angle, rise) in [(0.3, 0.67), (2.4, 0.58), (4.5, 0.72)] {
-        let angle = angle + variant as f32 * 0.37;
-        let from = Vec3::new(0., height * rise, 0.);
-        let to = from + Vec3::new(angle.cos() * 0.32, 0.22, angle.sin() * 0.32);
-        g.beam(from, to, 0.038, BARK_LIGHT);
+    struct Shape {
+        height: f32,
+        trunk: f32,
+        crown_radius: f32,
+        blobs: usize,
+        spread: f32,
+        rise: f32,
+        lean: f32,
+        tone: f32,
     }
-    let crown = height * 0.72;
-    g.gem(
-        Vec3::new(0., crown, 0.),
-        Vec3::new(0.53, 0.48, 0.50),
-        7,
-        LEAF,
-    );
-    g.gem(
-        Vec3::new(-0.26, crown + 0.22, 0.08),
-        Vec3::new(0.36, 0.39, 0.35),
+    const SHAPES: [Shape; 6] = [
+        // Tall and narrow, a crowded-forest tree reaching for light.
+        Shape {
+            height: 2.55,
+            trunk: 0.095,
+            crown_radius: 0.38,
+            blobs: 3,
+            spread: 0.09,
+            rise: 0.30,
+            lean: 0.00,
+            tone: 0.86,
+        },
+        // Low and broad, grown in the open.
+        Shape {
+            height: 1.50,
+            trunk: 0.155,
+            crown_radius: 0.46,
+            blobs: 4,
+            spread: 0.17,
+            rise: 0.12,
+            lean: 0.05,
+            tone: 1.12,
+        },
+        // Two clear tiers.
+        Shape {
+            height: 2.05,
+            trunk: 0.115,
+            crown_radius: 0.44,
+            blobs: 2,
+            spread: 0.16,
+            rise: 0.42,
+            lean: 0.02,
+            tone: 0.98,
+        },
+        // Leaning, one-sided crown.
+        Shape {
+            height: 1.90,
+            trunk: 0.120,
+            crown_radius: 0.40,
+            blobs: 3,
+            spread: 0.24,
+            rise: 0.16,
+            lean: 0.17,
+            tone: 1.05,
+        },
+        // Young and slight.
+        Shape {
+            height: 1.20,
+            trunk: 0.075,
+            crown_radius: 0.30,
+            blobs: 2,
+            spread: 0.11,
+            rise: 0.14,
+            lean: 0.08,
+            tone: 1.20,
+        },
+        // Old and spreading.
+        Shape {
+            height: 2.20,
+            trunk: 0.185,
+            crown_radius: 0.42,
+            blobs: 5,
+            spread: 0.24,
+            rise: 0.20,
+            lean: 0.03,
+            tone: 0.78,
+        },
+    ];
+    let shape = &SHAPES[variant as usize % SHAPES.len()];
+    let turn = variant as f32 * 1.17;
+    let lean = Vec3::new(turn.cos() * shape.lean, 0., turn.sin() * shape.lean);
+
+    g.prism(
+        Vec3::ZERO,
+        shape.height * 0.55,
+        shape.trunk,
+        shape.trunk * 0.62,
         6,
-        LEAF_LIGHT,
+        BARK,
     );
-    g.gem(
-        Vec3::new(0.27, crown + 0.17, -0.06),
-        Vec3::new(0.39, 0.35, 0.37),
-        7,
-        shade(LEAF, 0.9),
-    );
+    let fork = lean * 0.5 + Vec3::Y * shape.height * 0.55;
+    for i in 0..shape.blobs.min(3) {
+        let a = turn + TAU * i as f32 / shape.blobs.max(1) as f32;
+        g.beam(
+            fork,
+            fork + Vec3::new(
+                a.cos() * shape.crown_radius * 0.7,
+                0.20,
+                a.sin() * shape.crown_radius * 0.7,
+            ),
+            0.036,
+            BARK_LIGHT,
+        );
+    }
+
+    let leaf = shade(LEAF, shape.tone);
+    let leaf_light = shade(LEAF_LIGHT, shape.tone);
+    let crown = fork + lean;
+    for i in 0..shape.blobs {
+        let a = turn * 1.7 + TAU * i as f32 / shape.blobs as f32;
+        let step = i as f32 / shape.blobs as f32;
+        let center = crown
+            + Vec3::new(
+                a.cos() * shape.spread,
+                shape.height * shape.rise * step,
+                a.sin() * shape.spread,
+            );
+        let scale = 1.0 - step * 0.28;
+        g.gem(
+            center,
+            Vec3::new(
+                shape.crown_radius * scale,
+                shape.crown_radius * scale * 0.88,
+                shape.crown_radius * scale,
+            ),
+            if shape.blobs > 3 { 6 } else { 7 },
+            if i % 2 == 0 { leaf } else { leaf_light },
+        );
+    }
 }
 
+/// Five outcrops that differ in boulder count and massing, so a rocky slope
+/// does not repeat one silhouette.
 fn stone_outcrop(g: &mut Geometry, variant: u8) {
-    let offset = variant as f32 * 0.025;
-    g.gem(
-        Vec3::new(-0.12, 0.28, 0.02),
-        Vec3::new(0.42, 0.28 + offset, 0.34),
-        7,
-        STONE,
-    );
-    g.gem(
-        Vec3::new(0.22, 0.18, -0.10),
-        Vec3::new(0.29, 0.19, 0.27),
-        6,
-        shade(STONE, 1.12),
-    );
-    g.gem(
-        Vec3::new(0.03, 0.12, 0.27),
-        Vec3::new(0.22, 0.13, 0.18),
-        5,
-        shade(STONE, 0.78),
-    );
+    struct Shape {
+        boulders: usize,
+        radius: f32,
+        height: f32,
+        spread: f32,
+    }
+    const SHAPES: [Shape; 5] = [
+        Shape {
+            boulders: 3,
+            radius: 0.40,
+            height: 0.30,
+            spread: 0.20,
+        },
+        Shape {
+            boulders: 1,
+            radius: 0.50,
+            height: 0.44,
+            spread: 0.00,
+        },
+        Shape {
+            boulders: 4,
+            radius: 0.27,
+            height: 0.20,
+            spread: 0.28,
+        },
+        Shape {
+            boulders: 2,
+            radius: 0.44,
+            height: 0.36,
+            spread: 0.16,
+        },
+        Shape {
+            boulders: 5,
+            radius: 0.23,
+            height: 0.16,
+            spread: 0.31,
+        },
+    ];
+    let shape = &SHAPES[variant as usize % SHAPES.len()];
+    let turn = variant as f32 * 1.31;
+    for i in 0..shape.boulders {
+        let a = turn + TAU * i as f32 / shape.boulders as f32;
+        let step = i as f32 / shape.boulders as f32;
+        let scale = 1.0 - step * 0.34;
+        g.gem(
+            Vec3::new(
+                a.cos() * shape.spread,
+                shape.height * scale,
+                a.sin() * shape.spread,
+            ),
+            Vec3::new(
+                shape.radius * scale,
+                shape.height * scale,
+                shape.radius * scale * 0.86,
+            ),
+            if i % 2 == 0 { 7 } else { 6 },
+            shade(STONE, 0.82 + step * 0.34),
+        );
+    }
 }
 
+/// Five bushes that differ in lobe count, height and fruit load, so a berry
+/// patch does not read as one shrub stamped repeatedly.
 fn berry_bush(g: &mut Geometry, variant: u8) {
-    let turn = variant as f32 * 0.41;
-    for i in 0..5 {
-        let a = turn + TAU * i as f32 / 5.;
+    const LOBES: [usize; 5] = [3, 4, 5, 6, 7];
+    const HEIGHTS: [f32; 5] = [0.30, 0.46, 0.38, 0.52, 0.42];
+    const TONES: [f32; 5] = [1.0, 1.14, 0.88, 1.06, 0.94];
+    let index = variant as usize % LOBES.len();
+    let (lobes, height, tone) = (LOBES[index], HEIGHTS[index], TONES[index]);
+    let turn = variant as f32 * 0.83;
+    let reach = 0.22 + height * 0.18;
+
+    for i in 0..lobes {
+        let a = turn + TAU * i as f32 / lobes as f32;
         g.beam(
             Vec3::new(0., 0.03, 0.),
-            Vec3::new(a.cos() * 0.3, 0.46, a.sin() * 0.3),
+            Vec3::new(a.cos() * reach * 1.15, height, a.sin() * reach * 1.15),
             0.018,
             BARK,
         );
         g.gem(
-            Vec3::new(a.cos() * 0.26, 0.42 + (i % 2) as f32 * 0.08, a.sin() * 0.26),
-            Vec3::new(0.28, 0.25, 0.28),
+            Vec3::new(
+                a.cos() * reach,
+                height - 0.04 + (i % 2) as f32 * 0.08,
+                a.sin() * reach,
+            ),
+            Vec3::new(0.27, 0.24, 0.27),
             6,
-            if i % 2 == 0 { LEAF } else { LEAF_LIGHT },
+            if i % 2 == 0 {
+                shade(LEAF, tone)
+            } else {
+                shade(LEAF_LIGHT, tone)
+            },
         );
     }
-    for i in 0..10 {
-        let lobe = i % 5;
-        let a = turn + TAU * lobe as f32 / 5.;
-        let face = a + if i < 5 { -0.6 } else { 1.2 };
+    // Fruit sits on the crown surface rather than floating above it.
+    let berries = lobes * 2;
+    for i in 0..berries {
+        let lobe = i % lobes;
+        let a = turn + TAU * lobe as f32 / lobes as f32;
+        let face = a + if i < lobes { -0.6 } else { 1.2 };
         let center = Vec3::new(
-            a.cos() * 0.26,
-            0.42 + (lobe % 2) as f32 * 0.08,
-            a.sin() * 0.26,
+            a.cos() * reach,
+            height - 0.04 + (lobe % 2) as f32 * 0.08,
+            a.sin() * reach,
         );
-        // At this height the crown's facet radius is about 0.13 cells.
-        // Embed fruit slightly into that surface instead of floating above it.
         let position = center + Vec3::new(face.cos() * 0.14, 0.13, face.sin() * 0.14);
         g.gem(position, Vec3::splat(0.042), 5, [0.63, 0.05, 0.16, 1.]);
     }
@@ -562,26 +779,39 @@ fn wood(g: &mut Geometry, variant: u8) {
 
 /// Rock with copper showing through, so a vein reads as stone at a distance
 /// and as ore up close.
+/// Rock with copper showing through, so a vein reads as stone at a distance
+/// and as ore up close. Five arrangements of where the metal surfaces.
 fn copper_vein(g: &mut Geometry, variant: u8) {
-    let offset = variant as f32 * 0.02;
+    const HOST: [(f32, f32, usize); 5] = [
+        (0.38, 0.26, 7),
+        (0.30, 0.34, 6),
+        (0.44, 0.20, 7),
+        (0.34, 0.30, 5),
+        (0.26, 0.24, 6),
+    ];
+    let index = variant as usize % HOST.len();
+    let (radius, height, sides) = HOST[index];
+    let turn = variant as f32 * 0.97;
+
     g.gem(
-        Vec3::new(-0.08, 0.24, 0.04),
-        Vec3::new(0.38, 0.24 + offset, 0.32),
-        7,
-        shade(STONE, 0.92),
+        Vec3::new(turn.cos() * 0.05, height, turn.sin() * 0.05),
+        Vec3::new(radius, height, radius * 0.9),
+        sides,
+        shade(STONE, 0.88 + index as f32 * 0.05),
     );
-    g.gem(
-        Vec3::new(0.16, 0.30, -0.06),
-        Vec3::new(0.17, 0.14, 0.15),
-        5,
-        COPPER,
-    );
-    g.gem(
-        Vec3::new(-0.18, 0.20, -0.14),
-        Vec3::new(0.11, 0.09, 0.10),
-        5,
-        VERDIGRIS,
-    );
+    for i in 0..=(index % 3) {
+        let a = turn * 1.6 + TAU * i as f32 / 3.;
+        g.gem(
+            Vec3::new(
+                a.cos() * radius * 0.55,
+                height * 1.15,
+                a.sin() * radius * 0.55,
+            ),
+            Vec3::splat(0.10 + (i % 2) as f32 * 0.045),
+            5,
+            if i % 2 == 0 { COPPER } else { VERDIGRIS },
+        );
+    }
 }
 
 fn copper_ore(g: &mut Geometry, variant: u8) {
@@ -653,22 +883,7 @@ mod tests {
     use super::*;
     use bevy::mesh::VertexAttributeValues;
 
-    const KINDS: [ModelKind; 14] = [
-        ModelKind::Tree,
-        ModelKind::StoneOutcrop,
-        ModelKind::BerryBush,
-        ModelKind::Character,
-        ModelKind::Workbench,
-        ModelKind::Wall,
-        ModelKind::Door,
-        ModelKind::OpenDoor,
-        ModelKind::ConstructionWall,
-        ModelKind::ConstructionDoor,
-        ModelKind::Wood,
-        ModelKind::Stone,
-        ModelKind::PrimitiveTool,
-        ModelKind::Berries,
-    ];
+    const KINDS: [ModelKind; ModelKind::ALL.len()] = ModelKind::ALL;
 
     fn float3(mesh: &Mesh, attribute: bevy::mesh::MeshVertexAttribute) -> &Vec<[f32; 3]> {
         match mesh.attribute(attribute).expect("attribute") {
@@ -682,6 +897,75 @@ mod tests {
             (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
             |(min, max), p| (min.min(Vec3::from(*p)), max.max(Vec3::from(*p))),
         )
+    }
+
+    /// The variant space must stay bounded: the mesh cache holds one entry per
+    /// kind and variant, and an unbounded count would mean one mesh per world
+    /// cell. See ADR-0005.
+    #[test]
+    fn every_kind_has_a_bounded_positive_variant_count() {
+        let mut total = 0_usize;
+        for kind in ModelKind::ALL {
+            let count = kind.variant_count();
+            assert!(count > 0, "{kind:?} has no variants");
+            assert!(count <= 16, "{kind:?} has an unbounded variant space");
+            total += count as usize;
+        }
+        assert!(total <= 128, "the whole mesh cache is {total} meshes");
+    }
+
+    /// Variants must differ in silhouette, not by a few percent of height. The
+    /// bug this pins: four tree "variants" that differed only by 6% height and
+    /// a small branch rotation, which read as one repeated tree in play.
+    #[test]
+    fn natural_variants_differ_in_shape_not_only_in_scale() {
+        for kind in ModelKind::ALL
+            .into_iter()
+            .filter(|k| k.accepts_pose_variety())
+        {
+            let shapes: Vec<_> = (0..kind.variant_count())
+                .map(|variant| {
+                    let mesh = model_mesh(kind, variant);
+                    let (min, max) = mesh_bounds(&mesh);
+                    let triangles = float3(&mesh, Mesh::ATTRIBUTE_POSITION).len() / 3;
+                    (max - min, triangles)
+                })
+                .collect();
+            for (i, (extent, triangles)) in shapes.iter().enumerate() {
+                for (j, (other_extent, other_triangles)) in shapes.iter().enumerate().skip(i + 1) {
+                    // Either the outline or the construction must differ, and
+                    // a difference in outline must be worth seeing.
+                    let proportion = (extent.y / extent.x) - (other_extent.y / other_extent.x);
+                    assert!(
+                        triangles != other_triangles || proportion.abs() > 0.08,
+                        "{kind:?} variants {i} and {j} are visually the same shape"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A pose turns and resizes an instance; it must not stretch it into
+    /// something that no longer reads as the same object.
+    #[test]
+    fn every_natural_model_fits_its_cell_after_the_widest_pose() {
+        for kind in ModelKind::ALL
+            .into_iter()
+            .filter(|k| k.accepts_pose_variety())
+        {
+            for variant in 0..kind.variant_count() {
+                let (min, max) = mesh_bounds(&model_mesh(kind, variant));
+                let radius = min.x.abs().max(max.x).max(min.z.abs()).max(max.z);
+                assert!(
+                    radius <= 0.75,
+                    "{kind:?} variant {variant} reaches {radius} from its cell centre"
+                );
+                assert!(
+                    min.y >= -0.2,
+                    "{kind:?} variant {variant} sinks below ground"
+                );
+            }
+        }
     }
 
     #[test]
@@ -797,10 +1081,19 @@ mod tests {
 
     #[test]
     fn variants_are_bounded_and_change_geometry() {
+        // Variant space wraps at each kind's own count, so an out-of-range
+        // variety value can never ask for an unbounded number of meshes.
         for kind in KINDS {
+            let count = kind.variant_count();
+            assert_eq!(
+                float3(&model_mesh(kind, 0), Mesh::ATTRIBUTE_POSITION),
+                float3(&model_mesh(kind, count), Mesh::ATTRIBUTE_POSITION),
+                "{kind:?} does not wrap at {count}"
+            );
             assert_eq!(
                 float3(&model_mesh(kind, 1), Mesh::ATTRIBUTE_POSITION),
-                float3(&model_mesh(kind, 5), Mesh::ATTRIBUTE_POSITION)
+                float3(&model_mesh(kind, count + 1), Mesh::ATTRIBUTE_POSITION),
+                "{kind:?} does not wrap at {count}"
             );
         }
         assert_ne!(

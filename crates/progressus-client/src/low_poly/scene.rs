@@ -19,6 +19,9 @@ struct Object {
     kind: ModelKind,
     position: WorldPosition,
     variant: u8,
+    /// Deterministic per-cell value that turns and resizes this instance.
+    /// `None` for built things, whose orientation carries meaning.
+    variety: Option<u32>,
 }
 pub(crate) struct TerrainEntry {
     pub(crate) source: ChunkSnapshot,
@@ -45,6 +48,26 @@ impl SceneCache {
     }
 }
 
+/// A deterministic, presentation-only value for one cell. The previous scheme
+/// multiplied x by 37 and took the result modulo four, but 37 is congruent to
+/// one modulo four, so it collapsed to `(x + y) % 4` and laid the world out in
+/// diagonal stripes of identical models. Mixing the coordinates removes the
+/// lattice without changing anything authoritative.
+fn cell_variety(cell: WorldCell) -> u32 {
+    let mixed = crate::procedural_assets::mix64(
+        (cell.x() as u64)
+            .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            .wrapping_add((cell.y() as u64).wrapping_mul(0xc2b2_ae3d_27d4_eb4f)),
+    );
+    (mixed >> 24) as u32
+}
+
+/// The same deterministic variety, keyed by a stable entity id rather than a
+/// cell, for things that do not belong to one.
+fn id_variety(id: EntityId) -> u32 {
+    (crate::procedural_assets::mix64(id.value()) >> 24) as u32
+}
+
 fn item_model(kind: ItemId) -> ModelKind {
     match kind.name() {
         "wood" => ModelKind::Wood,
@@ -55,8 +78,30 @@ fn item_model(kind: ItemId) -> ModelKind {
         _ => ModelKind::Placeholder,
     }
 }
+/// How far a placed instance may be turned and resized. Bounded so a tree
+/// stays a tree and never leaves its own cell.
+const MAX_LEAN_RADIANS: f32 = 0.14;
+const SCALE_SPREAD: f32 = 0.18;
+
 fn object_transform(object: &Object, origin: WorldCell) -> Transform {
-    Transform::from_translation(space::local(object.position, origin))
+    let translation = space::local(object.position, origin);
+    let Some(variety) = object.variety else {
+        return Transform::from_translation(translation);
+    };
+    // One shared mesh at many poses: variety costs no extra mesh and no extra
+    // draw batch, which is why it comes before adding more shapes.
+    let unit = |shift: u32| ((variety >> shift) & 0xff) as f32 / 255.;
+    let yaw = unit(0) * std::f32::consts::TAU;
+    let lean_axis = unit(8) * std::f32::consts::TAU;
+    let lean = unit(16) * MAX_LEAN_RADIANS;
+    let scale = 1. - SCALE_SPREAD * 0.5 + unit(4) * SCALE_SPREAD;
+    let stretch = 1. - SCALE_SPREAD * 0.35 + unit(12) * SCALE_SPREAD * 0.7;
+    Transform {
+        translation,
+        rotation: Quat::from_rotation_y(yaw)
+            * Quat::from_axis_angle(Vec3::new(lean_axis.cos(), 0., lean_axis.sin()), lean),
+        scale: Vec3::new(scale, scale * stretch, scale),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -244,14 +289,22 @@ pub(crate) fn sync(
     }
     let mut objects = BTreeMap::new();
     let visible: BTreeSet<_> = cache.chunks.iter().copied().collect();
-    let mut insert = |key, kind, cell: WorldCell, variant| {
+    let mut insert = |key, kind: ModelKind, cell: WorldCell, mask: u8| {
         if visible.contains(&cell.split().0) {
+            // Natural things pick their own shape from the cell; built things
+            // are told theirs, because it encodes wall connectivity.
+            let variety = kind.accepts_pose_variety().then(|| cell_variety(cell));
+            let variant = match variety {
+                Some(value) => (value % u32::from(kind.variant_count())) as u8,
+                None => mask,
+            };
             objects.insert(
                 key,
                 Object {
                     kind,
                     position: WorldPosition::from_cell_center(cell).expect("valid object cell"),
                     variant,
+                    variety,
                 },
             );
         }
@@ -264,11 +317,7 @@ pub(crate) fn sync(
             "copper_vein" => ModelKind::CopperVein,
             _ => ModelKind::Placeholder,
         };
-        let variant = (r.cell.x() as u64)
-            .wrapping_mul(37)
-            .wrapping_add(r.cell.y() as u64) as u8
-            % 4;
-        insert(ObjectKey::Resource(r.cell), kind, r.cell, variant);
+        insert(ObjectKey::Resource(r.cell), kind, r.cell, 0);
     }
     for w in &game.snapshot().workstations {
         insert(ObjectKey::Workbench(w.id), ModelKind::Workbench, w.cell, 0);
@@ -319,7 +368,11 @@ pub(crate) fn sync(
             Object {
                 kind: item_model(item.kind),
                 position: item.position,
-                variant: 0,
+                // A ground stack varies by its own stable id, so two piles of
+                // the same goods do not sit at the same angle.
+                variant: (id_variety(item.id) % u32::from(item_model(item.kind).variant_count()))
+                    as u8,
+                variety: Some(id_variety(item.id)),
             },
         );
     }
@@ -334,7 +387,12 @@ pub(crate) fn sync(
                 Object {
                     kind: item_model(item.kind),
                     position: c.position,
-                    variant: 0,
+                    variant: (id_variety(item.id)
+                        % u32::from(item_model(item.kind).variant_count()))
+                        as u8,
+                    // A carried stack follows its bearer, whose transform the
+                    // animation owns, so it takes no pose of its own.
+                    variety: None,
                 },
             );
         }
@@ -434,6 +492,124 @@ pub(crate) fn sync(
 
 #[cfg(test)]
 mod tests {
+
+    /// The defect this pins: the variant used to be `(37x + y) % 4`, and since
+    /// 37 is congruent to 1 modulo 4 that collapsed to `(x + y) % 4`, tiling
+    /// the world in diagonal stripes of identical models.
+    #[test]
+    fn cell_variety_has_no_diagonal_or_axis_pattern() {
+        let variant_at = |x: i64, y: i64| cell_variety(WorldCell::new(x, y)) % 6;
+
+        // A lattice would make every cell on a diagonal identical.
+        let diagonal: Vec<_> = (0..24).map(|i| variant_at(i, -i)).collect();
+        assert!(
+            diagonal.iter().any(|v| *v != diagonal[0]),
+            "cells along a diagonal all chose the same variant"
+        );
+        let anti: Vec<_> = (0..24).map(|i| variant_at(i, i)).collect();
+        assert!(anti.iter().any(|v| *v != anti[0]));
+
+        // No short period along either axis, which a weak mixer also produces.
+        for period in 1..=8 {
+            let repeats_x = (0..40).all(|i| variant_at(i, 3) == variant_at(i + period, 3));
+            let repeats_y = (0..40).all(|i| variant_at(-5, i) == variant_at(-5, i + period));
+            assert!(!repeats_x, "variants repeat every {period} cells along x");
+            assert!(!repeats_y, "variants repeat every {period} cells along y");
+        }
+
+        // Every shape actually gets used across a modest patch of world.
+        let mut seen = [0_usize; 6];
+        for y in -30..30 {
+            for x in -30..30 {
+                seen[variant_at(x, y) as usize] += 1;
+            }
+        }
+        assert!(
+            seen.iter().all(|count| *count > 300),
+            "variants are unevenly distributed: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_cell_always_gets_the_same_shape_and_pose() {
+        for cell in [
+            WorldCell::new(0, 0),
+            WorldCell::new(-4212, 917),
+            WorldCell::new(i64::MAX / 2, i64::MIN / 2),
+        ] {
+            assert_eq!(cell_variety(cell), cell_variety(cell));
+            let object = Object {
+                kind: ModelKind::Tree,
+                position: WorldPosition::from_cell_center(cell).unwrap(),
+                variant: 0,
+                variety: Some(cell_variety(cell)),
+            };
+            let origin = WorldCell::new(0, 0);
+            assert_eq!(
+                object_transform(&object, origin).rotation,
+                object_transform(&object, origin).rotation
+            );
+        }
+    }
+
+    /// A pose may turn and resize, but never mirror, invert or shrink an object
+    /// out of recognition.
+    #[test]
+    fn poses_stay_within_their_declared_bounds() {
+        for i in 0..4096_u32 {
+            let cell = WorldCell::new(i64::from(i) - 2048, i64::from(i % 71) - 35);
+            let object = Object {
+                kind: ModelKind::Tree,
+                position: WorldPosition::from_cell_center(cell).unwrap(),
+                variant: 0,
+                variety: Some(cell_variety(cell)),
+            };
+            let transform = object_transform(&object, WorldCell::new(0, 0));
+            assert!(transform.scale.x > 0.8 && transform.scale.x < 1.2);
+            assert!(transform.scale.y > 0.7 && transform.scale.y < 1.3);
+            assert_eq!(
+                transform.scale.x, transform.scale.z,
+                "footprint is not square"
+            );
+            // Upright to within the declared lean.
+            let up = transform.rotation * Vec3::Y;
+            assert!(
+                up.y >= MAX_LEAN_RADIANS.cos() - 0.001,
+                "leans too far: {up:?}"
+            );
+        }
+    }
+
+    /// Built things must not be turned: wall meshes carry a connectivity mask
+    /// and a door's axis follows its neighbours.
+    #[test]
+    fn built_structures_never_receive_a_pose() {
+        for kind in ModelKind::ALL {
+            let object = Object {
+                kind,
+                position: WorldPosition::from_cell_center(WorldCell::new(3, 4)).unwrap(),
+                variant: 0,
+                variety: kind
+                    .accepts_pose_variety()
+                    .then(|| cell_variety(WorldCell::new(3, 4))),
+            };
+            let transform = object_transform(&object, WorldCell::new(0, 0));
+            if kind.accepts_pose_variety() {
+                continue;
+            }
+            assert_eq!(transform.rotation, Quat::IDENTITY, "{kind:?} was turned");
+            assert_eq!(transform.scale, Vec3::ONE, "{kind:?} was resized");
+        }
+        for kind in [
+            ModelKind::Wall,
+            ModelKind::Door,
+            ModelKind::OpenDoor,
+            ModelKind::ConstructionWall,
+            ModelKind::ConstructionDoor,
+        ] {
+            assert!(!kind.accepts_pose_variety(), "{kind:?} would lose its axis");
+        }
+    }
     use super::*;
     use crate::runtime::AuthoritativeClient;
     use bevy::camera::{CameraProjection, ComputedCameraValues, RenderTargetInfo};

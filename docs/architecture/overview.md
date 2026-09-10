@@ -334,6 +334,8 @@ Harvested resources create ordinary physical ground stacks, including Berries fr
 
 Visual art is source-controlled as Rust mesh recipes under `assets/procedural/low_poly/`. The client caches bounded variants and connection masks in a shared material palette. Visible explored terrain is one mesh per chunk, with neighboring known cells determining faceted mountain ridges and sandy beveled shorelines. Unknown terrain contributes no geometry or undiscovered facts. Replaced or evicted terrain meshes are explicitly removed. Ground and carried stack quantities use projected screen labels; the workstation modal retains a small cached procedural icon.
 
+Placed natural objects carry a deterministic per-cell pose — yaw, bounded lean and scale — over a shared mesh, and their variants differ in silhouette rather than in scale. Built structures are never posed, because a wall mesh encodes its connectivity mask and a door's axis follows its neighbours. The variant space stays bounded per kind. See [`ADR-0023`](../adr/0023-instance-variety.md).
+
 The primary 3D scene reuses the existing authoritative client, UI/modal, save-slot and sound observer systems. X/-Z maps to authoritative X/Y relative to an integer origin; rendered height never enters movement or persistence. Camera changes only affect presentation. See [ADR-0019](../adr/0019-primary-low-poly-client.md), which supersedes the old raster pipeline in ADR-0005.
 
 ## 15. Production

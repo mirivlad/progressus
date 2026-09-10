@@ -58,7 +58,7 @@ pub(crate) fn workstation_asset(_kind: WorkstationId, id: EntityId) -> Procedura
     }
 }
 
-fn mix64(mut value: u64) -> u64 {
+pub(crate) fn mix64(mut value: u64) -> u64 {
     value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     value ^ (value >> 31)
