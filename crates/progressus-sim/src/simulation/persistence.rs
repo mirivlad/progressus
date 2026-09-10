@@ -18,7 +18,7 @@ use crate::residency::ChunkResidency;
 use crate::stockpile::StockpileWorld;
 use crate::workstation_world::WorkstationWorld;
 use crate::world_state::ModifiedWorld;
-use crate::{MAX_SATIETY, MovementSpeed, ResourceLayerId};
+use crate::{MAX_SATIETY, MovementSpeed, ResourceLayerId, SlotId};
 
 pub const SAVE_FORMAT_VERSION: u32 = 1;
 const SAVE_FORMAT_NAME: &str = "progressus-save";
@@ -697,6 +697,7 @@ struct TerrainOverrideSave {
 enum ItemLocationSave {
     Ground { position: PositionSave },
     Carried { character_id: u64 },
+    Equipped { character_id: u64, slot: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -715,6 +716,10 @@ impl ItemSave {
             },
             ItemLocation::Carried { character_id } => ItemLocationSave::Carried {
                 character_id: character_id.value(),
+            },
+            ItemLocation::Equipped { character_id, slot } => ItemLocationSave::Equipped {
+                character_id: character_id.value(),
+                slot: slot.name().to_owned(),
             },
         };
         Self {
@@ -1345,6 +1350,36 @@ fn restore_items(
                 world
                     .move_to_carried(id, carrier)
                     .map_err(|error| invalid_world_error("item carrier", error))?;
+            }
+            ItemLocationSave::Equipped { character_id, slot } => {
+                let bearer = entity_id(character_id, "item bearer")?;
+                let character = characters.get(&bearer).ok_or_else(|| {
+                    SaveError::InvalidData(format!(
+                        "item {} references missing bearer {}",
+                        id.value(),
+                        bearer.value()
+                    ))
+                })?;
+                let slot = SlotId::from_name(&slot).ok_or(SaveError::UnknownContent {
+                    kind: "equipment slot",
+                    name: slot.clone(),
+                })?;
+                // Equipment restores through the ordinary ground and hands
+                // transitions, so it cannot bypass their index bookkeeping.
+                world
+                    .insert_ground(ItemStack::new_ground(
+                        id,
+                        kind,
+                        quantity,
+                        character.position(),
+                    ))
+                    .map_err(|error| invalid_world_error("item", error))?;
+                world
+                    .move_to_carried(id, bearer)
+                    .map_err(|error| invalid_world_error("item bearer", error))?;
+                world
+                    .equip_carried(id, bearer, slot)
+                    .map_err(|error| invalid_world_error("item equipment", error))?;
             }
         }
     }

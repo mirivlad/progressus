@@ -50,14 +50,14 @@ use crate::stockpile::{StockpileWorld, StockpileWorldError};
 use crate::workstation_world::{WorkstationWorld, WorkstationWorldError};
 use crate::world_state::ModifiedWorld;
 use crate::{
-    CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, ConstructionMaterialState,
-    ConstructionSite, Direction, EAT_WORK_TICKS, EffectiveChunk, EntityId, GeneratedChunk,
-    HAND_LOAD_UNITS, HARVEST_WORK_TICKS, InteractionRadius, ItemId, ItemLocation, ItemQuantity,
-    ItemStack, Job, JobKind, JobState, LocalCell, MAX_STACK_QUANTITY, MovementState,
-    NaturalResource, ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind,
-    RecipeId, SATIETY_DECAY_INTERVAL_TICKS, SimulationTick, Stockpile, Structure, StructureId,
-    TerrainId, Workstation, WorkstationId, WorldCell, WorldPosition, WorldPositionError, WorldSeed,
-    WorldgenVersion, within_interaction_range,
+    CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, CapabilityId, Character, ChunkCoord,
+    ConstructionMaterialState, ConstructionSite, Direction, EAT_WORK_TICKS, EffectiveChunk,
+    EntityId, GeneratedChunk, HAND_LOAD_UNITS, HARVEST_WORK_TICKS, InteractionRadius, ItemId,
+    ItemLocation, ItemQuantity, ItemStack, Job, JobKind, JobState, LocalCell, MAX_STACK_QUANTITY,
+    MovementState, NaturalResource, ProductionLogistics, ProductionOrder, ProductionTarget,
+    ProductionZoneKind, RecipeId, SATIETY_DECAY_INTERVAL_TICKS, SimulationTick, SlotId, Stockpile,
+    Structure, StructureId, TerrainId, Workstation, WorkstationId, WorldCell, WorldPosition,
+    WorldPositionError, WorldSeed, WorldgenVersion, within_interaction_range,
 };
 
 const BOOTSTRAP_BERRIES: u32 = 10;
@@ -379,6 +379,89 @@ impl Simulation {
         Ok(resources)
     }
 
+    /// What this character has equipped, by slot.
+    pub fn equipment(&self, character_id: EntityId) -> Vec<(SlotId, EntityId)> {
+        self.item_world
+            .equipped_by(character_id)
+            .map(|(slot, item)| (slot, item.id()))
+            .collect()
+    }
+
+    /// Whether this character is equipped for the work. Systems ask this
+    /// rather than looking in a named slot, which is what keeps a new slot
+    /// free to add. See ADR-0024.
+    pub fn can_perform(&self, character_id: EntityId, capability: CapabilityId) -> bool {
+        self.item_world
+            .equipped_by(character_id)
+            .any(|(_, item)| item.kind().provides(capability))
+    }
+
+    /// Whether this character is equipped for everything the work needs.
+    pub fn meets_requirements(&self, character_id: EntityId, required: &[CapabilityId]) -> bool {
+        required
+            .iter()
+            .all(|capability| self.can_perform(character_id, *capability))
+    }
+
+    /// Moves a carried stack into its slot. The item must declare a slot, the
+    /// slot must be free, and the whole stack goes: equipment is not divisible.
+    pub fn equip_item(
+        &mut self,
+        character_id: EntityId,
+        item_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        let item = self
+            .item_world
+            .get(item_id)
+            .ok_or(SimulationError::UnknownItem(item_id))?;
+        let slot = item
+            .kind()
+            .definition()
+            .equip_slot
+            .ok_or(SimulationError::ItemNotEquippable(item_id))?;
+        if item.carrier() != Some(character_id) {
+            return Err(SimulationError::ItemNotCarriedByCharacter {
+                character_id,
+                item_id,
+            });
+        }
+        self.item_world
+            .equip_carried(item_id, character_id, slot)
+            .map_err(|_| SimulationError::SlotAlreadyOccupied {
+                character_id,
+                item_id,
+            })
+    }
+
+    /// Returns equipment to its bearer's hands, where carrying capacity
+    /// applies to it again.
+    pub fn unequip_item(
+        &mut self,
+        character_id: EntityId,
+        item_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        let item = self
+            .item_world
+            .get(item_id)
+            .ok_or(SimulationError::UnknownItem(item_id))?;
+        if item.bearer().map(|(bearer, _)| bearer) != Some(character_id) {
+            return Err(SimulationError::ItemNotCarriedByCharacter {
+                character_id,
+                item_id,
+            });
+        }
+        let (kind, quantity) = (item.kind(), item.quantity().get());
+        if self.carried_load(character_id) + kind.load_cost(quantity) > HAND_LOAD_UNITS {
+            return Err(SimulationError::CarryCapacityExceeded {
+                character_id,
+                item_id,
+            });
+        }
+        self.item_world
+            .unequip_to_carried(item_id)
+            .map_err(|_| SimulationError::JobInvariantViolation)
+    }
+
     /// What this character already holds, as a share of one pair of hands.
     pub fn carried_load(&self, character_id: EntityId) -> u64 {
         self.item_world
@@ -447,7 +530,9 @@ impl Simulation {
             .ok_or(SimulationError::UnknownItem(item_id))?;
         let item_position = match item.location() {
             ItemLocation::Ground { position } => position,
-            ItemLocation::Carried { .. } => return Err(SimulationError::ItemNotOnGround(item_id)),
+            ItemLocation::Carried { .. } | ItemLocation::Equipped { .. } => {
+                return Err(SimulationError::ItemNotOnGround(item_id));
+            }
         };
         if !within_interaction_range(
             character_position,
@@ -928,6 +1013,120 @@ fn translate(
 
 #[cfg(test)]
 mod tests {
+    use progressus_content::{capability, slot};
+
+    /// Equipment is borne, not carried: a tool in a slot must not eat into
+    /// what its bearer can still pick up, or equipping would be a punishment.
+    #[test]
+    fn equipment_does_not_consume_carrying_capacity() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let character = cora();
+        let position = simulation.characters[&character].position();
+        let tool = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .item_world
+            .insert_ground(ItemStack::new_ground(
+                tool,
+                item::PRIMITIVE_TOOL,
+                ItemQuantity::new(1).unwrap(),
+                position,
+            ))
+            .unwrap();
+
+        simulation.pick_up_item(character, tool).unwrap();
+        let carrying_the_tool = simulation.carried_load(character);
+        assert!(carrying_the_tool > 0);
+
+        simulation.equip_item(character, tool).unwrap();
+        assert_eq!(
+            simulation.carried_load(character),
+            0,
+            "an equipped tool still weighed on its bearer's hands"
+        );
+        assert_eq!(simulation.equipment(character), vec![(slot::TOOL, tool)]);
+        assert!(simulation.item_world.indexes_are_consistent());
+    }
+
+    /// Requirements are answered by capability, never by looking in a named
+    /// slot. That rule is what keeps a future slot free to add; see ADR-0024.
+    #[test]
+    fn capability_comes_from_equipment_and_not_from_holding_the_tool() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let character = cora();
+        let position = simulation.characters[&character].position();
+        let tool = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .item_world
+            .insert_ground(ItemStack::new_ground(
+                tool,
+                item::PRIMITIVE_TOOL,
+                ItemQuantity::new(1).unwrap(),
+                position,
+            ))
+            .unwrap();
+
+        assert!(!simulation.can_perform(character, capability::MINE));
+        simulation.pick_up_item(character, tool).unwrap();
+        assert!(
+            !simulation.can_perform(character, capability::MINE),
+            "merely holding a pick is not being equipped to mine"
+        );
+        simulation.equip_item(character, tool).unwrap();
+        assert!(simulation.can_perform(character, capability::MINE));
+        assert!(simulation.meets_requirements(character, &[capability::MINE]));
+        assert!(simulation.meets_requirements(character, &[]));
+
+        simulation.unequip_item(character, tool).unwrap();
+        assert!(!simulation.can_perform(character, capability::MINE));
+        assert!(simulation.item_world.indexes_are_consistent());
+    }
+
+    /// A slot holds one item, and equipment survives a save without becoming a
+    /// second copy or falling on the floor.
+    #[test]
+    fn a_slot_holds_one_item_and_equipment_round_trips_through_a_save() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let character = cora();
+        let position = simulation.characters[&character].position();
+        let make_tool = |simulation: &mut Simulation| {
+            let id = simulation.id_allocator.allocate().unwrap();
+            simulation
+                .item_world
+                .insert_ground(ItemStack::new_ground(
+                    id,
+                    item::PRIMITIVE_TOOL,
+                    ItemQuantity::new(1).unwrap(),
+                    position,
+                ))
+                .unwrap();
+            id
+        };
+        let first = make_tool(&mut simulation);
+        let second = make_tool(&mut simulation);
+
+        simulation.pick_up_item(character, first).unwrap();
+        simulation.equip_item(character, first).unwrap();
+        simulation.pick_up_item(character, second).unwrap();
+        assert!(
+            matches!(
+                simulation.equip_item(character, second),
+                Err(SimulationError::SlotAlreadyOccupied { .. })
+            ),
+            "a second tool went into an occupied slot"
+        );
+
+        let total_before = simulation.item_world.iter().count();
+        let bytes = simulation.save_json().unwrap();
+        let reloaded = Simulation::load_json(&bytes).unwrap();
+        assert_eq!(reloaded.equipment(character), vec![(slot::TOOL, first)]);
+        assert!(reloaded.can_perform(character, capability::MINE));
+        assert_eq!(
+            reloaded.item_world.iter().count(),
+            total_before,
+            "the save changed how many stacks exist"
+        );
+        assert!(reloaded.item_world.indexes_are_consistent());
+    }
     use super::*;
     use crate::simulation::test_support::*;
 

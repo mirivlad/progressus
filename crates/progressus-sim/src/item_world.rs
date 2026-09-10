@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 
-use progressus_content::{ItemId, MAX_STACK_QUANTITY};
+use progressus_content::{ItemId, MAX_STACK_QUANTITY, SlotId};
 
 use crate::{ChunkCoord, EntityId, WorldPosition};
 
@@ -23,8 +23,18 @@ impl ItemQuantity {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ItemLocation {
-    Ground { position: WorldPosition },
-    Carried { character_id: EntityId },
+    Ground {
+        position: WorldPosition,
+    },
+    Carried {
+        character_id: EntityId,
+    },
+    /// Worn or held in a named slot rather than in the hands, so it does not
+    /// count against what a character can carry. See ADR-0024.
+    Equipped {
+        character_id: EntityId,
+        slot: SlotId,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -69,14 +79,24 @@ impl ItemStack {
     pub const fn ground_position(&self) -> Option<WorldPosition> {
         match self.location {
             ItemLocation::Ground { position } => Some(position),
-            ItemLocation::Carried { .. } => None,
+            ItemLocation::Carried { .. } | ItemLocation::Equipped { .. } => None,
         }
     }
 
+    /// Who has this in their hands. Equipment is deliberately excluded: it is
+    /// borne, not carried, and must not consume carrying capacity.
     pub const fn carrier(&self) -> Option<EntityId> {
         match self.location {
-            ItemLocation::Ground { .. } => None,
+            ItemLocation::Ground { .. } | ItemLocation::Equipped { .. } => None,
             ItemLocation::Carried { character_id } => Some(character_id),
+        }
+    }
+
+    /// Who has this equipped, and where.
+    pub const fn bearer(&self) -> Option<(EntityId, SlotId)> {
+        match self.location {
+            ItemLocation::Equipped { character_id, slot } => Some((character_id, slot)),
+            ItemLocation::Ground { .. } | ItemLocation::Carried { .. } => None,
         }
     }
 }
@@ -86,6 +106,8 @@ pub(crate) struct ItemWorld {
     items: BTreeMap<EntityId, ItemStack>,
     ground_by_chunk: BTreeMap<ChunkCoord, BTreeSet<EntityId>>,
     carried_by_character: BTreeMap<EntityId, BTreeSet<EntityId>>,
+    /// One item per character per slot, so equipment cannot silently stack.
+    equipped_by_character: BTreeMap<EntityId, BTreeMap<SlotId, EntityId>>,
     revision: u64,
 }
 
@@ -264,6 +286,9 @@ impl ItemWorld {
             ItemLocation::Carried { character_id } => {
                 self.remove_carried_index(item_id, character_id)
             }
+            ItemLocation::Equipped { character_id, slot } => {
+                self.remove_equipped_index(item_id, character_id, slot)
+            }
         }
         self.items
             .remove(&item_id)
@@ -377,6 +402,103 @@ impl ItemWorld {
         }
     }
 
+    /// Moves a stack from a character's hands into one of their slots. The
+    /// slot must be free: equipment does not stack.
+    pub(crate) fn equip_carried(
+        &mut self,
+        item_id: EntityId,
+        character_id: EntityId,
+        slot: SlotId,
+    ) -> Result<(), ItemWorldError> {
+        let carrier = self
+            .items
+            .get(&item_id)
+            .ok_or(ItemWorldError::UnknownItem(item_id))?
+            .carrier()
+            .ok_or(ItemWorldError::ExpectedCarriedItem(item_id))?;
+        if carrier != character_id {
+            return Err(ItemWorldError::ExpectedCarriedItem(item_id));
+        }
+        if self
+            .equipped_by_character
+            .get(&character_id)
+            .is_some_and(|slots| slots.contains_key(&slot))
+        {
+            return Err(ItemWorldError::SlotAlreadyOccupied {
+                character_id,
+                item_id,
+            });
+        }
+        self.remove_carried_index(item_id, character_id);
+        self.items
+            .get_mut(&item_id)
+            .expect("item was checked above")
+            .location = ItemLocation::Equipped { character_id, slot };
+        self.equipped_by_character
+            .entry(character_id)
+            .or_default()
+            .insert(slot, item_id);
+        self.bump_revision();
+        Ok(())
+    }
+
+    /// Moves equipment back into the bearer's hands, where the ordinary
+    /// carrying rules apply to it again.
+    pub(crate) fn unequip_to_carried(&mut self, item_id: EntityId) -> Result<(), ItemWorldError> {
+        let (character_id, slot) = self
+            .items
+            .get(&item_id)
+            .ok_or(ItemWorldError::UnknownItem(item_id))?
+            .bearer()
+            .ok_or(ItemWorldError::ExpectedEquippedItem(item_id))?;
+        self.remove_equipped_index(item_id, character_id, slot);
+        self.items
+            .get_mut(&item_id)
+            .expect("item was checked above")
+            .location = ItemLocation::Carried { character_id };
+        self.carried_by_character
+            .entry(character_id)
+            .or_default()
+            .insert(item_id);
+        self.bump_revision();
+        Ok(())
+    }
+
+    /// What this character has equipped, by slot.
+    pub(crate) fn equipped_by(
+        &self,
+        character_id: EntityId,
+    ) -> impl Iterator<Item = (SlotId, &ItemStack)> {
+        self.equipped_by_character
+            .get(&character_id)
+            .into_iter()
+            .flat_map(|slots| slots.iter())
+            .map(|(slot, id)| {
+                (
+                    *slot,
+                    self.items
+                        .get(id)
+                        .expect("equipment index only contains live item IDs"),
+                )
+            })
+    }
+
+    fn remove_equipped_index(&mut self, item_id: EntityId, character_id: EntityId, slot: SlotId) {
+        let slots = self
+            .equipped_by_character
+            .get_mut(&character_id)
+            .expect("equipped item has a matching bearer index");
+        debug_assert_eq!(
+            slots.get(&slot),
+            Some(&item_id),
+            "equipped item is present in its bearer index"
+        );
+        slots.remove(&slot);
+        if slots.is_empty() {
+            self.equipped_by_character.remove(&character_id);
+        }
+    }
+
     fn remove_carried_index(&mut self, item_id: EntityId, character_id: EntityId) {
         let ids = self
             .carried_by_character
@@ -434,6 +556,34 @@ impl ItemWorld {
                     {
                         return false;
                     }
+                    if self
+                        .equipped_by_character
+                        .values()
+                        .any(|slots| slots.values().any(|id| *id == item.id()))
+                    {
+                        return false;
+                    }
+                }
+                ItemLocation::Equipped { character_id, slot } => {
+                    if self
+                        .equipped_by_character
+                        .get(&character_id)
+                        .and_then(|slots| slots.get(&slot))
+                        != Some(&item.id())
+                    {
+                        return false;
+                    }
+                    if self
+                        .ground_by_chunk
+                        .values()
+                        .any(|ids| ids.contains(&item.id()))
+                        || self
+                            .carried_by_character
+                            .values()
+                            .any(|ids| ids.contains(&item.id()))
+                    {
+                        return false;
+                    }
                 }
             }
         }
@@ -442,7 +592,12 @@ impl ItemWorld {
             .values()
             .chain(self.carried_by_character.values())
             .map(BTreeSet::len)
-            .sum::<usize>();
+            .sum::<usize>()
+            + self
+                .equipped_by_character
+                .values()
+                .map(BTreeMap::len)
+                .sum::<usize>();
         indexed == self.items.len()
     }
 }
@@ -465,6 +620,11 @@ pub(crate) enum ItemWorldError {
     },
     ExpectedGroundItem(EntityId),
     ExpectedCarriedItem(EntityId),
+    ExpectedEquippedItem(EntityId),
+    SlotAlreadyOccupied {
+        character_id: EntityId,
+        item_id: EntityId,
+    },
     WrongCarrier {
         item_id: EntityId,
         expected: EntityId,

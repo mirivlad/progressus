@@ -76,6 +76,11 @@ pub enum SimulationError {
     ResourceRevisionOverflow,
     JobInvariantViolation,
     ItemNotOnGround(EntityId),
+    ItemNotEquippable(EntityId),
+    SlotAlreadyOccupied {
+        character_id: EntityId,
+        item_id: EntityId,
+    },
     CarryCapacityExceeded {
         character_id: EntityId,
         item_id: EntityId,
@@ -469,6 +474,20 @@ impl Display for SimulationError {
             } => write!(
                 formatter,
                 "character {} cannot carry item {} on top of what is already in their hands",
+                character_id.value(),
+                item_id.value()
+            ),
+            Self::ItemNotEquippable(id) => write!(
+                formatter,
+                "item {} does not belong in any equipment slot",
+                id.value()
+            ),
+            Self::SlotAlreadyOccupied {
+                character_id,
+                item_id,
+            } => write!(
+                formatter,
+                "character {} already has that slot filled, so item {} cannot be equipped",
                 character_id.value(),
                 item_id.value()
             ),
