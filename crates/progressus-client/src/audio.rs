@@ -121,11 +121,19 @@ pub(crate) fn update_audio(
     if settings.effects == 0 {
         return;
     }
-    let (Ok((camera, transform)), Ok(window)) = (cameras.single(), windows.single()) else { return; };
-    let admitted = audible_cues(cues, |cell| {
-        let p = camera.world_to_viewport(transform, space::cell_local(cell, view.origin)).ok()?;
-        Some([p.x / window.width().max(1.), p.y / window.height().max(1.)])
-    }, effects.iter().count());
+    let (Ok((camera, transform)), Ok(window)) = (cameras.single(), windows.single()) else {
+        return;
+    };
+    let admitted = audible_cues(
+        cues,
+        |cell| {
+            let p = camera
+                .world_to_viewport(transform, space::cell_local(cell, view.origin))
+                .ok()?;
+            Some([p.x / window.width().max(1.), p.y / window.height().max(1.)])
+        },
+        effects.iter().count(),
+    );
     for (cue, pan) in admitted {
         let Some(asset) = state.effects.get(&(cue.kind, cue.variant % 3)) else {
             continue;

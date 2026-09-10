@@ -1,4 +1,4 @@
-//! Deterministic, presentation-only low-poly models for the experimental 3D client.
+//! Deterministic, presentation-only low-poly models for the primary 3D client.
 
 use bevy::{
     asset::RenderAssetUsages,
@@ -233,7 +233,13 @@ impl Geometry {
         );
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, self.normals);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, self.colors);
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_COLOR,
+            self.colors
+                .into_iter()
+                .map(super::linear_color)
+                .collect::<Vec<_>>(),
+        );
         mesh
     }
 }

@@ -1,9 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::Resource;
-use progressus_app::{EntityId, SUBUNITS_PER_CELL, SimulationTick, WorldPosition};
-
-pub(crate) const CELL_SIZE: f32 = 12.0;
+use progressus_app::{EntityId, SimulationTick, WorldPosition};
 
 #[derive(Resource, Default)]
 pub(crate) struct SelectedCharacter(pub(crate) Option<EntityId>);
@@ -72,20 +70,6 @@ pub(crate) fn select_nearest(
         .map(|(_, id)| id)
 }
 
-pub(crate) fn quantize_local_click(
-    origin: WorldPosition,
-    local_x: f32,
-    local_y: f32,
-) -> Result<WorldPosition, ()> {
-    let delta_x = (local_x / CELL_SIZE * SUBUNITS_PER_CELL as f32).round() as i128;
-    let delta_y = (local_y / CELL_SIZE * SUBUNITS_PER_CELL as f32).round() as i128;
-    WorldPosition::from_subunits(
-        origin.x_subunits().checked_add(delta_x).ok_or(())?,
-        origin.y_subunits().checked_add(delta_y).ok_or(())?,
-    )
-    .map_err(|_| ())
-}
-
 pub(crate) fn interpolate_trace(trace: &[WorldPosition], fraction: f32) -> WorldPosition {
     let fraction = fraction.clamp(0.0, 1.0);
     let lengths = trace
@@ -117,7 +101,7 @@ pub(crate) fn interpolate_trace(trace: &[WorldPosition], fraction: f32) -> World
 mod tests {
     use progressus_app::{EntityId, SimulationTick, WorldCell, WorldPosition};
 
-    use super::{VisualMotion, interpolate_trace, quantize_local_click, select_nearest};
+    use super::{VisualMotion, interpolate_trace, select_nearest};
 
     #[test]
     fn nearest_selection_breaks_equal_distance_by_entity_id() {
@@ -138,22 +122,6 @@ mod tests {
                 32,
             ),
             Some(EntityId::new(3).unwrap())
-        );
-    }
-
-    #[test]
-    fn local_click_quantizes_center_negative_and_boundary() {
-        let origin = WorldPosition::from_cell_center(WorldCell::new(-1, 0)).unwrap();
-        assert_eq!(quantize_local_click(origin, 0.0, 0.0).unwrap(), origin);
-        assert_eq!(
-            quantize_local_click(origin, 3.0, 0.0).unwrap().x_subunits(),
-            -256
-        );
-        assert_eq!(
-            quantize_local_click(origin, 6.0, 0.0)
-                .unwrap()
-                .containing_cell(),
-            WorldCell::new(0, 0)
         );
     }
 

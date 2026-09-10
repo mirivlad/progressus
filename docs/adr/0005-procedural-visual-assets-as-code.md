@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-02
 - Amended: 2026-09-04 (derived terrain transition topology and alpha-corner overlays)
+- Superseded in part: 2026-09-10 by [`ADR-0019`](0019-primary-low-poly-client.md), which replaces the raster/canvas world-rendering implementation and the terrain alpha-corner technique with low-poly meshes. The general decision below — procedural visuals are deterministic, presentation-only, source-controlled Rust recipes with bounded variant/topology keys and caching — remains in force.
 
 ## Context
 

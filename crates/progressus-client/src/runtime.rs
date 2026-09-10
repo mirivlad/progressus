@@ -176,13 +176,13 @@ pub(crate) fn advance_authority(
     record_elapsed(&mut diagnostics, &AUTHORITY_MS, started);
 }
 
-#[allow(clippy::type_complexity)]
 fn screen_body_distance(cursor: Vec2, feet: Vec2, head: Vec2) -> f32 {
     let segment = head - feet;
     let fraction = ((cursor - feet).dot(segment) / segment.length_squared().max(1.)).clamp(0., 1.);
     cursor.distance(feet + fraction * segment)
 }
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn pointer_navigation(
     input: (Res<ButtonInput<MouseButton>>, Res<ButtonInput<KeyCode>>),
     windows: Query<&Window, With<PrimaryWindow>>,

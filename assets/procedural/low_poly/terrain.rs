@@ -71,7 +71,7 @@ pub(super) fn terrain_mesh(chunk: &ChunkSnapshot, known: &BTreeMap<WorldCell, Te
                     offsets[previous].1 + offsets[j].1,
                 ) == Some(Terrain::Rock)
             {
-                1.9
+                2.65
             } else {
                 base
             };
@@ -95,7 +95,7 @@ pub(super) fn terrain_mesh(chunk: &ChunkSnapshot, known: &BTreeMap<WorldCell, Te
             }
             // Edge midpoint is shared across chunks and connects mountain ridges.
             if *kind == Terrain::Rock {
-                let h = if same[j] { 1.9 } else { 0. };
+                let h = if same[j] { 2.65 } else { 0. };
                 ring.push((
                     corner.lerp(corners[(j + 1) % 4], 0.5) + origin + Vec3::Y * h,
                     !same[j],
@@ -105,7 +105,7 @@ pub(super) fn terrain_mesh(chunk: &ChunkSnapshot, known: &BTreeMap<WorldCell, Te
         let center = origin
             + Vec3::Y
                 * if *kind == Terrain::Rock {
-                    2.8 + (hash % 7) as f32 * 0.11
+                    2.8 + (hash % 7) as f32 * 0.05
                 } else {
                     base
                 };
@@ -126,12 +126,27 @@ pub(super) fn terrain_mesh(chunk: &ChunkSnapshot, known: &BTreeMap<WorldCell, Te
                 triangle(a, b, center, color);
             }
             // Skirts close exposed biome/discovery edges; same-terrain edges join directly.
-            if exposed {
+            if exposed && *kind != Terrain::Water {
                 let bottom_a = Vec3::new(a.x, -0.28, a.z);
                 let bottom_b = Vec3::new(b.x, -0.28, b.z);
                 let edge = [color[0] * 0.7, color[1] * 0.7, color[2] * 0.65, 1.];
                 triangle(a, bottom_a, b, edge);
                 triangle(b, bottom_a, bottom_b, edge);
+            }
+        }
+        // The sandy bank reaches the original square footprint, including the
+        // filled bevel corners. Close that outer edge, not the inset water ring.
+        if *kind == Terrain::Water {
+            for j in 0..4 {
+                if same[j] {
+                    continue;
+                }
+                let a = corners[j] + origin;
+                let b = corners[(j + 1) % 4] + origin;
+                let bottom_a = a - Vec3::Y * 0.28;
+                let bottom_b = b - Vec3::Y * 0.28;
+                triangle(a, bottom_a, b, sand);
+                triangle(b, bottom_a, bottom_b, sand);
             }
         }
     }
@@ -141,7 +156,13 @@ pub(super) fn terrain_mesh(chunk: &ChunkSnapshot, known: &BTreeMap<WorldCell, Te
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, colors)
+    .with_inserted_attribute(
+        Mesh::ATTRIBUTE_COLOR,
+        colors
+            .into_iter()
+            .map(super::linear_color)
+            .collect::<Vec<_>>(),
+    )
 }
 
 #[cfg(test)]
@@ -199,7 +220,7 @@ mod tests {
         else {
             panic!("colors");
         };
-        assert!(colors.contains(&[0.68, 0.56, 0.32, 1.]));
+        assert!(colors.contains(&super::super::linear_color([0.68, 0.56, 0.32, 1.])));
     }
 
     #[test]
@@ -216,8 +237,8 @@ mod tests {
         ]);
         let a = terrain_mesh(&left, &known);
         let b = terrain_mesh(&right, &known);
-        assert!(positions(&a).contains(&[31.5, 1.9, 0.]));
-        assert!(positions(&b).contains(&[-0.5, 1.9, 0.]));
+        assert!(positions(&a).contains(&[31.5, 2.65, 0.]));
+        assert!(positions(&b).contains(&[-0.5, 2.65, 0.]));
     }
     #[test]
     fn shore_skirts_close_the_actual_square_footprint_at_ground_height() {
@@ -293,7 +314,7 @@ mod tests {
                 .filter(|(i, _)| mask & (1 << i) != 0)
                 .map(|(_, &(x, y))| (WorldCell::new(x, y), Terrain::Rock))
                 .collect();
-            let expected = if mask == 15 { 1.9 } else { 0. };
+            let expected = if mask == 15 { 2.65 } else { 0. };
             for (i, &(x, y)) in cells.iter().enumerate() {
                 if mask & (1 << i) == 0 {
                     continue;

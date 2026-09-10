@@ -148,3 +148,9 @@ pub(crate) fn animate(
         }
     }
 }
+
+/// Mesh vertex colors are linear; authored palette values are screen sRGB.
+fn linear_color(rgba: [f32; 4]) -> [f32; 4] {
+    let c = Color::srgba(rgba[0], rgba[1], rgba[2], rgba[3]).to_linear();
+    [c.red, c.green, c.blue, c.alpha]
+}

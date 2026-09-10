@@ -1,7 +1,7 @@
 use super::*;
 use progressus_app::{
-    SnapshotQuery, ChunkCoord, ChunkSnapshot, DoorState, ItemKind, LocalCell, NaturalResourceKind, StructureKind,
-    WorldPosition,
+    ChunkCoord, ChunkSnapshot, DoorState, ItemKind, LocalCell, NaturalResourceKind, SnapshotQuery,
+    StructureKind, WorldPosition,
 };
 use std::collections::BTreeSet;
 
@@ -160,14 +160,22 @@ pub(crate) fn sync(
                             (i % usize::from(chunk.side)) as u16,
                             (i / usize::from(chunk.side)) as u16,
                         );
-                        chunk
-                            .coordinate
-                            .world_cell(local)
-                            .map(|cell| (cell, *kind))
+                        chunk.coordinate.world_cell(local).map(|cell| (cell, *kind))
                     })
                 })
                 .collect();
             for chunk in spatial.chunks {
+                let neighborhood = neighborhood
+                    .iter()
+                    .filter(|other| {
+                        (i128::from(other.coordinate.x()) - i128::from(chunk.coordinate.x())).abs()
+                            <= 1
+                            && (i128::from(other.coordinate.y()) - i128::from(chunk.coordinate.y()))
+                                .abs()
+                                <= 1
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
                 if cache
                     .terrain
                     .get(&chunk.coordinate)
@@ -417,4 +425,189 @@ pub(crate) fn sync(
         });
     }
     view.rebased = false;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::AuthoritativeClient;
+    use bevy::camera::{CameraProjection, ComputedCameraValues, RenderTargetInfo};
+    use progressus_app::{Command, WorldSeed};
+    fn app() -> App {
+        let mut app = App::new();
+        let mut projection = OrthographicProjection {
+            scaling_mode: ScalingMode::FixedVertical {
+                viewport_height: 18.,
+            },
+            ..OrthographicProjection::default_3d()
+        };
+        projection.update(1440., 900.);
+        let camera = Camera {
+            computed: ComputedCameraValues {
+                clip_from_view: projection.get_clip_from_view(),
+                target_info: Some(RenderTargetInfo {
+                    physical_size: UVec2::new(1440, 900),
+                    scale_factor: 1.,
+                }),
+                ..default()
+            },
+            ..default()
+        };
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<VisualMotion>()
+            .init_resource::<SceneCache>()
+            .init_resource::<View>()
+            .insert_resource(AuthoritativeClient::new().unwrap())
+            .insert_resource(Palette {
+                models: BTreeMap::new(),
+                material: Handle::default(),
+            })
+            .add_systems(Update, sync);
+        app.world_mut()
+            .spawn((Camera3d::default(), camera, GlobalTransform::default()));
+        app.world_mut().spawn(Window {
+            resolution: (1440, 900).into(),
+            ..default()
+        });
+        app
+    }
+    fn terrain_handles(app: &App) -> Vec<(Entity, bevy::asset::AssetId<Mesh>)> {
+        app.world()
+            .resource::<SceneCache>()
+            .terrain
+            .values()
+            .map(|e| (e.entity, e.mesh.id()))
+            .collect()
+    }
+    #[test]
+    fn idle_and_item_updates_retain_terrain_and_pawns() {
+        let mut app = app();
+        app.update();
+        let before = terrain_handles(&app);
+        let pawns = app.world().resource::<SceneCache>().pawns.clone();
+        assert!(!before.is_empty());
+        assert_eq!(pawns.len(), 5);
+        for _ in 0..10 {
+            app.update();
+        }
+        {
+            let mut game = app.world_mut().resource_mut::<AuthoritativeClient>();
+            game.application_mut()
+                .execute(Command::AdvanceTicks { count: 1 })
+                .unwrap();
+            game.refresh_lightweight_snapshot(None).unwrap();
+        }
+        app.update();
+        assert_eq!(before, terrain_handles(&app));
+        assert_eq!(pawns, app.world().resource::<SceneCache>().pawns);
+    }
+    #[test]
+    fn distant_view_evicts_meshes_and_return_recreates_pawns_without_discovery() {
+        let mut app = app();
+        app.update();
+        let before = app
+            .world()
+            .resource::<AuthoritativeClient>()
+            .save_json()
+            .unwrap();
+        app.world_mut().resource_mut::<View>().focus = Vec3::new(10000., 0., 10000.);
+        app.update();
+        let cache = app.world().resource::<SceneCache>();
+        assert!(cache.terrain.is_empty());
+        assert!(cache.pawns.is_empty());
+        assert_eq!(
+            app.world().resource::<Assets<Mesh>>().len(),
+            app.world().resource::<Palette>().models.len()
+        );
+        app.world_mut().resource_mut::<View>().focus = Vec3::ZERO;
+        app.update();
+        assert_eq!(app.world().resource::<SceneCache>().pawns.len(), 5);
+        assert_eq!(
+            before,
+            app.world()
+                .resource::<AuthoritativeClient>()
+                .save_json()
+                .unwrap()
+        );
+    }
+    #[test]
+    fn load_at_same_tick_rebuilds_scene_without_stale_meshes() {
+        let mut app = app();
+        app.update();
+        let old = terrain_handles(&app);
+        let old_pawns = app.world().resource::<SceneCache>().pawns.clone();
+        let replacement = AuthoritativeClient::new_with_seed(WorldSeed::new(73))
+            .unwrap()
+            .save_json()
+            .unwrap();
+        app.world_mut()
+            .resource_mut::<AuthoritativeClient>()
+            .load_json(&replacement)
+            .unwrap();
+        app.world_mut()
+            .resource_mut::<SceneCache>()
+            .invalidate_loaded_world();
+        app.update();
+        assert_ne!(old, terrain_handles(&app));
+        for (entity, mesh) in old {
+            assert!(app.world().get_entity(entity).is_err());
+            assert!(app.world().resource::<Assets<Mesh>>().get(mesh).is_none());
+        }
+        for (_, entity) in old_pawns {
+            assert!(app.world().get_entity(entity).is_err());
+        }
+        assert_eq!(app.world().resource::<SceneCache>().pawns.len(), 5);
+    }
+    #[test]
+    fn move_trace_comes_from_authority_and_survives_origin_rebase() {
+        let mut app = app();
+        app.update();
+        let id = app
+            .world()
+            .resource::<AuthoritativeClient>()
+            .snapshot()
+            .characters[0]
+            .id;
+        {
+            let mut game = app.world_mut().resource_mut::<AuthoritativeClient>();
+            game.application_mut()
+                .execute(Command::MoveTo {
+                    character_id: id,
+                    destination: WorldPosition::from_cell_center(WorldCell::new(2, 0)).unwrap(),
+                })
+                .unwrap();
+            game.application_mut()
+                .execute(Command::AdvanceTicks { count: 1 })
+                .unwrap();
+            game.refresh_lightweight_snapshot(Some(id)).unwrap();
+        }
+        app.update();
+        let endpoint = app
+            .world()
+            .resource::<AuthoritativeClient>()
+            .snapshot()
+            .characters
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap()
+            .position;
+        let trace = &app.world().resource::<VisualMotion>().characters[&id].trace;
+        assert_eq!(interpolate_trace(trace, 1.), endpoint);
+        let save = app
+            .world()
+            .resource::<AuthoritativeClient>()
+            .save_json()
+            .unwrap();
+        app.world_mut()
+            .resource_mut::<View>()
+            .rebase(WorldCell::new(32, 0));
+        app.update();
+        assert_eq!(
+            save,
+            app.world()
+                .resource::<AuthoritativeClient>()
+                .save_json()
+                .unwrap()
+        );
+    }
 }

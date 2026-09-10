@@ -121,11 +121,16 @@ pub(crate) fn audible_cues(
     active: usize,
 ) -> Vec<(Cue, f32)> {
     let budget = 8_usize.saturating_sub(active).min(4);
-    cues.into_iter().filter_map(|cue| {
-        let [x,y] = project(cue.cell)?;
-        if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) { return None; }
-        Some((cue, ((x - 0.5) * 1.6).clamp(-0.8,0.8)))
-    }).take(budget).collect()
+    cues.into_iter()
+        .filter_map(|cue| {
+            let [x, y] = project(cue.cell)?;
+            if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
+                return None;
+            }
+            Some((cue, ((x - 0.5) * 1.6).clamp(-0.8, 0.8)))
+        })
+        .take(budget)
+        .collect()
 }
 
 #[cfg(test)]
@@ -231,14 +236,8 @@ mod tests {
                 .collect()
         };
         let project = |cell: WorldCell| Some([cell.x() as f32 / 100., 0.5]);
-        assert_eq!(
-            audible_cues(cues(), project, 0).len(),
-            4
-        );
-        assert_eq!(
-            audible_cues(cues(), project, 7).len(),
-            1
-        );
+        assert_eq!(audible_cues(cues(), project, 0).len(), 4);
+        assert_eq!(audible_cues(cues(), project, 7).len(), 1);
         assert!(audible_cues(cues(), project, 8).is_empty());
     }
 
