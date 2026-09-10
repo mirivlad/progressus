@@ -2110,6 +2110,42 @@ fn validate_restored_job_state(simulation: &Simulation, job: &Job) -> Result<(),
 
 #[cfg(test)]
 mod tests {
+
+    /// The copper layer is the first real one, so it is also the end-to-end
+    /// check that a layered resource behaves like any other: it generates, it
+    /// is harvestable through the ordinary job, and it yields its own item.
+    #[test]
+    fn a_layered_resource_generates_and_harvests_like_any_other() {
+        let simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let vein = (-160..160)
+            .flat_map(|y| (-160..160).map(move |x| WorldCell::new(x, y)))
+            .find(|cell| {
+                simulation
+                    .natural_resource_at(*cell)
+                    .unwrap()
+                    .is_some_and(|resource| resource.kind() == natural_resource::COPPER_VEIN)
+            })
+            .expect("the copper layer places veins within reach of the start");
+
+        let resource = simulation.natural_resource_at(vein).unwrap().unwrap();
+        assert_eq!(
+            resource.kind().definition().yields,
+            item::COPPER_ORE,
+            "harvesting a vein must produce ore through the definition, not a special case"
+        );
+        assert!(!resource.kind().is_renewable());
+        assert!((3..=6).contains(&resource.yield_quantity()));
+
+        // A layered resource round-trips like a base one: the save stores no
+        // resources at all, so it must regenerate from seed, base and layers.
+        let bytes = simulation.save_json().unwrap();
+        let reloaded = Simulation::load_json(&bytes).unwrap();
+        assert_eq!(
+            reloaded.natural_resource_at(vein).unwrap(),
+            Some(resource),
+            "a layered resource must survive a save round trip by regenerating"
+        );
+    }
     use crate::ResourceLayers;
 
     /// A save records the layers it was written with so that a world from a
@@ -2130,11 +2166,15 @@ mod tests {
             .collect();
         assert_eq!(recorded, expected);
 
-        let forged = json.replace(
-            "\"worldgen_layers\": []",
-            "\"worldgen_layers\": [\"copper_veins_from_a_newer_build\"]",
-        );
-        assert_ne!(forged, json, "the fixture must actually alter the header");
+        // Forge a save from a build with one more layer than this one has.
+        let mut document: serde_json::Value = serde_json::from_str(&json).unwrap();
+        document["worldgen_layers"]
+            .as_array_mut()
+            .expect("worldgen_layers is a list")
+            .push(serde_json::Value::String(
+                "copper_veins_from_a_newer_build".to_owned(),
+            ));
+        let forged = serde_json::to_string(&document).unwrap();
         let error = Simulation::load_json(forged.as_bytes()).unwrap_err();
         assert!(
             matches!(

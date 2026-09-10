@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use progressus_worldgen::{
-    CURRENT_WORLDGEN_VERSION, ChunkCoord, GeneratedChunk, WorldCell, WorldGenerator, WorldSeed,
-    WorldgenError, WorldgenVersion, natural_resource, terrain,
+    CURRENT_WORLDGEN_VERSION, ChunkCoord, GeneratedChunk, ResourceLayers, WorldCell,
+    WorldGenerator, WorldSeed, WorldgenError, WorldgenVersion, natural_resource, terrain,
 };
 
 fn terrain_digest(chunk: &GeneratedChunk) -> u64 {
@@ -148,8 +148,12 @@ fn worldgen_v1_golden_fixtures_do_not_drift() {
     let actual = [42, 73]
         .into_iter()
         .flat_map(|seed| {
-            let generator =
-                WorldGenerator::new(WorldSeed::new(seed), WorldgenVersion::new(1)).unwrap();
+            let generator = WorldGenerator::with_layers(
+                WorldSeed::new(seed),
+                WorldgenVersion::new(1),
+                ResourceLayers::none(),
+            )
+            .unwrap();
             coordinates
                 .into_iter()
                 .map(move |coordinate| terrain_digest(&generator.generate(coordinate).unwrap()))
@@ -213,8 +217,12 @@ fn worldgen_v1_natural_resource_golden_fixtures_do_not_drift() {
     let actual = [42, 73]
         .into_iter()
         .flat_map(|seed| {
-            let generator =
-                WorldGenerator::new(WorldSeed::new(seed), WorldgenVersion::new(1)).unwrap();
+            let generator = WorldGenerator::with_layers(
+                WorldSeed::new(seed),
+                WorldgenVersion::new(1),
+                ResourceLayers::none(),
+            )
+            .unwrap();
             coordinates
                 .into_iter()
                 .map(move |coordinate| resource_digest(&generator.generate(coordinate).unwrap()))

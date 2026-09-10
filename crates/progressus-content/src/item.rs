@@ -66,6 +66,11 @@ pub static ITEMS: &[ItemDefinition] = &[
         category: ItemCategory::Food,
         nutrition: 50,
     },
+    ItemDefinition {
+        name: "copper_ore",
+        category: ItemCategory::Resources,
+        nutrition: 0,
+    },
 ];
 
 content_handle!(ItemId, ItemDefinition, ITEMS, item);
@@ -81,6 +86,7 @@ pub const WOOD: ItemId = item("wood");
 pub const STONE: ItemId = item("stone");
 pub const PRIMITIVE_TOOL: ItemId = item("primitive_tool");
 pub const BERRIES: ItemId = item("berries");
+pub const COPPER_ORE: ItemId = item("copper_ore");
 
 #[cfg(test)]
 mod tests {
@@ -93,6 +99,7 @@ mod tests {
             (STONE, "stone"),
             (PRIMITIVE_TOOL, "primitive_tool"),
             (BERRIES, "berries"),
+            (COPPER_ORE, "copper_ore"),
         ] {
             assert_eq!(id.name(), name);
             assert_eq!(ItemId::from_name(name), Some(id));

@@ -85,6 +85,7 @@ const CONTENT_NAMES: &[(&str, &str, &str, &str)] = &[
         "Primitive tool",
     ),
     ("item", "berries", "Ягоды", "Berries"),
+    ("item", "copper_ore", "Медная руда", "Copper ore"),
     ("structure", "stone_wall", "Каменная стена", "Stone wall"),
     ("structure", "door", "Дверь", "Door"),
     ("workstation", "workbench", "Верстак", "Workbench"),
@@ -109,6 +110,12 @@ const CONTENT_NAMES: &[(&str, &str, &str, &str)] = &[
         "berry_bush",
         "Ягодный куст",
         "Berry bush",
+    ),
+    (
+        "natural_resource",
+        "copper_vein",
+        "Медная жила",
+        "Copper vein",
     ),
 ];
 
@@ -334,7 +341,8 @@ mod tests {
         let locale = Locale {
             language: Language::Ru,
         };
-        assert_eq!(locale.content_name("item", "copper_ore"), "copper_ore");
+        assert_eq!(locale.content_name("item", "iron_ingot"), "iron_ingot");
+        assert_eq!(ItemId::from_name("iron_ingot"), None);
         assert_eq!(locale.item_name(item::WOOD), "Дерево");
         assert_eq!(
             Locale {

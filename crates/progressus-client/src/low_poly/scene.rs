@@ -51,6 +51,7 @@ fn item_model(kind: ItemId) -> ModelKind {
         "stone" => ModelKind::Stone,
         "primitive_tool" => ModelKind::PrimitiveTool,
         "berries" => ModelKind::Berries,
+        "copper_ore" => ModelKind::CopperOre,
         _ => ModelKind::Placeholder,
     }
 }
@@ -260,6 +261,7 @@ pub(crate) fn sync(
             "tree" => ModelKind::Tree,
             "stone_outcrop" => ModelKind::StoneOutcrop,
             "berry_bush" => ModelKind::BerryBush,
+            "copper_vein" => ModelKind::CopperVein,
             _ => ModelKind::Placeholder,
         };
         let variant = (r.cell.x() as u64)

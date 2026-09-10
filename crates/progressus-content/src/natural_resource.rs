@@ -35,6 +35,11 @@ pub static NATURAL_RESOURCES: &[NaturalResourceDefinition] = &[
         yields: item::BERRIES,
         regrow_ticks: Some(512),
     },
+    NaturalResourceDefinition {
+        name: "copper_vein",
+        yields: item::COPPER_ORE,
+        regrow_ticks: None,
+    },
 ];
 
 content_handle!(
@@ -54,6 +59,7 @@ impl NaturalResourceId {
 pub const TREE: NaturalResourceId = natural_resource("tree");
 pub const STONE_OUTCROP: NaturalResourceId = natural_resource("stone_outcrop");
 pub const BERRY_BUSH: NaturalResourceId = natural_resource("berry_bush");
+pub const COPPER_VEIN: NaturalResourceId = natural_resource("copper_vein");
 
 #[cfg(test)]
 mod tests {
@@ -65,6 +71,7 @@ mod tests {
             (TREE, "tree"),
             (STONE_OUTCROP, "stone_outcrop"),
             (BERRY_BUSH, "berry_bush"),
+            (COPPER_VEIN, "copper_vein"),
         ] {
             assert_eq!(id.name(), name);
             assert_eq!(NaturalResourceId::from_name(name), Some(id));
@@ -80,6 +87,8 @@ mod tests {
         assert!(!STONE_OUTCROP.is_renewable());
         assert_eq!(BERRY_BUSH.definition().regrow_ticks, Some(512));
         assert!(BERRY_BUSH.is_renewable());
+        assert_eq!(COPPER_VEIN.definition().yields, item::COPPER_ORE);
+        assert!(!COPPER_VEIN.is_renewable());
     }
 
     #[test]
@@ -94,6 +103,6 @@ mod tests {
 
     #[test]
     fn unknown_names_resolve_to_nothing_rather_than_a_substitute() {
-        assert_eq!(NaturalResourceId::from_name("copper_vein"), None);
+        assert_eq!(NaturalResourceId::from_name("iron_vein"), None);
     }
 }

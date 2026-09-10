@@ -23,6 +23,8 @@ pub enum ModelKind {
     Stone,
     PrimitiveTool,
     Berries,
+    CopperVein,
+    CopperOre,
     /// Stands in for content this build has no authored model for, so a new
     /// definition is visible in the world instead of invisible. See ADR-0021.
     Placeholder,
@@ -46,6 +48,8 @@ pub fn model_mesh(kind: ModelKind, variant: u8) -> Mesh {
         ModelKind::Stone => loose_stone(&mut geometry, variant),
         ModelKind::PrimitiveTool => primitive_tool(&mut geometry, variant),
         ModelKind::Berries => berries(&mut geometry, variant),
+        ModelKind::CopperVein => copper_vein(&mut geometry, variant),
+        ModelKind::CopperOre => copper_ore(&mut geometry, variant),
         ModelKind::Placeholder => placeholder(&mut geometry, variant),
     }
     geometry.mesh()
@@ -84,6 +88,8 @@ const LEAF: Rgba = [0.13, 0.47, 0.08, 1.0];
 const LEAF_LIGHT: Rgba = [0.30, 0.65, 0.12, 1.0];
 const STONE: Rgba = [0.38, 0.40, 0.38, 1.0];
 const MORTAR: Rgba = [0.56, 0.53, 0.46, 1.0];
+const COPPER: Rgba = [0.72, 0.39, 0.17, 1.0];
+const VERDIGRIS: Rgba = [0.25, 0.60, 0.50, 1.0];
 const BLUEPRINT: Rgba = [0.10, 0.66, 0.88, 0.72];
 
 #[derive(Default)]
@@ -552,6 +558,46 @@ fn wood(g: &mut Geometry, variant: u8) {
         );
         g.beam(from, to, 0.05, BARK_LIGHT);
     }
+}
+
+/// Rock with copper showing through, so a vein reads as stone at a distance
+/// and as ore up close.
+fn copper_vein(g: &mut Geometry, variant: u8) {
+    let offset = variant as f32 * 0.02;
+    g.gem(
+        Vec3::new(-0.08, 0.24, 0.04),
+        Vec3::new(0.38, 0.24 + offset, 0.32),
+        7,
+        shade(STONE, 0.92),
+    );
+    g.gem(
+        Vec3::new(0.16, 0.30, -0.06),
+        Vec3::new(0.17, 0.14, 0.15),
+        5,
+        COPPER,
+    );
+    g.gem(
+        Vec3::new(-0.18, 0.20, -0.14),
+        Vec3::new(0.11, 0.09, 0.10),
+        5,
+        VERDIGRIS,
+    );
+}
+
+fn copper_ore(g: &mut Geometry, variant: u8) {
+    let s = 0.09 + variant as f32 * 0.007;
+    g.gem(
+        Vec3::new(0., s, 0.),
+        Vec3::new(0.15, s, 0.12),
+        6,
+        shade(STONE, 0.9),
+    );
+    g.gem(
+        Vec3::new(0.03, s * 1.5, -0.02),
+        Vec3::new(0.07, s * 0.6, 0.06),
+        5,
+        COPPER,
+    );
 }
 
 fn loose_stone(g: &mut Geometry, variant: u8) {

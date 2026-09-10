@@ -93,7 +93,27 @@ impl GeneratedChunk {
 pub struct ResourceLayerDefinition {
     /// Stable identity used by saves.
     pub name: &'static str,
-    pub place: fn(WorldSeed, WorldCell, TerrainId) -> Option<NaturalResource>,
+    pub place: fn(LayerContext, WorldCell, TerrainId) -> Option<NaturalResource>,
+}
+
+/// What a layer may read while placing. It exposes the seed and terrain only:
+/// a layer must not consult resources, because then its result would depend on
+/// which layers ran before it and adding one could change another's output.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LayerContext {
+    seed: WorldSeed,
+    version: WorldgenVersion,
+}
+
+impl LayerContext {
+    pub const fn seed(self) -> WorldSeed {
+        self.seed
+    }
+
+    /// Base terrain, which layers never modify and may therefore rely on.
+    pub fn terrain_at(self, cell: WorldCell) -> TerrainId {
+        base_terrain_at(self.seed, self.version, cell)
+    }
 }
 
 impl fmt::Debug for ResourceLayerDefinition {
@@ -116,10 +136,13 @@ impl Eq for ResourceLayerDefinition {}
 /// Append-only, and never reordered: a layer's position decides which of two
 /// layers claims a contested cell, so moving one rewrites existing worlds.
 ///
-/// Empty until the first resource that did not exist at the base generation.
 /// The base versions below are not layers: each is one world's whole original
 /// generation, chosen once and pinned for that world's life.
 pub static RESOURCE_LAYERS: &[ResourceLayerDefinition] = &[
+    ResourceLayerDefinition {
+        name: "copper_veins",
+        place: copper_veins,
+    },
     #[cfg(test)]
     ResourceLayerDefinition {
         name: "test_dense_grass",
@@ -200,32 +223,32 @@ impl ResourceLayers {
 #[cfg(test)]
 mod test_layers {
     use super::{
-        NaturalResource, TerrainId, WorldCell, WorldSeed, cell_hash, natural_resource, terrain,
+        LayerContext, NaturalResource, TerrainId, WorldCell, cell_hash, natural_resource, terrain,
     };
 
     /// Claims most free grass, so it contests cells the sparse layer also wants.
     pub(super) fn dense_grass(
-        seed: WorldSeed,
+        context: LayerContext,
         cell: WorldCell,
         cell_terrain: TerrainId,
     ) -> Option<NaturalResource> {
         if cell_terrain != terrain::GRASS {
             return None;
         }
-        let sample = cell_hash(seed, 0x7465_7374_6465_6e73, cell);
+        let sample = cell_hash(context.seed(), 0x7465_7374_6465_6e73, cell);
         (sample % 100 < 60).then(|| NaturalResource::new(natural_resource::TREE, 1))
     }
 
     /// Claims a subset of the same cells, to show the earlier layer wins.
     pub(super) fn sparse_grass(
-        seed: WorldSeed,
+        context: LayerContext,
         cell: WorldCell,
         cell_terrain: TerrainId,
     ) -> Option<NaturalResource> {
         if cell_terrain != terrain::GRASS {
             return None;
         }
-        let sample = cell_hash(seed, 0x7465_7374_7370_7273, cell);
+        let sample = cell_hash(context.seed(), 0x7465_7374_7370_7273, cell);
         (sample % 100 < 80).then(|| NaturalResource::new(natural_resource::STONE_OUTCROP, 2))
     }
 }
@@ -276,10 +299,13 @@ impl WorldGenerator {
     }
 
     pub fn terrain_at(self, cell: WorldCell) -> TerrainId {
-        match self.version.value() {
-            1 => terrain_v1(self.seed, self.version, cell),
-            2 | 3 => terrain_v2(self.seed, cell),
-            _ => unreachable!("supported worldgen versions are checked at construction"),
+        base_terrain_at(self.seed, self.version, cell)
+    }
+
+    const fn layer_context(self) -> LayerContext {
+        LayerContext {
+            seed: self.seed,
+            version: self.version,
         }
     }
 
@@ -290,9 +316,10 @@ impl WorldGenerator {
         }
         // Layers only fill what the base left empty, in registry order, so an
         // added layer cannot displace anything an existing world already has.
+        let context = self.layer_context();
         self.layers
             .iter()
-            .find_map(|layer| (layer.definition().place)(self.seed, cell, terrain))
+            .find_map(|layer| (layer.definition().place)(context, cell, terrain))
     }
 
     fn base_resource_at(self, cell: WorldCell, terrain: TerrainId) -> Option<NaturalResource> {
@@ -363,6 +390,45 @@ fn local_index(local: LocalCell) -> Option<usize> {
         return None;
     }
     Some(usize::from(local.y()) * usize::from(CHUNK_SIDE) + usize::from(local.x()))
+}
+
+/// Copper surfaces where stone does, so veins favour the edges of rocky
+/// ground, and it is rare enough that a settlement must go looking. Kept clear
+/// of the starting clearing: this layer reaches worlds that were founded before
+/// it existed, and a vein should not appear inside a standing settlement.
+fn copper_veins(
+    context: LayerContext,
+    cell: WorldCell,
+    cell_terrain: TerrainId,
+) -> Option<NaturalResource> {
+    if cell_terrain != terrain::GRASS || spawn_clearing(cell, 8) {
+        return None;
+    }
+    let sample = cell_hash(context.seed(), 0x636f_7070_6572_7631, cell);
+    let beside_rock = [
+        WorldCell::new(cell.x().saturating_add(1), cell.y()),
+        WorldCell::new(cell.x().saturating_sub(1), cell.y()),
+        WorldCell::new(cell.x(), cell.y().saturating_add(1)),
+        WorldCell::new(cell.x(), cell.y().saturating_sub(1)),
+    ]
+    .into_iter()
+    .any(|neighbor| context.terrain_at(neighbor) == terrain::ROCK);
+    let chance = if beside_rock { 90 } else { 4 };
+    if sample % 1000 >= chance {
+        return None;
+    }
+    Some(NaturalResource::new(
+        natural_resource::COPPER_VEIN,
+        3 + ((sample >> 32) % 4) as u32,
+    ))
+}
+
+fn base_terrain_at(seed: WorldSeed, version: WorldgenVersion, cell: WorldCell) -> TerrainId {
+    match version.value() {
+        1 => terrain_v1(seed, version, cell),
+        2 | 3 => terrain_v2(seed, cell),
+        _ => unreachable!("supported worldgen versions are checked at construction"),
+    }
 }
 
 fn terrain_v1(seed: WorldSeed, version: WorldgenVersion, cell: WorldCell) -> TerrainId {
@@ -656,42 +722,73 @@ mod layer_tests {
 
     /// The point of the whole mechanism: an update may add resources to a world
     /// that already exists, but may never change what that world already had.
+    /// Every registered layer must satisfy this, on every base version.
     #[test]
-    fn adding_a_layer_only_fills_cells_the_base_left_empty() {
-        let seed = WorldSeed::new(11);
-        let version = CURRENT_WORLDGEN_VERSION;
-        let before = WorldGenerator::with_layers(seed, version, ResourceLayers::none()).unwrap();
-        let after = WorldGenerator::with_layers(
-            seed,
-            version,
-            ResourceLayers::none().with(layer("test_dense_grass")),
-        )
-        .unwrap();
-
-        let mut added = 0_usize;
-        for cell in sample_cells() {
-            assert_eq!(
-                before.terrain_at(cell),
-                after.terrain_at(cell),
-                "layers must never touch terrain at {cell:?}"
-            );
-            match before.natural_resource_at(cell) {
-                Some(existing) => assert_eq!(
-                    after.natural_resource_at(cell),
-                    Some(existing),
-                    "layer displaced an existing resource at {cell:?}"
-                ),
-                None => {
-                    if after.natural_resource_at(cell).is_some() {
-                        added += 1;
+    fn every_layer_only_fills_cells_the_base_left_empty() {
+        for base_version in 1..=3 {
+            let version = WorldgenVersion::new(base_version);
+            for seed in [WorldSeed::new(0), WorldSeed::new(11), WorldSeed::new(73)] {
+                let before =
+                    WorldGenerator::with_layers(seed, version, ResourceLayers::none()).unwrap();
+                for id in ResourceLayerId::all() {
+                    let after =
+                        WorldGenerator::with_layers(seed, version, ResourceLayers::none().with(id))
+                            .unwrap();
+                    let mut added = 0_usize;
+                    for cell in sample_cells() {
+                        assert_eq!(
+                            before.terrain_at(cell),
+                            after.terrain_at(cell),
+                            "layer {} touched terrain at {cell:?}",
+                            id.name()
+                        );
+                        match before.natural_resource_at(cell) {
+                            Some(existing) => assert_eq!(
+                                after.natural_resource_at(cell),
+                                Some(existing),
+                                "layer {} displaced an existing resource at {cell:?}",
+                                id.name()
+                            ),
+                            None => {
+                                if after.natural_resource_at(cell).is_some() {
+                                    added += 1;
+                                }
+                            }
+                        }
                     }
+                    assert!(
+                        added > 0,
+                        "layer {} placed nothing across the sample, so this proves nothing",
+                        id.name()
+                    );
                 }
             }
         }
-        assert!(
-            added > 0,
-            "the layer never placed anything to prove the case"
-        );
+    }
+
+    /// A layer must be a pure function of seed, base version and cell, or the
+    /// same world would generate differently depending on visitation order.
+    #[test]
+    fn layer_placement_is_reproducible_and_order_independent() {
+        let seed = WorldSeed::new(29);
+        let version = CURRENT_WORLDGEN_VERSION;
+        let generator = WorldGenerator::new(seed, version).unwrap();
+        let forward: Vec<_> = sample_cells()
+            .map(|cell| (cell, generator.natural_resource_at(cell)))
+            .collect();
+        let mut backward: Vec<_> = sample_cells()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|cell| (cell, generator.natural_resource_at(cell)))
+            .collect();
+        backward.reverse();
+        assert_eq!(forward, backward);
+
+        let again = WorldGenerator::new(seed, version).unwrap();
+        for (cell, expected) in forward {
+            assert_eq!(again.natural_resource_at(cell), expected, "at {cell:?}");
+        }
     }
 
     #[test]
@@ -702,7 +799,14 @@ mod layer_tests {
         let base = WorldGenerator::with_layers(seed, version, ResourceLayers::none()).unwrap();
         let dense_only =
             WorldGenerator::with_layers(seed, version, ResourceLayers::none().with(dense)).unwrap();
-        let both = WorldGenerator::with_layers(seed, version, ResourceLayers::all()).unwrap();
+        // Only the two test layers, so precedence between them is what is under
+        // test rather than precedence against whatever else is registered.
+        let both = WorldGenerator::with_layers(
+            seed,
+            version,
+            ResourceLayers::none().with(dense).with(sparse),
+        )
+        .unwrap();
 
         let mut contested = 0_usize;
         let mut filled_by_later = 0_usize;
@@ -731,6 +835,7 @@ mod layer_tests {
             "the fixture proved nothing"
         );
         assert!(ResourceLayers::all().contains(sparse));
+        assert!(ResourceLayers::all().contains(dense));
     }
 
     #[test]
