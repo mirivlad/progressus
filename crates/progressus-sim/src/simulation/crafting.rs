@@ -224,14 +224,56 @@ impl Simulation {
             else {
                 return false;
             };
-            job_workstation == workstation_id
-                && job.state() == JobState::Available
-                && recipe_id
-                    .definition()
-                    .inputs
-                    .iter()
-                    .any(|requirement| requirement.item == item.kind())
+            if job_workstation != workstation_id || job.state() != JobState::Available {
+                return false;
+            }
+            recipe_id
+                .definition()
+                .inputs
+                .iter()
+                .filter(|requirement| requirement.item == item.kind())
+                .any(|requirement| self.stack_is_needed_input(workstation_id, item_id, requirement))
         })
+    }
+
+    /// Whether this stack is still needed to satisfy a requirement, rather than
+    /// surplus sitting on top of it.
+    ///
+    /// Protecting every stack of an ingredient kind lets one ingredient occupy
+    /// every input port and starve another forever: the craft can never run, so
+    /// the surplus is never consumed, so the port never frees. Stacks are
+    /// therefore protected in canonical identity order only until the
+    /// requirement is covered, and the rest may be hauled back to storage.
+    fn stack_is_needed_input(
+        &self,
+        workstation_id: EntityId,
+        item_id: EntityId,
+        requirement: &crate::RecipeInput,
+    ) -> bool {
+        let mut covered = 0_u32;
+        for stack in self.item_world.iter() {
+            if stack.kind() != requirement.item {
+                continue;
+            }
+            let Some(position) = stack.ground_position() else {
+                continue;
+            };
+            if self
+                .production_logistics_world
+                .zone_at(position.containing_cell())
+                != Some((workstation_id, ProductionZoneKind::Input))
+            {
+                continue;
+            }
+            if covered >= requirement.quantity {
+                return false;
+            }
+            if stack.id() == item_id {
+                return true;
+            }
+            covered = covered.saturating_add(stack.quantity().get());
+        }
+        false
     }
 
     pub(super) fn maintain_craft_jobs(&mut self) -> Result<(), SimulationError> {
@@ -594,6 +636,71 @@ mod tests {
     use super::*;
     use crate::simulation::test_support::*;
     use progressus_content::{item, recipe, terrain, workstation};
+
+    /// A production input port must not be held hostage by an ingredient that
+    /// is already satisfied.
+    ///
+    /// The workbench has exactly two input ports and its recipe needs two
+    /// ingredients. When surplus stone occupied both, wood could never be
+    /// delivered, so the craft could never run, so the stone was never
+    /// consumed and the port never freed — a permanent deadlock that stopped
+    /// the settlement's only production chain. Found by the carrying limit of
+    /// ADR-0024 walking seed 0 into it; the defect itself was independent.
+    #[test]
+    fn surplus_input_does_not_hold_a_port_against_a_missing_ingredient() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let workstation_id = simulation
+            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 0))
+            .unwrap();
+        let ports = production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Input);
+        assert_eq!(ports.len(), 2, "the fixture depends on exactly two ports");
+
+        clear_all_items(&mut simulation);
+        // Both ports full of stone, far beyond the one the recipe asks for.
+        let covering = insert_ground_stack(&mut simulation, item::STONE, 2, ports[0]);
+        let surplus = insert_ground_stack(&mut simulation, item::STONE, 1, ports[1]);
+        // Wood exists, but only in storage, so it must be delivered to a port.
+        let stockpile_cell = WorldCell::new(-4, 0);
+        let stockpile_id = simulation.create_stockpile(stockpile_cell).unwrap();
+        // Room for the surplus to go back to, or the port could never free.
+        for x in [-5, -3] {
+            simulation
+                .set_stockpile_cell(stockpile_id, WorldCell::new(x, 0), true)
+                .unwrap();
+        }
+        insert_ground_stack(&mut simulation, item::WOOD, 8, stockpile_cell);
+
+        simulation
+            .designate_craft(workstation_id, recipe::PRIMITIVE_TOOL)
+            .unwrap();
+
+        // Only the stone the recipe still needs is protected from haulage; the
+        // rest is surplus that may leave, which is what frees a port.
+        assert!(
+            simulation.item_is_local_input_for_waiting_craft(covering),
+            "the stone the recipe still needs must stay put"
+        );
+        assert!(
+            !simulation.item_is_local_input_for_waiting_craft(surplus),
+            "surplus stone stayed protected and would hold its port forever"
+        );
+
+        let mut produced = false;
+        for _ in 0..16_384 {
+            simulation.advance_ticks(1).unwrap();
+            if simulation
+                .items()
+                .any(|item| item.kind() == item::PRIMITIVE_TOOL)
+            {
+                produced = true;
+                break;
+            }
+        }
+        assert!(
+            produced,
+            "the craft never ran: wood could not reach an input port"
+        );
+    }
 
     #[test]
     fn craft_consumes_exact_quantities_from_input_zone_and_outputs_to_output_zone() {
