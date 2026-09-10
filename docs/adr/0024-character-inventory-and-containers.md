@@ -1,6 +1,6 @@
 # ADR-0024 — Character inventory, equipment slots, and containers
 
-Status: **Proposed**
+Status: **Accepted**
 
 Date: 2026-09-11
 

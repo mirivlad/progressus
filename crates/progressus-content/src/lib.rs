@@ -28,7 +28,7 @@ pub mod structure;
 pub mod terrain;
 pub mod workstation;
 
-pub use item::{ItemCategory, ItemDefinition, ItemId, MAX_STACK_QUANTITY};
+pub use item::{HAND_LOAD_UNITS, ItemCategory, ItemDefinition, ItemId, MAX_STACK_QUANTITY};
 pub use natural_resource::{NaturalResourceDefinition, NaturalResourceId};
 pub use recipe::{RecipeDefinition, RecipeId, RecipeInput};
 pub use structure::{StructureDefinition, StructureId};

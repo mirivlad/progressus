@@ -351,7 +351,7 @@ impl Simulation {
                         }
                         Err(error) => return Err(error),
                     };
-                    self.pick_up_item(worker_id, item_id)?;
+                    self.pick_up_within_capacity(worker_id, item_id)?;
                     self.job_world
                         .start_transporting(job_id)
                         .map_err(SimulationError::from_job_world)?;
@@ -409,7 +409,7 @@ impl Simulation {
                         }
                         Err(error) => return Err(error),
                     };
-                    self.pick_up_item(worker_id, item_id)?;
+                    self.pick_up_within_capacity(worker_id, item_id)?;
                     self.job_world
                         .start_transporting(job_id)
                         .map_err(SimulationError::from_job_world)?;
@@ -534,7 +534,7 @@ impl Simulation {
                         }
                         Err(error) => return Err(error),
                     };
-                    self.pick_up_item(worker_id, item_id)?;
+                    self.pick_up_within_capacity(worker_id, item_id)?;
                     self.job_world
                         .start_transporting(job_id)
                         .map_err(SimulationError::from_job_world)?;

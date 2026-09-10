@@ -52,11 +52,11 @@ use crate::world_state::ModifiedWorld;
 use crate::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, ConstructionMaterialState,
     ConstructionSite, Direction, EAT_WORK_TICKS, EffectiveChunk, EntityId, GeneratedChunk,
-    HARVEST_WORK_TICKS, InteractionRadius, ItemId, ItemLocation, ItemQuantity, ItemStack, Job,
-    JobKind, JobState, LocalCell, MAX_STACK_QUANTITY, MovementState, NaturalResource,
-    ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind, RecipeId,
-    SATIETY_DECAY_INTERVAL_TICKS, SimulationTick, Stockpile, Structure, StructureId, TerrainId,
-    Workstation, WorkstationId, WorldCell, WorldPosition, WorldPositionError, WorldSeed,
+    HAND_LOAD_UNITS, HARVEST_WORK_TICKS, InteractionRadius, ItemId, ItemLocation, ItemQuantity,
+    ItemStack, Job, JobKind, JobState, LocalCell, MAX_STACK_QUANTITY, MovementState,
+    NaturalResource, ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind,
+    RecipeId, SATIETY_DECAY_INTERVAL_TICKS, SimulationTick, Stockpile, Structure, StructureId,
+    TerrainId, Workstation, WorkstationId, WorldCell, WorldPosition, WorldPositionError, WorldSeed,
     WorldgenVersion, within_interaction_range,
 };
 
@@ -379,6 +379,57 @@ impl Simulation {
         Ok(resources)
     }
 
+    /// What this character already holds, as a share of one pair of hands.
+    pub fn carried_load(&self, character_id: EntityId) -> u64 {
+        self.item_world
+            .iter()
+            .filter(|item| item.carrier() == Some(character_id))
+            .map(|item| item.kind().load_cost(item.quantity().get()))
+            .sum()
+    }
+
+    /// How much of a stack this character could still take. Zero means their
+    /// hands are full. See ADR-0024.
+    pub fn pickup_capacity(&self, character_id: EntityId, kind: ItemId) -> u32 {
+        let free = HAND_LOAD_UNITS.saturating_sub(self.carried_load(character_id));
+        let per_unit = kind.load_cost(1);
+        if per_unit == 0 {
+            return MAX_STACK_QUANTITY;
+        }
+        u32::try_from((free / per_unit).min(u64::from(MAX_STACK_QUANTITY)))
+            .expect("the quotient is clamped to a stack")
+    }
+
+    /// Takes as much of a reserved stack as one pair of hands allows and leaves
+    /// the remainder where it lay. The reserved stack keeps its identity, so the
+    /// job that reserved it stays valid, and the leftover becomes ordinary
+    /// ground goods that a later trip collects. See ADR-0024.
+    pub(super) fn pick_up_within_capacity(
+        &mut self,
+        worker_id: EntityId,
+        item_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        let item = self
+            .item_world
+            .get(item_id)
+            .ok_or(SimulationError::UnknownItem(item_id))?;
+        let (kind, quantity) = (item.kind(), item.quantity().get());
+        let fits = self.pickup_capacity(worker_id, kind);
+        if fits == 0 {
+            return Err(SimulationError::CarryCapacityExceeded {
+                character_id: worker_id,
+                item_id,
+            });
+        }
+        if fits < quantity {
+            let leftover_id = self.id_allocator.allocate()?;
+            self.item_world
+                .split_ground_stack(item_id, leftover_id, quantity - fits)
+                .map_err(|_| SimulationError::JobInvariantViolation)?;
+        }
+        self.pick_up_item(worker_id, item_id)
+    }
+
     pub fn pick_up_item(
         &mut self,
         character_id: EntityId,
@@ -405,6 +456,13 @@ impl Simulation {
             InteractionRadius::zero(),
         ) {
             return Err(SimulationError::ItemOutOfReach {
+                character_id,
+                item_id,
+            });
+        }
+        let (kind, quantity) = (item.kind(), item.quantity().get());
+        if self.carried_load(character_id) + kind.load_cost(quantity) > HAND_LOAD_UNITS {
+            return Err(SimulationError::CarryCapacityExceeded {
                 character_id,
                 item_id,
             });

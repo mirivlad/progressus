@@ -76,6 +76,10 @@ pub enum SimulationError {
     ResourceRevisionOverflow,
     JobInvariantViolation,
     ItemNotOnGround(EntityId),
+    CarryCapacityExceeded {
+        character_id: EntityId,
+        item_id: EntityId,
+    },
     ItemNotCarriedByCharacter {
         character_id: EntityId,
         item_id: EntityId,
@@ -459,6 +463,15 @@ impl Display for SimulationError {
             Self::JobInvariantViolation => {
                 formatter.write_str("job reservation invariant violated")
             }
+            Self::CarryCapacityExceeded {
+                character_id,
+                item_id,
+            } => write!(
+                formatter,
+                "character {} cannot carry item {} on top of what is already in their hands",
+                character_id.value(),
+                item_id.value()
+            ),
             Self::ItemNotOnGround(id) => {
                 write!(formatter, "item ID {} is not on the ground", id.value())
             }

@@ -2,8 +2,19 @@
 
 use crate::registry::content_handle;
 
-/// The largest quantity one physical stack may hold.
+/// The largest quantity one physical stack may hold. This is storage
+/// granularity on the ground, unrelated to what a person can lift.
 pub const MAX_STACK_QUANTITY: u32 = 1024;
+
+/// One pair of hands, in fixed-point load units.
+///
+/// A mixed load shares one pair of hands rather than filling independent
+/// buckets, so carrying is checked as `sum(quantity / hand_load) <= 1`. That
+/// fraction is evaluated in integers, because authoritative simulation may not
+/// depend on floating point. The constant is the least common multiple of
+/// `1..=16`, so every small hand load divides it exactly and the sum is exact;
+/// a registry test holds that property. See ADR-0024.
+pub const HAND_LOAD_UNITS: u64 = 720_720;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ItemCategory {
@@ -42,6 +53,9 @@ pub struct ItemDefinition {
     pub category: ItemCategory,
     /// Satiety one unit restores when eaten. Zero means this is not food.
     pub nutrition: u8,
+    /// How many of this one pair of hands holds. Authored in the item's own
+    /// units, which is what a designer can reason about.
+    pub hand_load: u32,
 }
 
 /// Append-only: registry order is part of deterministic simulation outcomes.
@@ -50,26 +64,31 @@ pub static ITEMS: &[ItemDefinition] = &[
         name: "wood",
         category: ItemCategory::Resources,
         nutrition: 0,
+        hand_load: 10,
     },
     ItemDefinition {
         name: "stone",
         category: ItemCategory::Resources,
         nutrition: 0,
+        hand_load: 5,
     },
     ItemDefinition {
         name: "primitive_tool",
         category: ItemCategory::Products,
         nutrition: 0,
+        hand_load: 3,
     },
     ItemDefinition {
         name: "berries",
         category: ItemCategory::Food,
         nutrition: 50,
+        hand_load: 20,
     },
     ItemDefinition {
         name: "copper_ore",
         category: ItemCategory::Resources,
         nutrition: 0,
+        hand_load: 4,
     },
 ];
 
@@ -79,6 +98,13 @@ impl ItemId {
     /// Food is a property, not an identity: anything nourishing can be eaten.
     pub const fn is_food(self) -> bool {
         self.definition().nutrition > 0
+    }
+
+    /// What carrying this quantity costs, as a share of one pair of hands.
+    /// Rounds up, so a rounding error can only ever refuse a load, never
+    /// admit one that does not fit.
+    pub const fn load_cost(self, quantity: u32) -> u64 {
+        (quantity as u64 * HAND_LOAD_UNITS).div_ceil(self.definition().hand_load as u64)
     }
 }
 
@@ -91,6 +117,43 @@ pub const COPPER_ORE: ItemId = item("copper_ore");
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The fraction rule is evaluated in integers. If every hand load divides
+    /// the unit constant, the sum is exact and no load is ever refused by
+    /// rounding alone.
+    #[test]
+    fn every_hand_load_divides_the_unit_constant_exactly() {
+        for id in ItemId::all() {
+            let load = id.definition().hand_load;
+            assert!(load > 0, "{} cannot be picked up at all", id.name());
+            assert!(
+                HAND_LOAD_UNITS.is_multiple_of(u64::from(load)),
+                "{} has hand load {load}, which does not divide {HAND_LOAD_UNITS} \
+                 and would make the carrying check round",
+                id.name()
+            );
+            assert_eq!(id.load_cost(load), HAND_LOAD_UNITS, "{}", id.name());
+            assert_eq!(id.load_cost(0), 0, "{}", id.name());
+        }
+    }
+
+    #[test]
+    fn load_cost_is_proportional_and_never_understates() {
+        assert_eq!(WOOD.definition().hand_load, 10);
+        assert_eq!(STONE.definition().hand_load, 5);
+        // Half a pair of hands each, so five wood and two stone fit together
+        // while six and three do not.
+        assert_eq!(
+            WOOD.load_cost(5) + STONE.load_cost(2),
+            720_720 / 2 + 720_720 * 2 / 5
+        );
+        assert!(WOOD.load_cost(5) + STONE.load_cost(2) <= HAND_LOAD_UNITS);
+        assert!(WOOD.load_cost(6) + STONE.load_cost(3) > HAND_LOAD_UNITS);
+        // One more than a full load never fits.
+        for id in ItemId::all() {
+            assert!(id.load_cost(id.definition().hand_load + 1) > HAND_LOAD_UNITS);
+        }
+    }
 
     #[test]
     fn named_constants_address_their_own_definitions() {
