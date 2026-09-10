@@ -559,6 +559,7 @@ progressus-client --> Bevy
 - `progressus-worldgen` owns deterministic versioned terrain generation and coordinate types.
 - `progressus-sim` owns authoritative time, stable identities, characters/navigation/needs, jobs/reservations, physical items and stockpiles, workstations/production logistics, construction, sparse world modifications, persistence DTOs, and the derived raw-chunk residency cache.
 - `progressus-app` is the command/query boundary and returns detached read models.
+- Inside `progressus-sim`, the `Simulation` type and its tick loop live in `simulation.rs`, while each responsibility adds its own `impl Simulation` block from a child module: `movement`, `needs`, `idle`, `work`, `logistics`, `crafting`, `workstations`, `building`, `error` and `persistence`. This is a source-layout split for reviewability; the authoritative state, its ownership and the public simulation surface are unchanged by it.
 - `progressus-headless` proves that the application can run and be inspected without a renderer.
 - `progressus-client` is a native Bevy presentation consumer. It launches seed `0` by default or a requested `--seed`, owns pause timing/save-slot files/localization/selection/inspectors, the icon-first HUD and its Orders/Zones/Build palettes, zone-layer visibility, tooltips, and stockpile/workstation modal presentation, and renders only detached application read models. Its only direct dependencies are Bevy and `progressus-app`; it must not directly depend on `progressus-sim` or `progressus-worldgen`.
 
