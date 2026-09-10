@@ -945,6 +945,7 @@ pub fn run_with_options(seed: u64, diagnostics_enabled: bool) -> Result<(), Clie
             }),
             ..default()
         }));
+    app.add_plugins(crate::continuous_music::ContinuousMusicPlugin);
     if diagnostics_enabled {
         app.add_plugins(ProgressusDiagnosticsPlugin);
     }

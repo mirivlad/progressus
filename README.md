@@ -124,6 +124,14 @@ cargo run -p progressus-client
 cargo run -p progressus-client -- --seed 73
 ```
 
+An independent low-poly 3D experiment is available without replacing the default 2D client:
+
+```bash
+cargo run -p progressus-client --features low-poly --bin progressus-low-poly
+```
+
+See [the experiment notes](docs/experiments/low-poly-client.md) for controls, loading existing settlements, architecture and validation. Both clients use the continuous neutral piano/strings ambient generator; music remains presentation-only.
+
 For an on-machine performance trace without changing authoritative behavior:
 
 ```bash

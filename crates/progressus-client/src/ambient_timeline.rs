@@ -411,6 +411,35 @@ pub fn collect_plan(seed: u64, seconds: f32) -> AmbientPlan {
     AmbientPlan { regions, phrases }
 }
 
+/// Collects only events capable of contributing to an absolute render window.
+/// The timeline advances from its seed, but retained plan storage is bounded by
+/// the window duration rather than total session age.
+pub fn collect_plan_window(seed: u64, start: f32, end: f32) -> AmbientPlan {
+    let mut timeline = AmbientTimeline::new(seed);
+    let mut regions = Vec::new();
+    loop {
+        let region = timeline.next_region();
+        if region.start >= end {
+            break;
+        }
+        if region.start + region.duration > start {
+            regions.push(region);
+        }
+    }
+    let mut phrases = Vec::new();
+    loop {
+        let phrase = timeline.next_phrase();
+        if phrase.notes[0].start >= end {
+            break;
+        }
+        let last = phrase.notes.last().expect("generated phrase has notes");
+        if last.start + last.duration + 5.0 > start {
+            phrases.push(phrase);
+        }
+    }
+    AmbientPlan { regions, phrases }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -492,8 +521,7 @@ mod tests {
             let active_region = plan
                 .regions
                 .iter()
-                .filter(|region| region.start <= phrase.notes[0].start)
-                .next_back()
+                .rfind(|region| region.start <= phrase.notes[0].start)
                 .unwrap();
             let chord_classes = active_region
                 .chord

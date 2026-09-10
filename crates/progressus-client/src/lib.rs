@@ -1,4 +1,7 @@
+#[cfg(test)]
 mod ambient_playback;
+// Retained for standalone audio auditions and their regression tests.
+#[allow(dead_code)]
 mod ambient_synthesis;
 mod audio;
 mod audio_observer;
@@ -18,3 +21,11 @@ mod ui;
 mod ui_font;
 
 pub use runtime::{ClientError, run, run_with_options, run_with_seed};
+
+#[cfg(feature = "low-poly")]
+pub mod low_poly;
+
+pub(crate) mod continuous_music;
+// This source also contains the offline timbre comparison/export entry points.
+#[allow(dead_code)]
+mod score_audition;

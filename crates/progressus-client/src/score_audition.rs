@@ -3,7 +3,9 @@
 #[path = "ambient_timeline.rs"]
 pub mod ambient_timeline;
 
-use ambient_timeline::{AmbientPlan, PhraseEffect, PhrasePlan, PhraseTimbre, collect_plan};
+use ambient_timeline::{
+    AmbientPlan, PhraseEffect, PhrasePlan, PhraseTimbre, collect_plan, collect_plan_window,
+};
 use std::f32::consts::{PI, TAU};
 
 pub const SAMPLE_RATE: u32 = 24_000;
@@ -579,6 +581,27 @@ fn continuous_pcm(seed: u64, seconds: usize) -> Vec<f32> {
     continuous_pcm_from_plan(seed, &plan, seconds)
 }
 
+/// Renders one bounded playback window from the deterministic absolute timeline.
+pub fn continuous_pcm_window(seed: u64, start_seconds: usize, seconds: usize) -> Vec<f32> {
+    const MARGIN_SECONDS: usize = 6;
+    let requested_end = start_seconds.saturating_add(seconds);
+    let render_start = start_seconds.saturating_sub(MARGIN_SECONDS);
+    let render_end = requested_end.saturating_add(MARGIN_SECONDS);
+    let mut plan = collect_plan_window(seed, render_start as f32, render_end as f32);
+    for region in &mut plan.regions {
+        region.start -= render_start as f32;
+    }
+    for phrase in &mut plan.phrases {
+        for note in &mut phrase.notes {
+            note.start -= render_start as f32;
+        }
+    }
+    let rendered = continuous_pcm_from_plan(seed, &plan, render_end - render_start);
+    let first = (start_seconds - render_start) * SAMPLE_RATE as usize * 2;
+    let count = seconds * SAMPLE_RATE as usize * 2;
+    rendered[first..first + count].to_vec()
+}
+
 #[cfg(test)]
 fn render_overlapping_windows(seed: u64, window_seconds: usize, total_seconds: usize) -> Vec<f32> {
     const MARGIN_SECONDS: usize = 6;
@@ -934,5 +957,31 @@ mod tests {
             maximum_difference < 0.000_01,
             "difference={maximum_difference} index={maximum_index}"
         );
+    }
+
+    #[test]
+    fn adjacent_runtime_windows_join_without_a_discontinuity() {
+        let first = continuous_pcm_window(COMPARISON_SEED, 0, 12);
+        let second = continuous_pcm_window(COMPARISON_SEED, 12, 12);
+        assert_eq!(first.len(), 12 * SAMPLE_RATE as usize * 2);
+        assert_eq!(second.len(), 12 * SAMPLE_RATE as usize * 2);
+        for channel in 0..2 {
+            let delta = (first[first.len() - 2 + channel] - second[channel]).abs();
+            assert!(delta < 0.01, "channel {channel} join delta was {delta}");
+        }
+    }
+    #[test]
+    fn runtime_windows_preserve_the_mix_late_in_a_session() {
+        for start in [60, 3_600, 21_588] {
+            let together = continuous_pcm_window(COMPARISON_SEED, start, 24);
+            let mut split = continuous_pcm_window(COMPARISON_SEED, start, 12);
+            split.extend(continuous_pcm_window(COMPARISON_SEED, start + 12, 12));
+            let error = together
+                .iter()
+                .zip(&split)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0_f32, f32::max);
+            assert!(error < 0.000_01, "window at {start}: {error}");
+        }
     }
 }

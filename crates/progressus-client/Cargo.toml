@@ -1,8 +1,12 @@
 [package]
 name = "progressus-client"
+default-run = "progressus-client"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
+
+[features]
+low-poly = ["bevy/3d_bevy_render"]
 
 [dependencies]
 bevy = { version = "0.18.1", default-features = false, features = [
@@ -23,6 +27,11 @@ progressus-app = { path = "../progressus-app" }
 [[bin]]
 name = "progressus-client"
 path = "src/main.rs"
+
+[[bin]]
+name = "progressus-low-poly"
+path = "src/low_poly_main.rs"
+required-features = ["low-poly"]
 
 [lints]
 workspace = true
