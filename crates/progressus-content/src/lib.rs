@@ -84,7 +84,14 @@ mod tests {
         assert_eq!(sorted, items);
         assert_eq!(
             items.iter().map(|id| id.name()).collect::<Vec<_>>(),
-            ["wood", "stone", "primitive_tool", "berries", "copper_ore"]
+            [
+                "wood",
+                "stone",
+                "primitive_tool",
+                "berries",
+                "copper_ore",
+                "cart"
+            ]
         );
     }
 

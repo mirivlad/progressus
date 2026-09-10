@@ -60,6 +60,11 @@ pub struct ItemDefinition {
     pub hand_load: u32,
     /// Where this may be equipped, if anywhere.
     pub equip_slot: Option<SlotId>,
+    /// How much this holds, as a multiple of one pair of hands. `None` means
+    /// it is not a container. A cart at four holds forty wood or twenty stone,
+    /// automatically, because the fraction rule inside it is the same one that
+    /// governs hands. See ADR-0024.
+    pub capacity: Option<u32>,
     /// What equipping this lets its bearer do.
     pub provides: &'static [CapabilityId],
 }
@@ -75,6 +80,7 @@ pub static ITEMS: &[ItemDefinition] = &[
         hand_load: 10,
         equip_slot: None,
         provides: &[],
+        capacity: None,
     },
     ItemDefinition {
         name: "stone",
@@ -83,6 +89,7 @@ pub static ITEMS: &[ItemDefinition] = &[
         hand_load: 5,
         equip_slot: None,
         provides: &[],
+        capacity: None,
     },
     ItemDefinition {
         name: "primitive_tool",
@@ -91,6 +98,7 @@ pub static ITEMS: &[ItemDefinition] = &[
         hand_load: 3,
         equip_slot: Some(crate::slot::TOOL),
         provides: PRIMITIVE_TOOL_CAPABILITIES,
+        capacity: None,
     },
     ItemDefinition {
         name: "berries",
@@ -99,6 +107,7 @@ pub static ITEMS: &[ItemDefinition] = &[
         hand_load: 20,
         equip_slot: None,
         provides: &[],
+        capacity: None,
     },
     ItemDefinition {
         name: "copper_ore",
@@ -107,12 +116,27 @@ pub static ITEMS: &[ItemDefinition] = &[
         hand_load: 4,
         equip_slot: None,
         provides: &[],
+        capacity: None,
+    },
+    ItemDefinition {
+        name: "cart",
+        category: ItemCategory::Products,
+        nutrition: 0,
+        hand_load: 1,
+        equip_slot: Some(crate::slot::TOOL),
+        provides: &[],
+        capacity: Some(4),
     },
 ];
 
 content_handle!(ItemId, ItemDefinition, ITEMS, item);
 
 impl ItemId {
+    /// How much this holds, as a multiple of one pair of hands.
+    pub const fn capacity(self) -> Option<u32> {
+        self.definition().capacity
+    }
+
     /// Whether equipping this grants the capability.
     pub fn provides(self, capability: CapabilityId) -> bool {
         self.definition().provides.contains(&capability)
@@ -136,6 +160,7 @@ pub const STONE: ItemId = item("stone");
 pub const PRIMITIVE_TOOL: ItemId = item("primitive_tool");
 pub const BERRIES: ItemId = item("berries");
 pub const COPPER_ORE: ItemId = item("copper_ore");
+pub const CART: ItemId = item("cart");
 
 #[cfg(test)]
 mod tests {
@@ -186,6 +211,7 @@ mod tests {
             (PRIMITIVE_TOOL, "primitive_tool"),
             (BERRIES, "berries"),
             (COPPER_ORE, "copper_ore"),
+            (CART, "cart"),
         ] {
             assert_eq!(id.name(), name);
             assert_eq!(ItemId::from_name(name), Some(id));
@@ -228,6 +254,24 @@ mod tests {
             assert!(
                 id.is_food(),
                 "{} is filed as food but feeds nobody",
+                id.name()
+            );
+        }
+    }
+
+    /// A container has to be reachable: something that holds goods but can be
+    /// neither equipped nor set down is a container nobody can use.
+    #[test]
+    fn every_container_declares_a_positive_capacity_and_a_slot() {
+        assert_eq!(CART.capacity(), Some(4));
+        for id in ItemId::all() {
+            let Some(capacity) = id.capacity() else {
+                continue;
+            };
+            assert!(capacity > 0, "{} holds nothing", id.name());
+            assert!(
+                id.definition().equip_slot.is_some(),
+                "{} holds goods but fits in no slot",
                 id.name()
             );
         }

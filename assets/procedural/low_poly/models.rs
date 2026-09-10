@@ -25,6 +25,7 @@ pub enum ModelKind {
     Berries,
     CopperVein,
     CopperOre,
+    Cart,
     /// Stands in for content this build has no authored model for, so a new
     /// definition is visible in the world instead of invisible. See ADR-0021.
     Placeholder,
@@ -34,7 +35,7 @@ impl ModelKind {
     /// Every kind, so tests cover a new model without being edited. Nothing in
     /// the running client needs to enumerate kinds.
     #[cfg(test)]
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::Tree,
         Self::StoneOutcrop,
         Self::BerryBush,
@@ -52,6 +53,7 @@ impl ModelKind {
         Self::CopperVein,
         Self::CopperOre,
         Self::Placeholder,
+        Self::Cart,
     ];
 
     /// How many distinct shapes this kind has. Bounded per ADR-0005: the mesh
@@ -63,7 +65,7 @@ impl ModelKind {
             Self::BerryBush | Self::StoneOutcrop | Self::CopperVein => 5,
             Self::Character => 4,
             Self::Wood | Self::Stone | Self::Berries | Self::CopperOre => 3,
-            Self::PrimitiveTool | Self::Workbench | Self::Placeholder => 2,
+            Self::PrimitiveTool | Self::Workbench | Self::Placeholder | Self::Cart => 2,
             // Structure variants are connectivity masks, not shapes.
             Self::Wall
             | Self::Door
@@ -103,6 +105,7 @@ pub fn model_mesh(kind: ModelKind, variant: u8) -> Mesh {
         ModelKind::Berries => berries(&mut geometry, variant),
         ModelKind::CopperVein => copper_vein(&mut geometry, variant),
         ModelKind::CopperOre => copper_ore(&mut geometry, variant),
+        ModelKind::Cart => cart(&mut geometry, variant),
         ModelKind::Placeholder => placeholder(&mut geometry, variant),
     }
     geometry.mesh()
@@ -814,6 +817,30 @@ fn copper_vein(g: &mut Geometry, variant: u8) {
             if i % 2 == 0 { COPPER } else { VERDIGRIS },
         );
     }
+}
+
+/// A two-wheeled hand cart: a shallow box on an axle with a drawbar.
+fn cart(g: &mut Geometry, variant: u8) {
+    let tilt = variant as f32 * 0.05;
+    g.cuboid(
+        Vec3::new(0., 0.26 + tilt, 0.),
+        Vec3::new(0.46, 0.16, 0.34),
+        BARK_LIGHT,
+    );
+    for z in [-0.19_f32, 0.19] {
+        g.gem(
+            Vec3::new(-0.06, 0.16, z),
+            Vec3::new(0.17, 0.16, 0.05),
+            7,
+            shade(BARK, 0.85),
+        );
+    }
+    g.beam(
+        Vec3::new(0.20, 0.30 + tilt, 0.),
+        Vec3::new(0.52, 0.20 + tilt, 0.),
+        0.032,
+        BARK,
+    );
 }
 
 fn copper_ore(g: &mut Geometry, variant: u8) {

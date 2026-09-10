@@ -35,7 +35,18 @@ pub enum ItemLocation {
         character_id: EntityId,
         slot: SlotId,
     },
+    /// Inside a container, which has a location of its own. This is what lets
+    /// a loaded cart be set down: the goods belong to the cart, not to whoever
+    /// happens to be pushing it.
+    Contained {
+        container_id: EntityId,
+    },
 }
+
+/// How deep containers may nest. A bucket may ride in a cart; a cart may not
+/// ride in a cart. Provisional, and stated as a number rather than left to
+/// emerge from whatever the code happens to allow.
+pub const MAX_CONTAINER_DEPTH: usize = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ItemStack {
@@ -79,7 +90,9 @@ impl ItemStack {
     pub const fn ground_position(&self) -> Option<WorldPosition> {
         match self.location {
             ItemLocation::Ground { position } => Some(position),
-            ItemLocation::Carried { .. } | ItemLocation::Equipped { .. } => None,
+            ItemLocation::Carried { .. }
+            | ItemLocation::Equipped { .. }
+            | ItemLocation::Contained { .. } => None,
         }
     }
 
@@ -87,8 +100,20 @@ impl ItemStack {
     /// borne, not carried, and must not consume carrying capacity.
     pub const fn carrier(&self) -> Option<EntityId> {
         match self.location {
-            ItemLocation::Ground { .. } | ItemLocation::Equipped { .. } => None,
+            ItemLocation::Ground { .. }
+            | ItemLocation::Equipped { .. }
+            | ItemLocation::Contained { .. } => None,
             ItemLocation::Carried { character_id } => Some(character_id),
+        }
+    }
+
+    /// Which container holds this, if any.
+    pub const fn container(&self) -> Option<EntityId> {
+        match self.location {
+            ItemLocation::Contained { container_id } => Some(container_id),
+            ItemLocation::Ground { .. }
+            | ItemLocation::Carried { .. }
+            | ItemLocation::Equipped { .. } => None,
         }
     }
 
@@ -96,7 +121,9 @@ impl ItemStack {
     pub const fn bearer(&self) -> Option<(EntityId, SlotId)> {
         match self.location {
             ItemLocation::Equipped { character_id, slot } => Some((character_id, slot)),
-            ItemLocation::Ground { .. } | ItemLocation::Carried { .. } => None,
+            ItemLocation::Ground { .. }
+            | ItemLocation::Carried { .. }
+            | ItemLocation::Contained { .. } => None,
         }
     }
 }
@@ -108,6 +135,7 @@ pub(crate) struct ItemWorld {
     carried_by_character: BTreeMap<EntityId, BTreeSet<EntityId>>,
     /// One item per character per slot, so equipment cannot silently stack.
     equipped_by_character: BTreeMap<EntityId, BTreeMap<SlotId, EntityId>>,
+    contents_by_container: BTreeMap<EntityId, BTreeSet<EntityId>>,
     revision: u64,
 }
 
@@ -289,6 +317,9 @@ impl ItemWorld {
             ItemLocation::Equipped { character_id, slot } => {
                 self.remove_equipped_index(item_id, character_id, slot)
             }
+            ItemLocation::Contained { container_id } => {
+                self.remove_contained_index(item_id, container_id)
+            }
         }
         self.items
             .remove(&item_id)
@@ -303,21 +334,32 @@ impl ItemWorld {
         expected_carrier: EntityId,
         position: WorldPosition,
     ) -> Result<(), ItemWorldError> {
-        let carrier = self
+        let location = self
             .items
             .get(&item_id)
             .ok_or(ItemWorldError::UnknownItem(item_id))?
-            .carrier()
+            .location();
+        let holder = self
+            .holder_of(item_id)
             .ok_or(ItemWorldError::ExpectedCarriedItem(item_id))?;
-        if carrier != expected_carrier {
+        if holder != expected_carrier {
             return Err(ItemWorldError::WrongCarrier {
                 item_id,
                 expected: expected_carrier,
-                actual: carrier,
+                actual: holder,
             });
         }
-
-        self.remove_carried_index(item_id, carrier);
+        match location {
+            ItemLocation::Carried { character_id } => {
+                self.remove_carried_index(item_id, character_id);
+            }
+            ItemLocation::Contained { container_id } => {
+                self.remove_contained_index(item_id, container_id);
+            }
+            ItemLocation::Ground { .. } | ItemLocation::Equipped { .. } => {
+                return Err(ItemWorldError::ExpectedCarriedItem(item_id));
+            }
+        }
         self.items
             .get_mut(&item_id)
             .expect("item was checked above")
@@ -483,6 +525,129 @@ impl ItemWorld {
             })
     }
 
+    /// Puts a stack into a container, from the ground or from someone's hands.
+    ///
+    /// This enforces structure only — the container exists, the move creates no
+    /// cycle, and it nests no deeper than [`MAX_CONTAINER_DEPTH`]. Whether a
+    /// character may reach that container is the simulation's business, not the
+    /// item world's.
+    pub(crate) fn move_to_container(
+        &mut self,
+        item_id: EntityId,
+        container_id: EntityId,
+    ) -> Result<(), ItemWorldError> {
+        if item_id == container_id {
+            return Err(ItemWorldError::ContainerCycle {
+                item_id,
+                container_id,
+            });
+        }
+        let location = self
+            .items
+            .get(&item_id)
+            .ok_or(ItemWorldError::UnknownItem(item_id))?
+            .location();
+        if !self.items.contains_key(&container_id) {
+            return Err(ItemWorldError::UnknownItem(container_id));
+        }
+        let chain = self.container_chain(container_id)?;
+        if chain.contains(&item_id) {
+            return Err(ItemWorldError::ContainerCycle {
+                item_id,
+                container_id,
+            });
+        }
+        if chain.len() >= MAX_CONTAINER_DEPTH {
+            return Err(ItemWorldError::ContainerTooDeep {
+                item_id,
+                container_id,
+            });
+        }
+
+        match location {
+            ItemLocation::Ground { position } => self.remove_ground_index(item_id, position),
+            ItemLocation::Carried { character_id } => {
+                self.remove_carried_index(item_id, character_id);
+            }
+            ItemLocation::Equipped { .. } | ItemLocation::Contained { .. } => {
+                return Err(ItemWorldError::ExpectedGroundItem(item_id));
+            }
+        }
+        self.items
+            .get_mut(&item_id)
+            .expect("item was checked above")
+            .location = ItemLocation::Contained { container_id };
+        self.contents_by_container
+            .entry(container_id)
+            .or_default()
+            .insert(item_id);
+        self.bump_revision();
+        Ok(())
+    }
+
+    /// What is inside this container.
+    pub(crate) fn contents_of(&self, container_id: EntityId) -> impl Iterator<Item = &ItemStack> {
+        self.contents_by_container
+            .get(&container_id)
+            .into_iter()
+            .flat_map(|ids| ids.iter())
+            .map(|id| {
+                self.items
+                    .get(id)
+                    .expect("container index only contains live item IDs")
+            })
+    }
+
+    /// The character who ultimately has hold of this stack, following it out
+    /// through any containers. `None` means it rests on the ground.
+    pub(crate) fn holder_of(&self, item_id: EntityId) -> Option<EntityId> {
+        let mut current = item_id;
+        for _ in 0..=MAX_CONTAINER_DEPTH {
+            let item = self.items.get(&current)?;
+            match item.location() {
+                ItemLocation::Ground { .. } => return None,
+                ItemLocation::Carried { character_id }
+                | ItemLocation::Equipped { character_id, .. } => return Some(character_id),
+                ItemLocation::Contained { container_id } => current = container_id,
+            }
+        }
+        None
+    }
+
+    /// The containers this stack sits inside, outermost last. Bounded by the
+    /// depth limit, which is what makes the cycle check cheap.
+    fn container_chain(&self, item_id: EntityId) -> Result<Vec<EntityId>, ItemWorldError> {
+        let mut chain = Vec::new();
+        let mut current = item_id;
+        loop {
+            chain.push(current);
+            let Some(item) = self.items.get(&current) else {
+                return Err(ItemWorldError::UnknownItem(current));
+            };
+            let Some(next) = item.container() else {
+                return Ok(chain);
+            };
+            if chain.contains(&next) || chain.len() > MAX_CONTAINER_DEPTH + 1 {
+                return Err(ItemWorldError::IndexCorruption);
+            }
+            current = next;
+        }
+    }
+
+    fn remove_contained_index(&mut self, item_id: EntityId, container_id: EntityId) {
+        let contents = self
+            .contents_by_container
+            .get_mut(&container_id)
+            .expect("contained item has a matching container index");
+        debug_assert!(
+            contents.remove(&item_id),
+            "contained item is present in its container index"
+        );
+        if contents.is_empty() {
+            self.contents_by_container.remove(&container_id);
+        }
+    }
+
     fn remove_equipped_index(&mut self, item_id: EntityId, character_id: EntityId, slot: SlotId) {
         let slots = self
             .equipped_by_character
@@ -585,12 +750,39 @@ impl ItemWorld {
                         return false;
                     }
                 }
+                ItemLocation::Contained { container_id } => {
+                    if !self
+                        .contents_by_container
+                        .get(&container_id)
+                        .is_some_and(|ids| ids.contains(&item.id()))
+                    {
+                        return false;
+                    }
+                    // A stack must sit in exactly one place, and its container
+                    // must actually exist and not enclose it.
+                    if self
+                        .ground_by_chunk
+                        .values()
+                        .any(|ids| ids.contains(&item.id()))
+                        || self
+                            .carried_by_character
+                            .values()
+                            .any(|ids| ids.contains(&item.id()))
+                    {
+                        return false;
+                    }
+                    match self.container_chain(item.id()) {
+                        Ok(chain) if chain.len() <= MAX_CONTAINER_DEPTH + 1 => {}
+                        _ => return false,
+                    }
+                }
             }
         }
         let indexed = self
             .ground_by_chunk
             .values()
             .chain(self.carried_by_character.values())
+            .chain(self.contents_by_container.values())
             .map(BTreeSet::len)
             .sum::<usize>()
             + self
@@ -621,6 +813,15 @@ pub(crate) enum ItemWorldError {
     ExpectedGroundItem(EntityId),
     ExpectedCarriedItem(EntityId),
     ExpectedEquippedItem(EntityId),
+    IndexCorruption,
+    ContainerCycle {
+        item_id: EntityId,
+        container_id: EntityId,
+    },
+    ContainerTooDeep {
+        item_id: EntityId,
+        container_id: EntityId,
+    },
     SlotAlreadyOccupied {
         character_id: EntityId,
         item_id: EntityId,
@@ -653,8 +854,111 @@ pub(crate) enum ItemWorldError {
 
 #[cfg(test)]
 mod tests {
+
+    /// Containment turns item location from a flat set into a tree, which is
+    /// where physical accounting can quietly break. These pin the rules
+    /// ADR-0024 settled before any of this was written.
+    fn container_fixture() -> (ItemWorld, EntityId, EntityId, EntityId) {
+        let mut world = ItemWorld::default();
+        let position = WorldPosition::from_cell_center(WorldCell::new(0, 0)).unwrap();
+        let cart = id(1);
+        let bucket = id(2);
+        let goods = id(3);
+        for (item, kind) in [
+            (cart, item::CART),
+            (bucket, item::CART),
+            (goods, item::WOOD),
+        ] {
+            world
+                .insert_ground(ItemStack::new_ground(
+                    item,
+                    kind,
+                    ItemQuantity::new(1).unwrap(),
+                    position,
+                ))
+                .unwrap();
+        }
+        (world, cart, bucket, goods)
+    }
+
+    #[test]
+    fn nothing_may_be_placed_inside_itself_directly_or_through_a_chain() {
+        let (mut world, cart, bucket, _) = container_fixture();
+        assert!(matches!(
+            world.move_to_container(cart, cart),
+            Err(ItemWorldError::ContainerCycle { .. })
+        ));
+        world.move_to_container(bucket, cart).unwrap();
+        assert!(
+            matches!(
+                world.move_to_container(cart, bucket),
+                Err(ItemWorldError::ContainerCycle { .. })
+            ),
+            "a container swallowed the container it sits inside"
+        );
+        assert!(world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn containers_nest_no_deeper_than_the_declared_limit() {
+        let (mut world, cart, bucket, goods) = container_fixture();
+        world.move_to_container(bucket, cart).unwrap();
+        // cart -> bucket is depth two, which is the limit, so nothing may go
+        // inside the bucket.
+        assert!(matches!(
+            world.move_to_container(goods, bucket),
+            Err(ItemWorldError::ContainerTooDeep { .. })
+        ));
+        world.move_to_container(goods, cart).unwrap();
+        assert!(world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn setting_a_container_down_does_not_spill_it() {
+        let (mut world, cart, _, goods) = container_fixture();
+        let bearer = id(10);
+        world.move_to_container(goods, cart).unwrap();
+        world.move_to_carried(cart, bearer).unwrap();
+        world.equip_carried(cart, bearer, slot::TOOL).unwrap();
+
+        assert_eq!(world.holder_of(goods), Some(bearer));
+        assert_eq!(world.contents_of(cart).count(), 1);
+
+        let ground = WorldPosition::from_cell_center(WorldCell::new(5, 5)).unwrap();
+        world.unequip_to_carried(cart).unwrap();
+        world.move_to_ground(cart, bearer, ground).unwrap();
+
+        assert_eq!(
+            world.get(goods).unwrap().container(),
+            Some(cart),
+            "the goods left the cart when it was set down"
+        );
+        assert_eq!(world.holder_of(goods), None);
+        assert!(world.get(goods).unwrap().ground_position().is_none());
+        assert!(world.indexes_are_consistent());
+    }
+
+    /// Contents belong to the container, not to whoever is pushing it, and a
+    /// stack is never in two places at once.
+    #[test]
+    fn contents_follow_their_container_and_sit_in_exactly_one_place() {
+        let (mut world, cart, _, goods) = container_fixture();
+        let first = id(10);
+        let second = id(11);
+        world.move_to_container(goods, cart).unwrap();
+        world.move_to_carried(cart, first).unwrap();
+        assert_eq!(world.holder_of(goods), Some(first));
+        assert_eq!(world.carried_items_by(first).count(), 1, "only the cart");
+
+        let ground = WorldPosition::from_cell_center(WorldCell::new(2, 0)).unwrap();
+        world.move_to_ground(cart, first, ground).unwrap();
+        world.move_to_carried(cart, second).unwrap();
+        assert_eq!(world.holder_of(goods), Some(second));
+        assert_eq!(world.iter().count(), 3);
+        assert!(world.indexes_are_consistent());
+    }
     use crate::{EntityId, WorldCell, WorldPosition};
-    use progressus_content::item;
+    use progressus_content::{item, slot};
 
     use super::{ItemQuantity, ItemStack, ItemWorld, ItemWorldError, MAX_STACK_QUANTITY};
 

@@ -23,7 +23,7 @@ pub use entity::{
     HUNGRY_SATIETY, MAX_SATIETY, MovementSpeed, MovementState, SATIETY_DECAY_INTERVAL_TICKS,
 };
 pub use exploration::CHARACTER_VISION_RADIUS_CELLS;
-pub use item_world::{ItemLocation, ItemQuantity, ItemStack};
+pub use item_world::{ItemLocation, ItemQuantity, ItemStack, MAX_CONTAINER_DEPTH};
 pub use job::{EAT_WORK_TICKS, HARVEST_WORK_TICKS, Job, JobKind, JobState};
 pub use position::{
     InteractionRadius, SUBUNITS_PER_CELL, WorldPosition, WorldPositionError,

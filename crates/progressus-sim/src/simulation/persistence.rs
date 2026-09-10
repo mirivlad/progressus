@@ -18,7 +18,7 @@ use crate::residency::ChunkResidency;
 use crate::stockpile::StockpileWorld;
 use crate::workstation_world::WorkstationWorld;
 use crate::world_state::ModifiedWorld;
-use crate::{MAX_SATIETY, MovementSpeed, ResourceLayerId, SlotId};
+use crate::{MAX_CONTAINER_DEPTH, MAX_SATIETY, MovementSpeed, ResourceLayerId, SlotId};
 
 pub const SAVE_FORMAT_VERSION: u32 = 1;
 const SAVE_FORMAT_NAME: &str = "progressus-save";
@@ -698,6 +698,7 @@ enum ItemLocationSave {
     Ground { position: PositionSave },
     Carried { character_id: u64 },
     Equipped { character_id: u64, slot: String },
+    Contained { container_id: u64 },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -720,6 +721,9 @@ impl ItemSave {
             ItemLocation::Equipped { character_id, slot } => ItemLocationSave::Equipped {
                 character_id: character_id.value(),
                 slot: slot.name().to_owned(),
+            },
+            ItemLocation::Contained { container_id } => ItemLocationSave::Contained {
+                container_id: container_id.value(),
             },
         };
         Self {
@@ -1320,6 +1324,10 @@ fn restore_items(
     saved: Vec<ItemSave>,
 ) -> Result<ItemWorld, SaveError> {
     let mut world = ItemWorld::default();
+    // Contained stacks wait for their container to exist. Depth is bounded, so
+    // a handful of passes always settles it, and anything still waiting after
+    // that names a container that is missing or circular.
+    let mut deferred: Vec<(EntityId, ItemId, ItemQuantity, EntityId)> = Vec::new();
     for value in saved {
         let id = entity_id(value.id, "item id")?;
         let quantity = ItemQuantity::new(value.quantity).ok_or_else(|| {
@@ -1390,7 +1398,52 @@ fn restore_items(
                     .equip_carried(id, bearer, slot)
                     .map_err(|error| invalid_world_error("item equipment", error))?;
             }
+            ItemLocationSave::Contained { container_id } => {
+                deferred.push((
+                    id,
+                    kind,
+                    quantity,
+                    entity_id(container_id, "item container")?,
+                ));
+            }
         }
+    }
+
+    for _ in 0..=MAX_CONTAINER_DEPTH {
+        let mut remaining = Vec::new();
+        for (id, kind, quantity, container_id) in deferred {
+            if world.get(container_id).is_none() {
+                remaining.push((id, kind, quantity, container_id));
+                continue;
+            }
+            // Contents restore through the ordinary ground transition, so they
+            // cannot bypass the index bookkeeping that keeps a stack in exactly
+            // one place.
+            let anchor = world
+                .get(container_id)
+                .and_then(|container| container.ground_position())
+                .unwrap_or_else(|| {
+                    WorldPosition::from_cell_center(WorldCell::new(0, 0))
+                        .expect("the world origin is a valid position")
+                });
+            world
+                .insert_ground(ItemStack::new_ground(id, kind, quantity, anchor))
+                .map_err(|error| invalid_world_error("item", error))?;
+            world
+                .move_to_container(id, container_id)
+                .map_err(|error| invalid_world_error("item container", error))?;
+        }
+        deferred = remaining;
+        if deferred.is_empty() {
+            break;
+        }
+    }
+    if let Some((id, _, _, container_id)) = deferred.first() {
+        return invalid(format!(
+            "item {} names container {}, which is missing or nested too deeply",
+            id.value(),
+            container_id.value()
+        ));
     }
     Ok(world)
 }
@@ -2164,6 +2217,85 @@ fn validate_restored_job_state(simulation: &Simulation, job: &Job) -> Result<(),
 
 #[cfg(test)]
 mod tests {
+    use progressus_content::{
+        item, natural_resource, recipe, slot, structure, terrain, workstation,
+    };
+
+    /// A loaded cart must survive a save with its goods still inside it and
+    /// still counted exactly once — a container is the easiest place for
+    /// quantity to quietly appear or vanish.
+    #[test]
+    fn a_loaded_container_round_trips_without_gaining_or_losing_anything() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let bearer = crate::simulation::test_support::cora();
+        let position = simulation.characters[&bearer].position();
+        let place = |simulation: &mut Simulation, kind, quantity| {
+            let id = simulation.id_allocator.allocate().unwrap();
+            simulation
+                .item_world
+                .insert_ground(ItemStack::new_ground(
+                    id,
+                    kind,
+                    ItemQuantity::new(quantity).unwrap(),
+                    position,
+                ))
+                .unwrap();
+            id
+        };
+        let cart = place(&mut simulation, item::CART, 1);
+        let wood = place(&mut simulation, item::WOOD, 7);
+        let parked = place(&mut simulation, item::CART, 1);
+        let stone = place(&mut simulation, item::STONE, 3);
+
+        // One cart on a bearer, one standing on the ground, both loaded.
+        simulation.item_world.move_to_container(wood, cart).unwrap();
+        simulation.item_world.move_to_carried(cart, bearer).unwrap();
+        simulation
+            .item_world
+            .equip_carried(cart, bearer, slot::TOOL)
+            .unwrap();
+        simulation
+            .item_world
+            .move_to_container(stone, parked)
+            .unwrap();
+
+        let total = |simulation: &Simulation, kind| {
+            simulation
+                .item_world
+                .iter()
+                .filter(|item| item.kind() == kind)
+                .map(|item| item.quantity().get())
+                .sum::<u32>()
+        };
+        let (wood_before, stone_before) = (
+            total(&simulation, item::WOOD),
+            total(&simulation, item::STONE),
+        );
+        let stacks_before = simulation.item_world.iter().count();
+
+        let bytes = simulation.save_json().unwrap();
+        let reloaded = Simulation::load_json(&bytes).unwrap();
+
+        assert_eq!(reloaded.item_world.iter().count(), stacks_before);
+        assert_eq!(total(&reloaded, item::WOOD), wood_before);
+        assert_eq!(total(&reloaded, item::STONE), stone_before);
+        assert_eq!(
+            reloaded.item_world.get(wood).unwrap().container(),
+            Some(cart)
+        );
+        assert_eq!(
+            reloaded.item_world.get(stone).unwrap().container(),
+            Some(parked)
+        );
+        assert_eq!(reloaded.item_world.holder_of(wood), Some(bearer));
+        assert_eq!(
+            reloaded.item_world.holder_of(stone),
+            None,
+            "goods in a parked cart came back belonging to somebody"
+        );
+        assert_eq!(reloaded.equipment(bearer), vec![(slot::TOOL, cart)]);
+        assert!(reloaded.item_world.indexes_are_consistent());
+    }
 
     /// The copper layer is the first real one, so it is also the end-to-end
     /// check that a layered resource behaves like any other: it generates, it
@@ -2327,7 +2459,6 @@ mod tests {
             .unwrap();
         assert!(!simulation.cell_is_claimed(stockpile_cell));
     }
-    use progressus_content::{item, natural_resource, recipe, structure, terrain, workstation};
     use serde_json::Value;
 
     use super::*;

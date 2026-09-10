@@ -32,15 +32,36 @@ static PRIMITIVE_TOOL_INPUTS: &[RecipeInput] = &[
     },
 ];
 
+static CART_INPUTS: &[RecipeInput] = &[
+    RecipeInput {
+        item: item::WOOD,
+        quantity: 8,
+    },
+    RecipeInput {
+        item: item::PRIMITIVE_TOOL,
+        quantity: 1,
+    },
+];
+
 /// Append-only: registry order is part of deterministic simulation outcomes.
-pub static RECIPES: &[RecipeDefinition] = &[RecipeDefinition {
-    name: "primitive_tool",
-    inputs: PRIMITIVE_TOOL_INPUTS,
-    output: item::PRIMITIVE_TOOL,
-    output_quantity: 1,
-    workstation: workstation::WORKBENCH,
-    work_ticks: 6,
-}];
+pub static RECIPES: &[RecipeDefinition] = &[
+    RecipeDefinition {
+        name: "primitive_tool",
+        inputs: PRIMITIVE_TOOL_INPUTS,
+        output: item::PRIMITIVE_TOOL,
+        output_quantity: 1,
+        workstation: workstation::WORKBENCH,
+        work_ticks: 6,
+    },
+    RecipeDefinition {
+        name: "cart",
+        inputs: CART_INPUTS,
+        output: item::CART,
+        output_quantity: 1,
+        workstation: workstation::WORKBENCH,
+        work_ticks: 16,
+    },
+];
 
 content_handle!(RecipeId, RecipeDefinition, RECIPES, recipe);
 
@@ -52,6 +73,7 @@ impl RecipeId {
 }
 
 pub const PRIMITIVE_TOOL: RecipeId = recipe("primitive_tool");
+pub const CART: RecipeId = recipe("cart");
 
 #[cfg(test)]
 mod tests {
@@ -118,7 +140,7 @@ mod tests {
     fn recipes_are_reachable_through_their_workstation() {
         assert_eq!(
             RecipeId::for_workstation(workstation::WORKBENCH).collect::<Vec<_>>(),
-            vec![PRIMITIVE_TOOL]
+            vec![PRIMITIVE_TOOL, CART]
         );
         for id in RecipeId::all() {
             assert!(

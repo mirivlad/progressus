@@ -77,6 +77,7 @@ pub enum SimulationError {
     JobInvariantViolation,
     ItemNotOnGround(EntityId),
     ItemNotEquippable(EntityId),
+    ItemNotAContainer(EntityId),
     SlotAlreadyOccupied {
         character_id: EntityId,
         item_id: EntityId,
@@ -478,6 +479,9 @@ impl Display for SimulationError {
                 character_id.value(),
                 item_id.value()
             ),
+            Self::ItemNotAContainer(id) => {
+                write!(formatter, "item {} holds nothing", id.value())
+            }
             Self::ItemNotEquippable(id) => write!(
                 formatter,
                 "item {} does not belong in any equipment slot",

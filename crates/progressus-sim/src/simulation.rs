@@ -472,10 +472,38 @@ impl Simulation {
             .sum()
     }
 
+    /// The container this character is equipped with, and how much it holds.
+    /// Hands and container are counted separately rather than summed: someone
+    /// pushing a cart has their hands on it. See ADR-0024.
+    pub fn equipped_container(&self, character_id: EntityId) -> Option<(EntityId, u64)> {
+        self.item_world
+            .equipped_by(character_id)
+            .find_map(|(_, item)| {
+                item.kind()
+                    .capacity()
+                    .map(|multiplier| (item.id(), u64::from(multiplier) * HAND_LOAD_UNITS))
+            })
+    }
+
+    /// What a container already holds, in the same units as a pair of hands.
+    pub fn container_load(&self, container_id: EntityId) -> u64 {
+        self.item_world
+            .contents_of(container_id)
+            .map(|item| item.kind().load_cost(item.quantity().get()))
+            .sum()
+    }
+
     /// How much of a stack this character could still take. Zero means their
     /// hands are full. See ADR-0024.
     pub fn pickup_capacity(&self, character_id: EntityId, kind: ItemId) -> u32 {
-        let free = HAND_LOAD_UNITS.saturating_sub(self.carried_load(character_id));
+        // Goods go into the cart when there is one, and the cart's capacity is
+        // what applies to them.
+        let free = match self.equipped_container(character_id) {
+            Some((container_id, capacity)) => {
+                capacity.saturating_sub(self.container_load(container_id))
+            }
+            None => HAND_LOAD_UNITS.saturating_sub(self.carried_load(character_id)),
+        };
         let per_unit = kind.load_cost(1);
         if per_unit == 0 {
             return MAX_STACK_QUANTITY;
@@ -511,7 +539,65 @@ impl Simulation {
                 .split_ground_stack(item_id, leftover_id, quantity - fits)
                 .map_err(|_| SimulationError::JobInvariantViolation)?;
         }
-        self.pick_up_item(worker_id, item_id)
+        match self.equipped_container(worker_id) {
+            Some((container_id, _)) => self.load_into_container(worker_id, item_id, container_id),
+            None => self.pick_up_item(worker_id, item_id),
+        }
+    }
+
+    /// Puts a reachable ground stack into a container the character has hold
+    /// of, or that rests on the ground beside them.
+    pub fn load_into_container(
+        &mut self,
+        character_id: EntityId,
+        item_id: EntityId,
+        container_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        let character = self
+            .characters
+            .get(&character_id)
+            .ok_or(SimulationError::UnknownCharacter(character_id))?;
+        let (position, radius) = (character.position(), character.interaction_radius());
+        let item = self
+            .item_world
+            .get(item_id)
+            .ok_or(SimulationError::UnknownItem(item_id))?;
+        let item_position = item
+            .ground_position()
+            .ok_or(SimulationError::ItemNotOnGround(item_id))?;
+        let (kind, quantity) = (item.kind(), item.quantity().get());
+        let container = self
+            .item_world
+            .get(container_id)
+            .ok_or(SimulationError::UnknownItem(container_id))?;
+        let capacity = container
+            .kind()
+            .capacity()
+            .ok_or(SimulationError::ItemNotAContainer(container_id))?;
+        // Reachable means borne by this character, or standing within reach.
+        let reachable = match container.ground_position() {
+            Some(container_position) => {
+                within_interaction_range(position, radius, container_position, radius)
+            }
+            None => self.item_world.holder_of(container_id) == Some(character_id),
+        };
+        if !reachable || !within_interaction_range(position, radius, item_position, radius) {
+            return Err(SimulationError::ItemOutOfReach {
+                character_id,
+                item_id,
+            });
+        }
+        if self.container_load(container_id) + kind.load_cost(quantity)
+            > u64::from(capacity) * HAND_LOAD_UNITS
+        {
+            return Err(SimulationError::CarryCapacityExceeded {
+                character_id,
+                item_id,
+            });
+        }
+        self.item_world
+            .move_to_container(item_id, container_id)
+            .map_err(|_| SimulationError::JobInvariantViolation)
     }
 
     pub fn pick_up_item(
@@ -531,7 +617,9 @@ impl Simulation {
             .ok_or(SimulationError::UnknownItem(item_id))?;
         let item_position = match item.location() {
             ItemLocation::Ground { position } => position,
-            ItemLocation::Carried { .. } | ItemLocation::Equipped { .. } => {
+            ItemLocation::Carried { .. }
+            | ItemLocation::Equipped { .. }
+            | ItemLocation::Contained { .. } => {
                 return Err(SimulationError::ItemNotOnGround(item_id));
             }
         };
@@ -570,11 +658,11 @@ impl Simulation {
             .characters
             .get(&character_id)
             .ok_or(SimulationError::UnknownCharacter(character_id))?;
-        let item = self
-            .item_world
-            .get(item_id)
-            .ok_or(SimulationError::UnknownItem(item_id))?;
-        if item.carrier() != Some(character_id) {
+        if self.item_world.get(item_id).is_none() {
+            return Err(SimulationError::UnknownItem(item_id));
+        }
+        // Goods a character bears in a container count as theirs to put down.
+        if self.item_world.holder_of(item_id) != Some(character_id) {
             return Err(SimulationError::ItemNotCarriedByCharacter {
                 character_id,
                 item_id,
@@ -1014,6 +1102,113 @@ fn translate(
 
 #[cfg(test)]
 mod tests {
+
+    /// The whole point of a cart: one trip moves four times what hands do, and
+    /// the goods ride in the cart rather than in the bearer's arms.
+    #[test]
+    fn a_cart_carries_four_times_what_hands_do() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let worker = cora();
+        let position = simulation.characters[&worker].position();
+        let place = |simulation: &mut Simulation, kind, quantity| {
+            let id = simulation.id_allocator.allocate().unwrap();
+            simulation
+                .item_world
+                .insert_ground(ItemStack::new_ground(
+                    id,
+                    kind,
+                    ItemQuantity::new(quantity).unwrap(),
+                    position,
+                ))
+                .unwrap();
+            id
+        };
+
+        // Bare hands hold ten wood.
+        assert_eq!(simulation.pickup_capacity(worker, item::WOOD), 10);
+
+        let cart = place(&mut simulation, item::CART, 1);
+        simulation.pick_up_item(worker, cart).unwrap();
+        simulation.equip_item(worker, cart).unwrap();
+        assert_eq!(
+            simulation.pickup_capacity(worker, item::WOOD),
+            40,
+            "a cart at four should hold four pairs of hands worth of wood"
+        );
+        assert_eq!(simulation.pickup_capacity(worker, item::STONE), 20);
+
+        // Loading goes into the cart, not into the arms.
+        let load = place(&mut simulation, item::WOOD, 40);
+        simulation.pick_up_within_capacity(worker, load).unwrap();
+        assert_eq!(
+            simulation.item_world.get(load).unwrap().container(),
+            Some(cart)
+        );
+        assert_eq!(
+            simulation.carried_load(worker),
+            0,
+            "the load ended up in the bearer's hands"
+        );
+        assert_eq!(simulation.item_world.holder_of(load), Some(worker));
+        assert_eq!(simulation.pickup_capacity(worker, item::WOOD), 0);
+
+        // A full cart takes what fits and leaves the rest behind.
+        let extra = place(&mut simulation, item::WOOD, 5);
+        assert!(matches!(
+            simulation.pick_up_within_capacity(worker, extra),
+            Err(SimulationError::CarryCapacityExceeded { .. })
+        ));
+        assert_eq!(simulation.item_world.get(extra).unwrap().container(), None);
+
+        // Unloading puts goods on the ground straight from the cart, because
+        // a cartload could never fit through a pair of hands.
+        simulation.drop_item(worker, load, position).unwrap();
+        assert!(
+            simulation
+                .item_world
+                .get(load)
+                .unwrap()
+                .ground_position()
+                .is_some()
+        );
+        assert_eq!(simulation.container_load(cart), 0);
+        assert!(simulation.item_world.indexes_are_consistent());
+    }
+
+    /// A cart may be loaded where it stands, without anyone holding it.
+    #[test]
+    fn a_parked_cart_can_be_loaded_and_keeps_its_goods() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let worker = cora();
+        let position = simulation.characters[&worker].position();
+        let place = |simulation: &mut Simulation, kind, quantity| {
+            let id = simulation.id_allocator.allocate().unwrap();
+            simulation
+                .item_world
+                .insert_ground(ItemStack::new_ground(
+                    id,
+                    kind,
+                    ItemQuantity::new(quantity).unwrap(),
+                    position,
+                ))
+                .unwrap();
+            id
+        };
+        let cart = place(&mut simulation, item::CART, 1);
+        let goods = place(&mut simulation, item::STONE, 6);
+
+        simulation.load_into_container(worker, goods, cart).unwrap();
+        assert_eq!(
+            simulation.item_world.get(goods).unwrap().container(),
+            Some(cart)
+        );
+        assert_eq!(
+            simulation.item_world.holder_of(goods),
+            None,
+            "goods in a parked cart came to belong to somebody"
+        );
+        assert!(simulation.item_world.indexes_are_consistent());
+    }
     use progressus_content::{capability, slot};
 
     /// Equipment is borne, not carried: a tool in a slot must not eat into

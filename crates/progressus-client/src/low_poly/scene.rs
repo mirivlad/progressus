@@ -75,6 +75,7 @@ fn item_model(kind: ItemId) -> ModelKind {
         "primitive_tool" => ModelKind::PrimitiveTool,
         "berries" => ModelKind::Berries,
         "copper_ore" => ModelKind::CopperOre,
+        "cart" => ModelKind::Cart,
         _ => ModelKind::Placeholder,
     }
 }
