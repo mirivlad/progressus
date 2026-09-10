@@ -23,6 +23,9 @@ pub enum ModelKind {
     Stone,
     PrimitiveTool,
     Berries,
+    /// Stands in for content this build has no authored model for, so a new
+    /// definition is visible in the world instead of invisible. See ADR-0021.
+    Placeholder,
 }
 
 pub fn model_mesh(kind: ModelKind, variant: u8) -> Mesh {
@@ -43,6 +46,7 @@ pub fn model_mesh(kind: ModelKind, variant: u8) -> Mesh {
         ModelKind::Stone => loose_stone(&mut geometry, variant),
         ModelKind::PrimitiveTool => primitive_tool(&mut geometry, variant),
         ModelKind::Berries => berries(&mut geometry, variant),
+        ModelKind::Placeholder => placeholder(&mut geometry, variant),
     }
     geometry.mesh()
 }
@@ -520,6 +524,17 @@ fn construction_door(g: &mut Geometry) {
     for y in [0.92, 1.01] {
         g.cuboid(Vec3::new(0., y, 0.), Vec3::new(1.0, 0.06, 0.06), BLUEPRINT);
     }
+}
+
+/// A neutral marker that reads as "this exists but has no art yet".
+fn placeholder(g: &mut Geometry, variant: u8) {
+    let tint = 0.42 + variant as f32 * 0.04;
+    g.gem(
+        Vec3::new(0., 0.18, 0.),
+        Vec3::new(0.14, 0.18, 0.14),
+        4,
+        [tint, tint * 0.55, tint, 1.],
+    );
 }
 
 fn wood(g: &mut Geometry, variant: u8) {

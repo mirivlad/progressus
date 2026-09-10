@@ -1,5 +1,7 @@
 //! Shared fixtures for the authoritative simulation's module tests.
 
+use progressus_content::{item, natural_resource, terrain};
+
 use super::*;
 pub(super) use crate::{Direction, HUNGRY_SATIETY, MAX_SATIETY, MovementSpeed, MovementState};
 
@@ -20,7 +22,7 @@ pub(super) fn set_satiety(simulation: &mut Simulation, character_id: EntityId, t
 pub(super) fn total_berries(simulation: &Simulation) -> u32 {
     simulation
         .items()
-        .filter(|item| item.kind() == ItemKind::Berries)
+        .filter(|item| item.kind() == item::BERRIES)
         .map(|item| item.quantity().get())
         .sum()
 }
@@ -50,7 +52,7 @@ pub(super) fn production_zone_cells(
 
 pub(super) fn insert_ground_stack(
     simulation: &mut Simulation,
-    kind: ItemKind,
+    kind: ItemId,
     quantity: u32,
     cell: WorldCell,
 ) -> EntityId {
@@ -75,12 +77,12 @@ pub(super) fn seed_recipe_inputs(
 ) -> (EntityId, EntityId) {
     let inputs = production_zone_cells(simulation, workstation_id, ProductionZoneKind::Input);
     assert!(inputs.len() >= 2, "workbench fixture needs two Input cells");
-    let wood_id = insert_ground_stack(simulation, ItemKind::Wood, wood, inputs[0]);
-    let stone_id = insert_ground_stack(simulation, ItemKind::Stone, stone, inputs[1]);
+    let wood_id = insert_ground_stack(simulation, item::WOOD, wood, inputs[0]);
+    let stone_id = insert_ground_stack(simulation, item::STONE, stone, inputs[1]);
     (wood_id, stone_id)
 }
 
-pub(super) fn total_item_quantity(simulation: &Simulation, kind: ItemKind) -> u32 {
+pub(super) fn total_item_quantity(simulation: &Simulation, kind: ItemId) -> u32 {
     simulation
         .items()
         .filter(|item| item.kind() == kind)
@@ -139,7 +141,7 @@ pub(super) fn empty_stockpile_cells(simulation: &Simulation, count: usize) -> Ve
     let cells = (-5..=5)
         .flat_map(|y| (-7..=7).map(move |x| WorldCell::new(x, y)))
         .filter(|cell| simulation.is_explored(*cell))
-        .filter(|cell| simulation.effective_terrain_at(*cell).unwrap() == Terrain::Grass)
+        .filter(|cell| simulation.effective_terrain_at(*cell).unwrap() == terrain::GRASS)
         .filter(|cell| simulation.natural_resource_at(*cell).unwrap().is_none())
         .filter(|cell| !occupied.contains(cell))
         .take(count)
@@ -180,7 +182,7 @@ pub(super) fn harvest_fixture(simulation: &Simulation) -> (WorldCell, NaturalRes
             let Some(resource) = simulation.natural_resource_at(cell).unwrap() else {
                 continue;
             };
-            if resource.kind() == NaturalResourceKind::BerryBush {
+            if resource.kind() == natural_resource::BERRY_BUSH {
                 continue;
             }
             let destination = WorldPosition::from_cell_center(cell).unwrap();
@@ -231,7 +233,7 @@ pub(super) fn near_cell_edge(cell: WorldCell, direction: Direction) -> WorldPosi
 pub(super) fn place_on_grass(simulation: &mut Simulation, id: EntityId, position: WorldCell) {
     assert_eq!(
         simulation.effective_terrain_at(position).unwrap(),
-        Terrain::Grass
+        terrain::GRASS
     );
     simulation
         .characters
@@ -240,7 +242,7 @@ pub(super) fn place_on_grass(simulation: &mut Simulation, id: EntityId, position
         .set_position(position_at_cell(position));
 }
 
-pub(super) fn persisted_movement_stops_on(terrain: Terrain) {
+pub(super) fn persisted_movement_stops_on(terrain: TerrainId) {
     let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
     let cora = cora();
     let (position, direction) = find_adjacent_terrain_fixture(&simulation, terrain);
@@ -266,7 +268,7 @@ pub(super) fn find_replacement_fixture(
     for y in -64..=64 {
         for x in -64..=64 {
             let position = WorldCell::new(x, y);
-            if raw_terrain_at(simulation, position) != Terrain::Grass {
+            if raw_terrain_at(simulation, position) != terrain::GRASS {
                 continue;
             }
             for accepted in [
@@ -276,7 +278,7 @@ pub(super) fn find_replacement_fixture(
                 Direction::South,
             ] {
                 if raw_terrain_at(simulation, accepted.adjacent(position).unwrap())
-                    != Terrain::Grass
+                    != terrain::GRASS
                 {
                     continue;
                 }
@@ -287,7 +289,7 @@ pub(super) fn find_replacement_fixture(
                     Direction::South,
                 ] {
                     if raw_terrain_at(simulation, blocked.adjacent(position).unwrap())
-                        != Terrain::Grass
+                        != terrain::GRASS
                     {
                         return (position, accepted, blocked);
                     }
@@ -306,7 +308,7 @@ pub(super) fn find_turn_fixture(simulation: &Simulation) -> WorldCell {
             let north_from_east = Direction::North.adjacent(east).unwrap();
             if [position, east, north_from_east]
                 .into_iter()
-                .all(|cell| raw_terrain_at(simulation, cell) == Terrain::Grass)
+                .all(|cell| raw_terrain_at(simulation, cell) == terrain::GRASS)
             {
                 return position;
             }
@@ -317,12 +319,12 @@ pub(super) fn find_turn_fixture(simulation: &Simulation) -> WorldCell {
 
 pub(super) fn find_adjacent_terrain_fixture(
     simulation: &Simulation,
-    target_terrain: Terrain,
+    target_terrain: TerrainId,
 ) -> (WorldCell, Direction) {
     for y in -64..=64 {
         for x in -64..=64 {
             let position = WorldCell::new(x, y);
-            if raw_terrain_at(simulation, position) != Terrain::Grass {
+            if raw_terrain_at(simulation, position) != terrain::GRASS {
                 continue;
             }
             for direction in [
@@ -342,7 +344,7 @@ pub(super) fn find_adjacent_terrain_fixture(
     panic!("expected adjacent {target_terrain:?} terrain fixture");
 }
 
-pub(super) fn raw_terrain_at(simulation: &Simulation, position: WorldCell) -> Terrain {
+pub(super) fn raw_terrain_at(simulation: &Simulation, position: WorldCell) -> TerrainId {
     let (coordinate, local) = position.split();
     simulation
         .generated_chunk(coordinate)
@@ -353,12 +355,12 @@ pub(super) fn raw_terrain_at(simulation: &Simulation, position: WorldCell) -> Te
 
 pub(super) fn find_raw_grass_with_neighbor(
     simulation: &Simulation,
-    neighbor: Terrain,
+    neighbor: TerrainId,
 ) -> (WorldCell, Direction) {
     for y in -64..=64 {
         for x in -64..=64 {
             let start = WorldCell::new(x, y);
-            if raw_terrain_at(simulation, start) != Terrain::Grass {
+            if raw_terrain_at(simulation, start) != terrain::GRASS {
                 continue;
             }
             for direction in [

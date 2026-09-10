@@ -17,6 +17,9 @@ pub struct StructureDefinition {
     /// Whether the structure joins the cardinal wall network of ADR-0011,
     /// which also decides whether it encloses a space.
     pub connects_to_wall_network: bool,
+    /// Whether the structure opens and closes, like a door, instead of being
+    /// permanently solid.
+    pub has_open_state: bool,
 }
 
 /// Append-only: registry order is part of deterministic simulation outcomes.
@@ -28,6 +31,7 @@ pub static STRUCTURES: &[StructureDefinition] = &[
         work_ticks: 8,
         navigation_cost: None,
         connects_to_wall_network: true,
+        has_open_state: false,
     },
     StructureDefinition {
         name: "door",
@@ -36,6 +40,7 @@ pub static STRUCTURES: &[StructureDefinition] = &[
         work_ticks: 6,
         navigation_cost: Some(2),
         connects_to_wall_network: true,
+        has_open_state: true,
     },
 ];
 
@@ -90,6 +95,19 @@ mod tests {
             assert!(
                 definition.material_quantity <= item::MAX_STACK_QUANTITY,
                 "{} cannot be supplied by one stack",
+                id.name()
+            );
+        }
+    }
+
+    #[test]
+    fn only_passable_structures_can_open_and_close() {
+        assert!(DOOR.definition().has_open_state);
+        assert!(!STONE_WALL.definition().has_open_state);
+        for id in StructureId::all().filter(|id| id.definition().has_open_state) {
+            assert!(
+                id.is_passable(),
+                "{} opens and closes but never lets anyone through",
                 id.name()
             );
         }

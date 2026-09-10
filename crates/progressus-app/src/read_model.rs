@@ -1,11 +1,13 @@
 use progressus_sim::{
-    Character, ConstructionMaterialState, ConstructionSite, DoorState, ItemKind, ItemStack, Job,
-    JobKind, JobState, MovementState, NaturalResource, NaturalResourceKind, ProductionLogistics,
+    Character, ConstructionMaterialState, ConstructionSite, DoorState, ItemId, ItemStack, Job,
+    JobKind, JobState, MovementState, NaturalResource, NaturalResourceId, ProductionLogistics,
     ProductionOrder, ProductionTarget, ProductionZoneKind, RecipeId, Stockpile, Structure,
-    StructureKind, Workstation, WorkstationKind, WorldPosition,
+    StructureId, Workstation, WorkstationId, WorldPosition,
 };
 
-use crate::{ChunkCoord, EntityId, LocalCell, SimulationTick, Terrain, WorldCell, WorldgenVersion};
+use crate::{
+    ChunkCoord, EntityId, LocalCell, SimulationTick, TerrainId, WorldCell, WorldgenVersion,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ClientSnapshot {
@@ -40,7 +42,7 @@ pub struct ClientSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GroundItemSnapshot {
     pub id: EntityId,
-    pub kind: ItemKind,
+    pub kind: ItemId,
     pub quantity: u32,
     pub position: WorldPosition,
 }
@@ -61,7 +63,7 @@ impl GroundItemSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CarriedItemSnapshot {
     pub id: EntityId,
-    pub kind: ItemKind,
+    pub kind: ItemId,
     pub quantity: u32,
     pub character_id: EntityId,
 }
@@ -82,7 +84,7 @@ impl CarriedItemSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NaturalResourceSnapshot {
     pub cell: WorldCell,
-    pub kind: NaturalResourceKind,
+    pub kind: NaturalResourceId,
     pub yield_quantity: u32,
 }
 
@@ -117,7 +119,7 @@ impl From<&Job> for JobSnapshot {
 pub struct StockpileSnapshot {
     pub id: EntityId,
     pub cells: Vec<WorldCell>,
-    pub disallowed_items: Vec<ItemKind>,
+    pub disallowed_items: Vec<ItemId>,
 }
 
 impl From<&Stockpile> for StockpileSnapshot {
@@ -133,7 +135,7 @@ impl From<&Stockpile> for StockpileSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkstationSnapshot {
     pub id: EntityId,
-    pub kind: WorkstationKind,
+    pub kind: WorkstationId,
     pub cell: WorldCell,
 }
 
@@ -186,7 +188,7 @@ impl From<&ProductionLogistics> for ProductionLogisticsSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConstructionSiteSnapshot {
     pub id: EntityId,
-    pub kind: StructureKind,
+    pub kind: StructureId,
     pub cell: WorldCell,
     pub material_item_id: Option<EntityId>,
     pub material_state: Option<ConstructionMaterialState>,
@@ -207,7 +209,7 @@ impl From<&ConstructionSite> for ConstructionSiteSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct StructureSnapshot {
     pub id: EntityId,
-    pub kind: StructureKind,
+    pub kind: StructureId,
     pub cell: WorldCell,
     pub door_state: Option<DoorState>,
 }
@@ -234,7 +236,7 @@ pub struct NavigationSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KnownTerrain {
     Unknown,
-    Known(Terrain),
+    Known(TerrainId),
 }
 
 impl From<&Character> for NavigationSnapshot {
@@ -252,7 +254,7 @@ impl From<&Character> for NavigationSnapshot {
 pub struct ChunkSnapshot {
     pub coordinate: ChunkCoord,
     pub side: u16,
-    /// Terrain in row-major order: `index = local_y * side + local_x`.
+    /// TerrainId in row-major order: `index = local_y * side + local_x`.
     pub cells: Vec<KnownTerrain>,
 }
 
@@ -266,7 +268,7 @@ impl ChunkSnapshot {
         self.cells.get(index).copied()
     }
 
-    pub fn known_terrain_at(&self, local: LocalCell) -> Option<Terrain> {
+    pub fn known_terrain_at(&self, local: LocalCell) -> Option<TerrainId> {
         match self.terrain_at(local)? {
             KnownTerrain::Unknown => None,
             KnownTerrain::Known(terrain) => Some(terrain),

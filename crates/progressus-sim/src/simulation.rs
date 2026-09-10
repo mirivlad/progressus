@@ -9,6 +9,8 @@
 //! shares with the rest of the tree are `pub(super)`; the simulation surface
 //! outside this module is unchanged.
 
+use progressus_content::{item, terrain};
+
 #[cfg(test)]
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -38,27 +40,26 @@ use crate::clock::SimulationClock;
 use crate::construction::{ConstructionWorld, ConstructionWorldError};
 use crate::entity::{EntityIdAllocator, NavigationRoute};
 use crate::exploration::ExploredWorld;
-use crate::item::ItemWorld;
+use crate::item_world::ItemWorld;
 use crate::job::{JobWorld, JobWorldError};
 use crate::pathfinding::{PathfindingError, find_closest_explored_path, find_explored_path};
 use crate::production::{ProductionWorld, ProductionWorldError};
 use crate::production_logistics::{ProductionLogisticsWorld, ProductionLogisticsWorldError};
 use crate::residency::ChunkResidency;
 use crate::stockpile::{StockpileWorld, StockpileWorldError};
-use crate::workstation::{WorkstationWorld, WorkstationWorldError};
+use crate::workstation_world::{WorkstationWorld, WorkstationWorldError};
 use crate::world_state::ModifiedWorld;
 use crate::{
-    BERRIES_MEAL_SATIETY, CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord,
-    ConstructionMaterialState, ConstructionSite, Direction, EAT_WORK_TICKS, EffectiveChunk,
-    EntityId, GeneratedChunk, HARVEST_WORK_TICKS, InteractionRadius, ItemKind, ItemLocation,
-    ItemQuantity, ItemStack, Job, JobKind, JobState, LocalCell, MAX_STACK_QUANTITY, MovementState,
-    NaturalResource, NaturalResourceKind, ProductionLogistics, ProductionOrder, ProductionTarget,
-    ProductionZoneKind, RecipeId, SATIETY_DECAY_INTERVAL_TICKS, SimulationTick, Stockpile,
-    Structure, StructureKind, Terrain, Workstation, WorkstationKind, WorldCell, WorldPosition,
-    WorldPositionError, WorldSeed, WorldgenVersion, recipe_definition, within_interaction_range,
+    CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, Character, ChunkCoord, ConstructionMaterialState,
+    ConstructionSite, Direction, EAT_WORK_TICKS, EffectiveChunk, EntityId, GeneratedChunk,
+    HARVEST_WORK_TICKS, InteractionRadius, ItemId, ItemLocation, ItemQuantity, ItemStack, Job,
+    JobKind, JobState, LocalCell, MAX_STACK_QUANTITY, MovementState, NaturalResource,
+    ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind, RecipeId,
+    SATIETY_DECAY_INTERVAL_TICKS, SimulationTick, Stockpile, Structure, StructureId, TerrainId,
+    Workstation, WorkstationId, WorldCell, WorldPosition, WorldPositionError, WorldSeed,
+    WorldgenVersion, within_interaction_range,
 };
 
-pub const BERRY_BUSH_REGROW_TICKS: u64 = 512;
 const BOOTSTRAP_BERRIES: u32 = 10;
 const AUTONOMOUS_FORAGE_RADIUS_CELLS: i64 = 8;
 
@@ -109,7 +110,7 @@ impl Simulation {
             let position = WorldCell::new(x, 0);
             let (chunk_coordinate, local) = position.split();
             let chunk = generator.generate(chunk_coordinate)?;
-            if chunk.terrain_at(local) != Some(Terrain::Grass) {
+            if chunk.terrain_at(local) != Some(terrain::GRASS) {
                 return Err(SimulationError::SpawnNotWalkable(position));
             }
 
@@ -122,10 +123,10 @@ impl Simulation {
 
         let mut item_world = ItemWorld::default();
         for (kind, quantity, cell, offset_x, offset_y) in [
-            (ItemKind::Wood, 8, WorldCell::new(-2, 0), 160, 180),
-            (ItemKind::Stone, 6, WorldCell::new(-1, 0), 820, 220),
-            (ItemKind::Wood, 10, WorldCell::new(1, 0), 240, 820),
-            (ItemKind::Stone, 8, WorldCell::new(2, 0), 840, 760),
+            (item::WOOD, 8, WorldCell::new(-2, 0), 160, 180),
+            (item::STONE, 6, WorldCell::new(-1, 0), 820, 220),
+            (item::WOOD, 10, WorldCell::new(1, 0), 240, 820),
+            (item::STONE, 8, WorldCell::new(2, 0), 840, 760),
         ] {
             let id = id_allocator.allocate()?;
             let position =
@@ -158,7 +159,7 @@ impl Simulation {
             .cells()
             .filter(|cell| !occupied_cells.contains(cell))
             .filter(|cell| i128::from(cell.x()).abs() > 2 || i128::from(cell.y()).abs() > 2)
-            .filter(|cell| generator.terrain_at(*cell) == Terrain::Grass)
+            .filter(|cell| generator.terrain_at(*cell) == terrain::GRASS)
             .filter(|cell| generator.natural_resource_at(*cell).is_none())
             .min_by_key(|cell| {
                 (
@@ -172,7 +173,7 @@ impl Simulation {
         item_world
             .insert_ground(ItemStack::new_ground(
                 berries_id,
-                ItemKind::Berries,
+                item::BERRIES,
                 ItemQuantity::new(BOOTSTRAP_BERRIES)
                     .expect("bootstrap food quantity is within stack capacity"),
                 WorldPosition::from_cell_center(berries_cell)?,
@@ -516,7 +517,7 @@ impl Simulation {
         self.construction_world.structure_at(cell)
     }
 
-    pub(crate) fn structure_kind_at(&self, cell: WorldCell) -> Option<StructureKind> {
+    pub(crate) fn structure_kind_at(&self, cell: WorldCell) -> Option<StructureId> {
         self.construction_world.structure_kind_at(cell)
     }
 
@@ -533,7 +534,7 @@ impl Simulation {
     pub fn set_terrain_override(
         &mut self,
         position: WorldCell,
-        terrain: Terrain,
+        terrain: TerrainId,
     ) -> Result<(), SimulationError> {
         let (coordinate, local) = position.split();
         let base = self.base_terrain_at(position)?;
@@ -542,7 +543,7 @@ impl Simulation {
         Ok(())
     }
 
-    pub fn effective_terrain_at(&self, position: WorldCell) -> Result<Terrain, SimulationError> {
+    pub fn effective_terrain_at(&self, position: WorldCell) -> Result<TerrainId, SimulationError> {
         let (coordinate, local) = position.split();
         if let Some(override_terrain) = self.modified_world.override_at(coordinate, local) {
             return Ok(override_terrain);
@@ -571,7 +572,7 @@ impl Simulation {
         Ok(EffectiveChunk::new(coordinate, cells))
     }
 
-    fn base_terrain_at(&self, position: WorldCell) -> Result<Terrain, SimulationError> {
+    fn base_terrain_at(&self, position: WorldCell) -> Result<TerrainId, SimulationError> {
         #[cfg(test)]
         self.base_terrain_query_count
             .set(self.base_terrain_query_count.get() + 1);
@@ -595,7 +596,12 @@ impl Simulation {
         Ok(())
     }
 
-    fn resolve_terrain(&self, coordinate: ChunkCoord, local: LocalCell, base: Terrain) -> Terrain {
+    fn resolve_terrain(
+        &self,
+        coordinate: ChunkCoord,
+        local: LocalCell,
+        base: TerrainId,
+    ) -> TerrainId {
         self.modified_world
             .override_at(coordinate, local)
             .unwrap_or(base)
@@ -870,7 +876,7 @@ mod tests {
         let cora = cora();
         place_on_grass(&mut simulation, cora, WorldCell::new(20, 0));
         simulation
-            .set_terrain_override(WorldCell::new(21, 0), Terrain::Grass)
+            .set_terrain_override(WorldCell::new(21, 0), terrain::GRASS)
             .unwrap();
         simulation.advance_ticks(1).unwrap();
         let revision = simulation.exploration_revision();
@@ -908,7 +914,7 @@ mod tests {
 
         assert_eq!(items.len(), 5);
         assert_eq!(items[0].id(), EntityId::new(6).unwrap());
-        assert_eq!(items[0].kind(), ItemKind::Wood);
+        assert_eq!(items[0].kind(), item::WOOD);
         assert_eq!(items[0].quantity().get(), 8);
         assert_eq!(
             items[0].ground_position(),
@@ -920,17 +926,17 @@ mod tests {
             )
         );
         assert_eq!(items[3].id(), EntityId::new(9).unwrap());
-        assert_eq!(items[3].kind(), ItemKind::Stone);
+        assert_eq!(items[3].kind(), item::STONE);
         assert_eq!(items[3].quantity().get(), 8);
         assert_eq!(items[4].id(), EntityId::new(10).unwrap());
-        assert_eq!(items[4].kind(), ItemKind::Berries);
+        assert_eq!(items[4].kind(), item::BERRIES);
         assert_eq!(items[4].quantity().get(), BOOTSTRAP_BERRIES);
         let berries_cell = items[4].ground_position().unwrap().containing_cell();
         assert!(berries_cell.x().abs() > 2 || berries_cell.y().abs() > 2);
         assert!(simulation.is_explored(berries_cell));
         assert_eq!(
             simulation.effective_terrain_at(berries_cell).unwrap(),
-            Terrain::Grass
+            terrain::GRASS
         );
         assert!(
             simulation
@@ -1024,7 +1030,7 @@ mod tests {
 
         let blocked_cell = character(&simulation, ada).position().containing_cell();
         simulation
-            .set_terrain_override(blocked_cell, Terrain::Rock)
+            .set_terrain_override(blocked_cell, terrain::ROCK)
             .unwrap();
         let destination = character(&simulation, ada).position();
         assert_eq!(
@@ -1042,13 +1048,13 @@ mod tests {
         let position = WorldCell::new(0, 0);
 
         simulation
-            .set_terrain_override(position, Terrain::Rock)
+            .set_terrain_override(position, terrain::ROCK)
             .unwrap();
         simulation.base_terrain_query_count.set(0);
 
         assert_eq!(
             simulation.effective_terrain_at(position).unwrap(),
-            Terrain::Rock
+            terrain::ROCK
         );
         assert_eq!(simulation.base_terrain_query_count.get(), 0);
     }
@@ -1061,9 +1067,10 @@ mod tests {
         let first_cell = first_chunk.world_cell(LocalCell::new(7, 11)).unwrap();
         let second_cell = second_chunk.world_cell(LocalCell::new(19, 23)).unwrap();
 
-        let changed = |terrain| match terrain {
-            Terrain::Grass => Terrain::Rock,
-            Terrain::Water | Terrain::Rock => Terrain::Grass,
+        let changed = |base| {
+            TerrainId::all()
+                .find(|candidate| *candidate != base)
+                .expect("the terrain registry defines more than one kind")
         };
         let first_changed = changed(simulation.effective_terrain_at(first_cell).unwrap());
         let second_changed = changed(simulation.effective_terrain_at(second_cell).unwrap());

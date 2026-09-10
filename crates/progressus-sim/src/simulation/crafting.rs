@@ -3,7 +3,7 @@
 use super::*;
 
 impl Simulation {
-    pub(super) fn craft_local_quantity(&self, workstation_id: EntityId, kind: ItemKind) -> u32 {
+    pub(super) fn craft_local_quantity(&self, workstation_id: EntityId, kind: ItemId) -> u32 {
         let Some(logistics) = self.production_logistics_world.get(workstation_id) else {
             return 0;
         };
@@ -25,7 +25,7 @@ impl Simulation {
             .fold(0_u32, u32::saturating_add)
     }
 
-    pub(super) fn craft_incoming_quantity(&self, workstation_id: EntityId, kind: ItemKind) -> u32 {
+    pub(super) fn craft_incoming_quantity(&self, workstation_id: EntityId, kind: ItemId) -> u32 {
         self.job_world
             .iter()
             .filter_map(|job| match job.kind() {
@@ -45,7 +45,7 @@ impl Simulation {
         &self,
         workstation_id: EntityId,
         zone_kind: ProductionZoneKind,
-        item_kind: ItemKind,
+        item_kind: ItemId,
         quantity: u32,
     ) -> Result<Option<WorldCell>, SimulationError> {
         let Some(logistics) = self.production_logistics_world.get(workstation_id) else {
@@ -94,7 +94,7 @@ impl Simulation {
     pub(super) fn craft_supply_source(
         &self,
         workstation_id: EntityId,
-        kind: ItemKind,
+        kind: ItemId,
     ) -> Option<(EntityId, u32)> {
         let workstation_cell = self.workstation_world.get(workstation_id)?.cell();
         let mut candidates = self
@@ -152,16 +152,16 @@ impl Simulation {
             .collect::<Vec<_>>();
 
         for (_job_id, workstation_id, recipe_id) in waiting {
-            let recipe = recipe_definition(recipe_id);
+            let recipe = recipe_id.definition();
             for requirement in recipe.inputs {
-                let local = self.craft_local_quantity(workstation_id, requirement.kind);
-                let incoming = self.craft_incoming_quantity(workstation_id, requirement.kind);
+                let local = self.craft_local_quantity(workstation_id, requirement.item);
+                let incoming = self.craft_incoming_quantity(workstation_id, requirement.item);
                 let mut missing = requirement
                     .quantity
                     .saturating_sub(local.saturating_add(incoming));
                 while missing > 0 {
                     let Some((source_id, source_quantity)) =
-                        self.craft_supply_source(workstation_id, requirement.kind)
+                        self.craft_supply_source(workstation_id, requirement.item)
                     else {
                         break;
                     };
@@ -169,7 +169,7 @@ impl Simulation {
                     let Some(destination) = self.production_zone_destination(
                         workstation_id,
                         ProductionZoneKind::Input,
-                        requirement.kind,
+                        requirement.item,
                         move_quantity,
                     )?
                     else {
@@ -226,10 +226,11 @@ impl Simulation {
             };
             job_workstation == workstation_id
                 && job.state() == JobState::Available
-                && recipe_definition(recipe_id)
+                && recipe_id
+                    .definition()
                     .inputs
                     .iter()
-                    .any(|requirement| requirement.kind == item.kind())
+                    .any(|requirement| requirement.item == item.kind())
         })
     }
 
@@ -267,7 +268,7 @@ impl Simulation {
             .workstation_world
             .get(workstation_id)
             .ok_or(SimulationError::UnknownWorkstation(workstation_id))?;
-        if workstation.kind() != recipe_definition(order.recipe_id()).workstation {
+        if workstation.kind() != order.recipe_id().definition().workstation {
             return Err(SimulationError::RecipeWorkstationMismatch {
                 workstation_id,
                 recipe_id: order.recipe_id(),
@@ -350,7 +351,7 @@ impl Simulation {
             self.cancel_job(job_id)?;
             return Ok(());
         };
-        let recipe = recipe_definition(recipe_id);
+        let recipe = recipe_id.definition();
         if workstation.kind() != recipe.workstation || !self.is_walkable(workstation.cell())? {
             self.cancel_job(job_id)?;
             return Ok(());
@@ -363,7 +364,7 @@ impl Simulation {
             .production_zone_destination(
                 workstation_id,
                 ProductionZoneKind::Output,
-                recipe.output_kind,
+                recipe.output,
                 recipe.output_quantity,
             )?
             .is_none()
@@ -403,13 +404,13 @@ impl Simulation {
         recipe_id: RecipeId,
     ) -> Option<Vec<EntityId>> {
         let logistics = self.production_logistics_world.get(workstation_id)?;
-        let recipe = recipe_definition(recipe_id);
+        let recipe = recipe_id.definition();
         let mut selected = BTreeSet::new();
         for requirement in recipe.inputs {
             let mut remaining = requirement.quantity;
             for item in self.item_world.iter() {
                 if selected.contains(&item.id())
-                    || item.kind() != requirement.kind
+                    || item.kind() != requirement.item
                     || self.job_world.item_job_for_item(item.id()).is_some()
                     || self
                         .construction_world
@@ -449,7 +450,7 @@ impl Simulation {
         let Some(logistics) = self.production_logistics_world.get(workstation_id) else {
             return false;
         };
-        let recipe = recipe_definition(recipe_id);
+        let recipe = recipe_id.definition();
         if workstation.kind() != recipe.workstation {
             return false;
         }
@@ -464,7 +465,7 @@ impl Simulation {
                         return None;
                     }
                     let item = self.item_world.get(*item_id)?;
-                    if item.kind() != requirement.kind {
+                    if item.kind() != requirement.item {
                         return None;
                     }
                     let position = item.ground_position()?;
@@ -486,13 +487,13 @@ impl Simulation {
         recipe_id: RecipeId,
     ) -> Option<Vec<(EntityId, u32)>> {
         let reserved = self.job_world.craft_reserved_items(job_id)?;
-        let recipe = recipe_definition(recipe_id);
+        let recipe = recipe_id.definition();
         let mut plan = Vec::new();
         for requirement in recipe.inputs {
             let mut remaining = requirement.quantity;
             for item_id in reserved {
                 let item = self.item_world.get(*item_id)?;
-                if item.kind() != requirement.kind || item.ground_position().is_none() {
+                if item.kind() != requirement.item || item.ground_position().is_none() {
                     continue;
                 }
                 let amount = remaining.min(item.quantity().get());
@@ -525,14 +526,14 @@ impl Simulation {
         self.workstation_world
             .get(workstation_id)
             .ok_or(SimulationError::UnknownWorkstation(workstation_id))?;
-        let recipe = recipe_definition(recipe_id);
+        let recipe = recipe_id.definition();
         let plan = self
             .craft_consumption_plan(job_id, recipe_id)
             .ok_or(SimulationError::JobInvariantViolation)?;
         let Some(output_cell) = self.production_zone_destination(
             workstation_id,
             ProductionZoneKind::Output,
-            recipe.output_kind,
+            recipe.output,
             recipe.output_quantity,
         )?
         else {
@@ -541,7 +542,7 @@ impl Simulation {
             return Ok(());
         };
         let merge_target = self.item_world.iter().find_map(|item| {
-            (item.kind() == recipe.output_kind
+            (item.kind() == recipe.output
                 && item
                     .ground_position()
                     .is_some_and(|position| position.containing_cell() == output_cell)
@@ -565,7 +566,7 @@ impl Simulation {
         self.item_world
             .insert_ground(ItemStack::new_ground(
                 output_id,
-                recipe.output_kind,
+                recipe.output,
                 output_quantity,
                 output_position,
             ))
@@ -592,18 +593,19 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::simulation::test_support::*;
+    use progressus_content::{item, recipe, terrain, workstation};
 
     #[test]
     fn craft_consumes_exact_quantities_from_input_zone_and_outputs_to_output_zone() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         let workstation_id = simulation
-            .place_workstation(WorkstationKind::Workbench, WorldCell::new(0, 0))
+            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 0))
             .unwrap();
         let (wood_id, stone_id) = seed_recipe_inputs(&mut simulation, workstation_id, 5, 3);
         let output_cell =
             production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Output)[0];
         let job_id = simulation
-            .designate_craft(workstation_id, RecipeId::PrimitiveTool)
+            .designate_craft(workstation_id, recipe::PRIMITIVE_TOOL)
             .unwrap();
         let mut saw_working = false;
 
@@ -635,7 +637,7 @@ mod tests {
         );
         let tools = simulation
             .items()
-            .filter(|item| item.kind() == ItemKind::PrimitiveTool)
+            .filter(|item| item.kind() == item::PRIMITIVE_TOOL)
             .collect::<Vec<_>>();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].quantity().get(), 1);
@@ -661,30 +663,30 @@ mod tests {
             shared_workbench_fixture_cells(&simulation);
         let stockpile_id = simulation.create_stockpile(shared).unwrap();
         let first_workstation = simulation
-            .place_workstation(WorkstationKind::Workbench, first_bench_cell)
+            .place_workstation(workstation::WORKBENCH, first_bench_cell)
             .unwrap();
         let second_workstation = simulation
-            .place_workstation(WorkstationKind::Workbench, second_bench_cell)
+            .place_workstation(workstation::WORKBENCH, second_bench_cell)
             .unwrap();
         let first_input =
             production_zone_cells(&simulation, first_workstation, ProductionZoneKind::Input)[0];
         let second_input =
             production_zone_cells(&simulation, second_workstation, ProductionZoneKind::Input)[0];
-        let first_stone = insert_ground_stack(&mut simulation, ItemKind::Stone, 1, first_input);
-        let second_stone = insert_ground_stack(&mut simulation, ItemKind::Stone, 1, second_input);
-        let shared_wood = insert_ground_stack(&mut simulation, ItemKind::Wood, 2, shared);
+        let first_stone = insert_ground_stack(&mut simulation, item::STONE, 1, first_input);
+        let second_stone = insert_ground_stack(&mut simulation, item::STONE, 1, second_input);
+        let shared_wood = insert_ground_stack(&mut simulation, item::WOOD, 2, shared);
 
         simulation
             .add_production_order(
                 first_workstation,
-                RecipeId::PrimitiveTool,
+                recipe::PRIMITIVE_TOOL,
                 ProductionTarget::Infinite,
             )
             .unwrap();
         simulation
             .add_production_order(
                 second_workstation,
-                RecipeId::PrimitiveTool,
+                recipe::PRIMITIVE_TOOL,
                 ProductionTarget::Infinite,
             )
             .unwrap();
@@ -708,7 +710,7 @@ mod tests {
 
         for _ in 0..256 {
             simulation.advance_ticks(1).unwrap();
-            if total_item_quantity(&simulation, ItemKind::PrimitiveTool) >= 1 {
+            if total_item_quantity(&simulation, item::PRIMITIVE_TOOL) >= 1 {
                 break;
             }
         }
@@ -719,10 +721,10 @@ mod tests {
             "exactly one workstation must consume its private Stone input first",
         );
 
-        let second_wood = insert_ground_stack(&mut simulation, ItemKind::Wood, 2, shared);
+        let second_wood = insert_ground_stack(&mut simulation, item::WOOD, 2, shared);
         for _ in 0..256 {
             simulation.advance_ticks(1).unwrap();
-            if total_item_quantity(&simulation, ItemKind::PrimitiveTool) >= 2 {
+            if total_item_quantity(&simulation, item::PRIMITIVE_TOOL) >= 2 {
                 break;
             }
         }
@@ -730,10 +732,10 @@ mod tests {
         assert!(simulation.item_world.get(second_wood).is_none());
         assert!(simulation.item_world.get(first_stone).is_none());
         assert!(simulation.item_world.get(second_stone).is_none());
-        assert_eq!(total_item_quantity(&simulation, ItemKind::PrimitiveTool), 2);
+        assert_eq!(total_item_quantity(&simulation, item::PRIMITIVE_TOOL), 2);
         simulation.advance_ticks(32).unwrap();
         assert_eq!(
-            total_item_quantity(&simulation, ItemKind::PrimitiveTool),
+            total_item_quantity(&simulation, item::PRIMITIVE_TOOL),
             2,
             "infinite orders wait when physical inputs are exhausted",
         );
@@ -755,7 +757,7 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         clear_all_items(&mut simulation);
         let workstation_id = simulation
-            .place_workstation(WorkstationKind::Workbench, WorldCell::new(0, 0))
+            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 0))
             .unwrap();
         let input_cells =
             production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Input);
@@ -766,13 +768,12 @@ mod tests {
         simulation
             .set_stockpile_cell(stockpile_id, source_cells[1], true)
             .unwrap();
-        let wood_source = insert_ground_stack(&mut simulation, ItemKind::Wood, 20, source_cells[0]);
-        let stone_source =
-            insert_ground_stack(&mut simulation, ItemKind::Stone, 20, source_cells[1]);
+        let wood_source = insert_ground_stack(&mut simulation, item::WOOD, 20, source_cells[0]);
+        let stone_source = insert_ground_stack(&mut simulation, item::STONE, 20, source_cells[1]);
         simulation
             .add_production_order(
                 workstation_id,
-                RecipeId::PrimitiveTool,
+                recipe::PRIMITIVE_TOOL,
                 ProductionTarget::finite(1),
             )
             .unwrap();
@@ -794,19 +795,19 @@ mod tests {
                     }
                     if let Some(item) = simulation.item_world.get(item_id) {
                         saw_exact_wood_supply |=
-                            item.kind() == ItemKind::Wood && item.quantity().get() == 2;
+                            item.kind() == item::WOOD && item.quantity().get() == 2;
                         saw_exact_stone_supply |=
-                            item.kind() == ItemKind::Stone && item.quantity().get() == 1;
+                            item.kind() == item::STONE && item.quantity().get() == 1;
                     }
                 }
             }
             saw_output |= simulation.items().any(|item| {
-                item.kind() == ItemKind::PrimitiveTool
+                item.kind() == item::PRIMITIVE_TOOL
                     && item
                         .ground_position()
                         .is_some_and(|position| position.containing_cell() == output_cell)
             });
-            if total_item_quantity(&simulation, ItemKind::PrimitiveTool) >= 1 && saw_output {
+            if total_item_quantity(&simulation, item::PRIMITIVE_TOOL) >= 1 && saw_output {
                 break;
             }
         }
@@ -817,7 +818,7 @@ mod tests {
             saw_output,
             "crafted output must physically appear in Output zone"
         );
-        assert_eq!(total_item_quantity(&simulation, ItemKind::PrimitiveTool), 1);
+        assert_eq!(total_item_quantity(&simulation, item::PRIMITIVE_TOOL), 1);
         assert_eq!(
             simulation
                 .item_world
@@ -850,10 +851,10 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         let cell = empty_stockpile_cells(&simulation, 1)[0];
         let workstation_id = simulation
-            .place_workstation(WorkstationKind::Workbench, cell)
+            .place_workstation(workstation::WORKBENCH, cell)
             .unwrap();
         let job_id = simulation
-            .designate_craft(workstation_id, RecipeId::PrimitiveTool)
+            .designate_craft(workstation_id, recipe::PRIMITIVE_TOOL)
             .unwrap();
 
         simulation.advance_ticks(16).unwrap();
@@ -866,7 +867,7 @@ mod tests {
         assert!(
             simulation
                 .items()
-                .all(|item| item.kind() != ItemKind::PrimitiveTool)
+                .all(|item| item.kind() != item::PRIMITIVE_TOOL)
         );
     }
 
@@ -875,13 +876,13 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         clear_all_items(&mut simulation);
         let workstation_id = simulation
-            .place_workstation(WorkstationKind::Workbench, WorldCell::new(0, 0))
+            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 0))
             .unwrap();
         seed_recipe_inputs(&mut simulation, workstation_id, 6, 3);
         let order_id = simulation
             .add_production_order(
                 workstation_id,
-                RecipeId::PrimitiveTool,
+                recipe::PRIMITIVE_TOOL,
                 ProductionTarget::finite(3),
             )
             .unwrap();
@@ -905,7 +906,7 @@ mod tests {
                 .remaining_runs(),
             Some(0)
         );
-        assert_eq!(total_item_quantity(&simulation, ItemKind::PrimitiveTool), 3);
+        assert_eq!(total_item_quantity(&simulation, item::PRIMITIVE_TOOL), 3);
         assert!(
             simulation
                 .job_world
@@ -921,7 +922,7 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         clear_all_items(&mut simulation);
         let workstation_id = simulation
-            .place_workstation(WorkstationKind::Workbench, WorldCell::new(0, 0))
+            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 0))
             .unwrap();
         let (wood_id, stone_id) = seed_recipe_inputs(&mut simulation, workstation_id, 2, 1);
         let output_cells =
@@ -929,7 +930,7 @@ mod tests {
         let order_id = simulation
             .add_production_order(
                 workstation_id,
-                RecipeId::PrimitiveTool,
+                recipe::PRIMITIVE_TOOL,
                 ProductionTarget::finite(1),
             )
             .unwrap();
@@ -969,7 +970,7 @@ mod tests {
 
         for cell in &output_cells {
             simulation
-                .set_terrain_override(*cell, Terrain::Rock)
+                .set_terrain_override(*cell, terrain::ROCK)
                 .unwrap();
         }
         simulation.advance_ticks(3).unwrap();
@@ -998,7 +999,7 @@ mod tests {
                 .get(),
             1
         );
-        assert_eq!(total_item_quantity(&simulation, ItemKind::PrimitiveTool), 0);
+        assert_eq!(total_item_quantity(&simulation, item::PRIMITIVE_TOOL), 0);
 
         let saved = simulation.save_json().unwrap();
         let mut completed = Simulation::load_json(&saved).unwrap();
@@ -1006,11 +1007,11 @@ mod tests {
 
         for cell in &output_cells {
             completed
-                .set_terrain_override(*cell, Terrain::Grass)
+                .set_terrain_override(*cell, terrain::GRASS)
                 .unwrap();
         }
         completed.advance_ticks(1).unwrap();
-        assert_eq!(total_item_quantity(&completed, ItemKind::PrimitiveTool), 1);
+        assert_eq!(total_item_quantity(&completed, item::PRIMITIVE_TOOL), 1);
         assert_eq!(
             completed
                 .production_world
@@ -1021,7 +1022,7 @@ mod tests {
         );
         assert!(completed.job_world.get(job_id).is_none());
         completed.advance_ticks(16).unwrap();
-        assert_eq!(total_item_quantity(&completed, ItemKind::PrimitiveTool), 1);
+        assert_eq!(total_item_quantity(&completed, item::PRIMITIVE_TOOL), 1);
 
         cancelled.remove_production_order(order_id).unwrap();
         assert!(cancelled.job_world.get(job_id).is_none());
@@ -1045,11 +1046,11 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         clear_all_items(&mut simulation);
         let workstation_id = simulation
-            .place_workstation(WorkstationKind::Workbench, WorldCell::new(0, 0))
+            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 0))
             .unwrap();
         seed_recipe_inputs(&mut simulation, workstation_id, 2, 1);
         let job_id = simulation
-            .designate_craft(workstation_id, RecipeId::PrimitiveTool)
+            .designate_craft(workstation_id, recipe::PRIMITIVE_TOOL)
             .unwrap();
         simulation.advance_ticks(1).unwrap();
         let worker_id = simulation
@@ -1089,11 +1090,11 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         clear_all_items(&mut simulation);
         let workstation_id = simulation
-            .place_workstation(WorkstationKind::Workbench, WorldCell::new(0, 0))
+            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 0))
             .unwrap();
         seed_recipe_inputs(&mut simulation, workstation_id, 2, 1);
         let job_id = simulation
-            .designate_craft(workstation_id, RecipeId::PrimitiveTool)
+            .designate_craft(workstation_id, recipe::PRIMITIVE_TOOL)
             .unwrap();
         simulation.advance_ticks(1).unwrap();
         assert!(simulation.job_world.craft_reserved_items(job_id).is_some());
@@ -1122,7 +1123,7 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         clear_all_items(&mut simulation);
         let workstation_id = simulation
-            .place_workstation(WorkstationKind::Workbench, WorldCell::new(0, 0))
+            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 0))
             .unwrap();
         seed_recipe_inputs(&mut simulation, workstation_id, 2, 1);
         let stock_cells = distant_stockpile_cells(&simulation, WorldCell::new(0, 0), 1);
@@ -1130,7 +1131,7 @@ mod tests {
         simulation
             .add_production_order(
                 workstation_id,
-                RecipeId::PrimitiveTool,
+                recipe::PRIMITIVE_TOOL,
                 ProductionTarget::finite(1),
             )
             .unwrap();
@@ -1141,7 +1142,7 @@ mod tests {
             simulation.advance_ticks(1).unwrap();
             for item in simulation
                 .items()
-                .filter(|item| item.kind() == ItemKind::PrimitiveTool)
+                .filter(|item| item.kind() == item::PRIMITIVE_TOOL)
             {
                 let Some(cell) = item.ground_position().map(WorldPosition::containing_cell) else {
                     continue;
@@ -1159,7 +1160,7 @@ mod tests {
 
         assert!(saw_output_zone);
         assert!(reached_stockpile);
-        assert_eq!(total_item_quantity(&simulation, ItemKind::PrimitiveTool), 1);
+        assert_eq!(total_item_quantity(&simulation, item::PRIMITIVE_TOOL), 1);
         assert!(simulation.job_world.indexes_are_consistent());
     }
 }

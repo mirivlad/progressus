@@ -1,5 +1,7 @@
 //! Player commands for workstations, production orders and their logistics zones.
 
+use progressus_content::workstation;
+
 use super::*;
 
 impl Simulation {
@@ -14,7 +16,7 @@ impl Simulation {
             .workstation_world
             .get(workstation_id)
             .ok_or(SimulationError::UnknownWorkstation(workstation_id))?;
-        if workstation.kind() == WorkstationKind::Workbench {
+        if workstation.kind() == workstation::WORKBENCH {
             return match kind {
                 ProductionZoneKind::Input => {
                     Err(SimulationError::WorkbenchInputPortsFixed(workstation_id))
@@ -195,7 +197,7 @@ impl Simulation {
             .workstation_world
             .get(workstation_id)
             .ok_or(SimulationError::UnknownWorkstation(workstation_id))?;
-        if workstation.kind() != recipe_definition(recipe_id).workstation {
+        if workstation.kind() != recipe_id.definition().workstation {
             return Err(SimulationError::RecipeWorkstationMismatch {
                 workstation_id,
                 recipe_id,
@@ -247,7 +249,7 @@ impl Simulation {
 
     pub fn place_workstation(
         &mut self,
-        kind: WorkstationKind,
+        kind: WorkstationId,
         cell: WorldCell,
     ) -> Result<EntityId, SimulationError> {
         self.validate_workstation_cell(cell)?;
@@ -257,9 +259,7 @@ impl Simulation {
                 workstation_id: existing,
             });
         }
-        let (inputs, outputs) = match kind {
-            WorkstationKind::Workbench => self.default_workbench_ports(cell)?,
-        };
+        let (inputs, outputs) = self.default_production_ports(cell)?;
         let id = self.id_allocator.allocate()?;
         self.workstation_world
             .insert(Workstation::new(id, kind, cell))
@@ -280,7 +280,7 @@ impl Simulation {
         Ok(id)
     }
 
-    pub(super) fn default_workbench_ports(
+    pub(super) fn default_production_ports(
         &self,
         workstation_cell: WorldCell,
     ) -> Result<([WorldCell; 2], [WorldCell; 2]), SimulationError> {
@@ -380,6 +380,7 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::simulation::test_support::*;
+    use progressus_content::terrain;
 
     #[test]
     fn blocked_workbench_port_layout_rejects_placement_before_allocating_id() {
@@ -390,7 +391,7 @@ mod tests {
             for dx in -1_i64..=1 {
                 let cell = WorldCell::new(center.x() + dx, center.y() + dy);
                 simulation
-                    .set_terrain_override(cell, Terrain::Grass)
+                    .set_terrain_override(cell, terrain::GRASS)
                     .unwrap();
                 simulation.depleted_resources.insert(cell);
             }
@@ -410,7 +411,7 @@ mod tests {
         let next_id = simulation.next_entity_id();
 
         assert_eq!(
-            simulation.place_workstation(WorkstationKind::Workbench, center),
+            simulation.place_workstation(workstation::WORKBENCH, center),
             Err(SimulationError::WorkstationPortLayoutUnavailable(center))
         );
         assert_eq!(simulation.next_entity_id(), next_id);
@@ -423,7 +424,7 @@ mod tests {
         clear_all_items(&mut simulation);
         let workstation_cell = WorldCell::new(0, 0);
         let workstation_id = simulation
-            .place_workstation(WorkstationKind::Workbench, workstation_cell)
+            .place_workstation(workstation::WORKBENCH, workstation_cell)
             .unwrap();
         let inputs = production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Input);
         let outputs =
@@ -473,13 +474,13 @@ mod tests {
             for dx in -1_i64..=1 {
                 let cell = WorldCell::new(center.x() + dx, center.y() + dy);
                 simulation
-                    .set_terrain_override(cell, Terrain::Grass)
+                    .set_terrain_override(cell, terrain::GRASS)
                     .unwrap();
                 simulation.depleted_resources.insert(cell);
             }
         }
         let workstation_id = simulation
-            .place_workstation(WorkstationKind::Workbench, center)
+            .place_workstation(workstation::WORKBENCH, center)
             .unwrap();
         let original_inputs =
             production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Input);

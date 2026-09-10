@@ -8,13 +8,13 @@ use progressus_sim::{Simulation, SimulationError};
 pub use progressus_sim::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, ConstructionMaterialState, ConstructionSite,
     DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED, Direction, DoorState, EntityId,
-    InteractionRadius, ItemCategory, ItemKind, ItemLocation, ItemQuantity, JobKind, JobState,
+    InteractionRadius, ItemCategory, ItemId, ItemLocation, ItemQuantity, JobKind, JobState,
     LocalCell, MAX_PRODUCTION_ORDER_RUNS, MAX_SATIETY, MovementSpeed, MovementState,
-    NaturalResource, NaturalResourceKind, ProductionLogistics, ProductionOrder, ProductionTarget,
+    NaturalResource, NaturalResourceId, ProductionLogistics, ProductionOrder, ProductionTarget,
     ProductionZoneKind, RESIDENT_CHUNK_RADIUS, RESIDENT_CHUNKS_PER_CENTER, RecipeId,
     SAVE_FORMAT_VERSION, SUBUNITS_PER_CELL, SaveError, SaveMetadata, SimulationTick, Stockpile,
-    Structure, StructureKind, Terrain, Workstation, WorkstationKind, WorldCell, WorldPosition,
-    WorldSeed, WorldgenVersion,
+    Structure, StructureId, TerrainId, Workstation, WorkstationId, WorldCell, WorldPosition,
+    WorldSeed, WorldgenVersion, item, natural_resource, recipe, structure, terrain, workstation,
 };
 pub use read_model::{
     CarriedItemSnapshot, CharacterSnapshot, ChunkSnapshot, ClientSnapshot,
@@ -60,11 +60,11 @@ pub enum Command {
     },
     SetStockpileItemAllowed {
         stockpile_id: EntityId,
-        kind: ItemKind,
+        kind: ItemId,
         allowed: bool,
     },
     PlaceWorkstation {
-        kind: WorkstationKind,
+        kind: WorkstationId,
         cell: WorldCell,
     },
     RemoveWorkstation {
@@ -99,7 +99,7 @@ pub enum Command {
         order_id: EntityId,
     },
     DesignateConstruction {
-        kind: StructureKind,
+        kind: StructureId,
         cell: WorldCell,
     },
     CancelConstruction {
@@ -244,7 +244,7 @@ impl Application {
 
     /// Returns effective terrain only when the player has already explored the cell.
     /// This is a bounded point read and must not reveal undiscovered worldgen state.
-    pub fn known_terrain_at(&self, cell: WorldCell) -> Result<Option<Terrain>, ApplicationError> {
+    pub fn known_terrain_at(&self, cell: WorldCell) -> Result<Option<TerrainId>, ApplicationError> {
         if !self.simulation.is_explored(cell) {
             return Ok(None);
         }
@@ -459,17 +459,17 @@ mod tests {
                 .generated_chunk(coordinate)
                 .unwrap()
                 .terrain_at(local),
-            Some(Terrain::Grass),
+            Some(terrain::GRASS),
         );
         simulation
-            .set_terrain_override(position, Terrain::Rock)
+            .set_terrain_override(position, terrain::ROCK)
             .unwrap();
         assert_eq!(
             simulation
                 .generated_chunk(coordinate)
                 .unwrap()
                 .terrain_at(local),
-            Some(Terrain::Grass),
+            Some(terrain::GRASS),
         );
 
         let application = Application::from_simulation_for_test(simulation);
@@ -482,7 +482,7 @@ mod tests {
 
         assert_eq!(
             snapshot.chunks[0].known_terrain_at(local),
-            Some(Terrain::Rock)
+            Some(terrain::ROCK)
         );
     }
 
@@ -517,7 +517,7 @@ mod tests {
                 .map(|value| EntityId::new(value).unwrap())
                 .collect::<Vec<_>>()
         );
-        assert_eq!(snapshot.ground_items[0].kind, ItemKind::Wood);
+        assert_eq!(snapshot.ground_items[0].kind, item::WOOD);
         assert_eq!(snapshot.ground_items[0].quantity, 8);
         assert_eq!(
             snapshot.ground_items[0].position,
@@ -586,7 +586,7 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
         for x in 0..=3 {
             simulation
-                .set_terrain_override(WorldCell::new(x, 0), Terrain::Grass)
+                .set_terrain_override(WorldCell::new(x, 0), terrain::GRASS)
                 .unwrap();
         }
         let mut application = Application::from_simulation_for_test(simulation);

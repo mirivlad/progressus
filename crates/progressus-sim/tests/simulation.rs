@@ -1,6 +1,6 @@
-use progressus_sim::{
-    EntityId, ItemKind, ItemLocation, Terrain, WorldCell, WorldPosition, WorldSeed,
-};
+use progressus_content::{item, terrain};
+
+use progressus_sim::{EntityId, ItemLocation, WorldCell, WorldPosition, WorldSeed};
 use progressus_sim::{Simulation, SimulationTick};
 
 #[test]
@@ -29,7 +29,7 @@ fn new_game_has_five_stable_characters_on_walkable_cells() {
 
         let (chunk_coordinate, local) = character.position().containing_cell().split();
         let chunk = simulation.generated_chunk(chunk_coordinate).unwrap();
-        assert_eq!(chunk.terrain_at(local), Some(Terrain::Grass));
+        assert_eq!(chunk.terrain_at(local), Some(terrain::GRASS));
     }
 }
 
@@ -59,12 +59,12 @@ fn new_game_has_physical_starting_supplies_with_global_stable_ids() {
 
     assert_eq!(items.len(), 5);
     assert_eq!(items[0].id(), EntityId::new(6).unwrap());
-    assert_eq!(items[0].kind(), ItemKind::Wood);
+    assert_eq!(items[0].kind(), item::WOOD);
     assert!(matches!(items[0].location(), ItemLocation::Ground { .. }));
     assert_eq!(items[3].id(), EntityId::new(9).unwrap());
-    assert_eq!(items[3].kind(), ItemKind::Stone);
+    assert_eq!(items[3].kind(), item::STONE);
     assert_eq!(items[4].id(), EntityId::new(10).unwrap());
-    assert_eq!(items[4].kind(), ItemKind::Berries);
+    assert_eq!(items[4].kind(), item::BERRIES);
     assert_eq!(items[4].quantity().get(), 10);
     assert!(matches!(items[4].location(), ItemLocation::Ground { .. }));
 }

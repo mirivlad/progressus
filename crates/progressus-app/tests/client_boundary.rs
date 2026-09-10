@@ -1,9 +1,8 @@
 use progressus_app::{
     Application, CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, Command, Direction, DoorState,
-    EntityId, ItemKind, JobKind, JobState, KnownTerrain, LocalCell, MovementState,
-    NaturalResourceKind, NewGameOptions, ProductionZoneKind, RESIDENT_CHUNKS_PER_CENTER, RecipeId,
-    SimulationTick, SnapshotQuery, StructureKind, Terrain, WorkstationKind, WorldCell,
-    WorldPosition, WorldSeed,
+    EntityId, JobKind, JobState, KnownTerrain, LocalCell, MovementState, NewGameOptions,
+    ProductionZoneKind, RESIDENT_CHUNKS_PER_CENTER, SimulationTick, SnapshotQuery, WorldCell,
+    WorldPosition, WorldSeed, item, natural_resource, recipe, structure, terrain, workstation,
 };
 
 fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
@@ -61,7 +60,7 @@ fn snapshot_is_bounded_ordered_and_renderable() {
     let berries = snapshot
         .ground_items
         .iter()
-        .filter(|item| item.kind == ItemKind::Berries)
+        .filter(|item| item.kind == item::BERRIES)
         .map(|item| item.quantity)
         .sum::<u32>();
     assert!(
@@ -159,7 +158,7 @@ fn chunk_snapshots_map_local_coordinates_without_simulation_access() {
 
     assert_eq!(
         chunk.known_terrain_at(LocalCell::new(30, 0)),
-        Some(Terrain::Grass)
+        Some(terrain::GRASS)
     );
     assert_eq!(chunk.terrain_at(LocalCell::new(CHUNK_SIDE, 0)), None);
 }
@@ -173,7 +172,7 @@ fn point_terrain_query_respects_exploration_without_materializing_a_chunk() {
 
     assert_eq!(
         application.known_terrain_at(WorldCell::new(0, 0)).unwrap(),
-        Some(Terrain::Grass)
+        Some(terrain::GRASS)
     );
     assert_eq!(
         application
@@ -272,19 +271,19 @@ fn natural_resource_snapshots_are_explored_deterministic_and_not_a_query_side_ch
         snapshot
             .natural_resources
             .iter()
-            .any(|resource| resource.kind == NaturalResourceKind::Tree)
+            .any(|resource| resource.kind == natural_resource::TREE)
     );
     assert!(
         snapshot
             .natural_resources
             .iter()
-            .any(|resource| resource.kind == NaturalResourceKind::StoneOutcrop)
+            .any(|resource| resource.kind == natural_resource::STONE_OUTCROP)
     );
     assert!(
         snapshot
             .natural_resources
             .iter()
-            .any(|resource| resource.kind == NaturalResourceKind::BerryBush)
+            .any(|resource| resource.kind == natural_resource::BERRY_BUSH)
     );
     for resource in &snapshot.natural_resources {
         let (coordinate, local) = resource.cell.split();
@@ -293,14 +292,15 @@ fn natural_resource_snapshots_are_explored_deterministic_and_not_a_query_side_ch
             .iter()
             .find(|chunk| chunk.coordinate == coordinate)
             .unwrap();
-        assert_eq!(chunk.known_terrain_at(local), Some(Terrain::Grass));
-        match resource.kind {
-            NaturalResourceKind::Tree | NaturalResourceKind::StoneOutcrop => {
+        assert_eq!(chunk.known_terrain_at(local), Some(terrain::GRASS));
+        match resource.kind.name() {
+            "tree" | "stone_outcrop" => {
                 assert!((4..=8).contains(&resource.yield_quantity));
             }
-            NaturalResourceKind::BerryBush => {
+            "berry_bush" => {
                 assert!((3..=5).contains(&resource.yield_quantity));
             }
+            other => panic!("worldgen produced unexpected resource {other}"),
         }
     }
 
@@ -376,14 +376,14 @@ fn distinct_stockpiles_keep_distinct_ids_and_item_policies() {
     application
         .execute(Command::SetStockpileItemAllowed {
             stockpile_id: first_id,
-            kind: ItemKind::Wood,
+            kind: item::WOOD,
             allowed: false,
         })
         .unwrap();
     application
         .execute(Command::SetStockpileItemAllowed {
             stockpile_id: second_id,
-            kind: ItemKind::Berries,
+            kind: item::BERRIES,
             allowed: false,
         })
         .unwrap();
@@ -395,7 +395,7 @@ fn distinct_stockpiles_keep_distinct_ids_and_item_policies() {
             .find(|stockpile| stockpile.id == first_id)
             .unwrap()
             .disallowed_items,
-        vec![ItemKind::Wood]
+        vec![item::WOOD]
     );
     assert_eq!(
         filtered
@@ -404,7 +404,7 @@ fn distinct_stockpiles_keep_distinct_ids_and_item_policies() {
             .find(|stockpile| stockpile.id == second_id)
             .unwrap()
             .disallowed_items,
-        vec![ItemKind::Berries]
+        vec![item::BERRIES]
     );
 }
 
@@ -426,20 +426,17 @@ fn stockpile_and_haul_cycle_cross_the_public_application_boundary() {
     application
         .execute(Command::SetStockpileItemAllowed {
             stockpile_id,
-            kind: ItemKind::Wood,
+            kind: item::WOOD,
             allowed: false,
         })
         .unwrap();
     let filtered = application.snapshot(SnapshotQuery::default()).unwrap();
-    assert_eq!(
-        filtered.stockpiles[0].disallowed_items,
-        vec![ItemKind::Wood]
-    );
+    assert_eq!(filtered.stockpiles[0].disallowed_items, vec![item::WOOD]);
     assert!(filtered.stockpile_revision > created.stockpile_revision);
     application
         .execute(Command::SetStockpileItemAllowed {
             stockpile_id,
-            kind: ItemKind::Wood,
+            kind: item::WOOD,
             allowed: true,
         })
         .unwrap();
@@ -504,14 +501,14 @@ fn workbench_and_craft_cycle_cross_the_public_application_boundary() {
     let workbench_cell = WorldCell::new(0, 1);
     application
         .execute(Command::PlaceWorkstation {
-            kind: WorkstationKind::Workbench,
+            kind: workstation::WORKBENCH,
             cell: workbench_cell,
         })
         .unwrap();
     let placed = application.snapshot(SnapshotQuery::default()).unwrap();
     assert_eq!(placed.workstations.len(), 1);
     assert_eq!(placed.workstations[0].cell, workbench_cell);
-    assert_eq!(placed.workstations[0].kind, WorkstationKind::Workbench);
+    assert_eq!(placed.workstations[0].kind, workstation::WORKBENCH);
     let workstation_id = placed.workstations[0].id;
     assert_eq!(placed.production_logistics.len(), 1);
     assert_eq!(
@@ -610,7 +607,7 @@ fn workbench_and_craft_cycle_cross_the_public_application_boundary() {
     application
         .execute(Command::AddProductionOrder {
             workstation_id,
-            recipe_id: RecipeId::PrimitiveTool,
+            recipe_id: recipe::PRIMITIVE_TOOL,
             target: progressus_app::ProductionTarget::finite(3),
         })
         .unwrap();
@@ -627,7 +624,7 @@ fn workbench_and_craft_cycle_cross_the_public_application_boundary() {
             == JobKind::Craft {
                 workstation_id,
                 order_id,
-                recipe_id: RecipeId::PrimitiveTool,
+                recipe_id: recipe::PRIMITIVE_TOOL,
             }
     }));
 
@@ -650,7 +647,7 @@ fn workbench_and_craft_cycle_cross_the_public_application_boundary() {
             let quantity = snapshot
                 .ground_items
                 .iter()
-                .filter(|item| item.kind == ItemKind::PrimitiveTool)
+                .filter(|item| item.kind == item::PRIMITIVE_TOOL)
                 .map(|item| item.quantity)
                 .sum::<u32>();
             produced = quantity == 3;
@@ -701,7 +698,7 @@ fn workbench_output_rotation_crosses_the_public_application_boundary() {
             let cell = WorldCell::new(x, y);
             if application
                 .execute(Command::PlaceWorkstation {
-                    kind: WorkstationKind::Workbench,
+                    kind: workstation::WORKBENCH,
                     cell,
                 })
                 .is_err()
@@ -788,7 +785,7 @@ fn physical_wall_construction_crosses_the_public_application_boundary() {
     let cell = WorldCell::new(0, 1);
     application
         .execute(Command::DesignateConstruction {
-            kind: StructureKind::StoneWall,
+            kind: structure::STONE_WALL,
             cell,
         })
         .unwrap();
@@ -811,7 +808,7 @@ fn physical_wall_construction_crosses_the_public_application_boundary() {
             .any(|structure| structure.id == site_id)
         {
             assert!(snapshot.construction_sites.is_empty());
-            assert_eq!(snapshot.structures[0].kind, StructureKind::StoneWall);
+            assert_eq!(snapshot.structures[0].kind, structure::STONE_WALL);
             assert_eq!(snapshot.structures[0].cell, cell);
             break;
         }
@@ -861,7 +858,7 @@ fn door_designation_replaces_completed_wall_through_public_application_boundary(
     let cell = WorldCell::new(0, 1);
     application
         .execute(Command::DesignateConstruction {
-            kind: StructureKind::StoneWall,
+            kind: structure::STONE_WALL,
             cell,
         })
         .unwrap();
@@ -886,12 +883,12 @@ fn door_designation_replaces_completed_wall_through_public_application_boundary(
             .unwrap()
             .structures
             .iter()
-            .any(|structure| structure.cell == cell && structure.kind == StructureKind::StoneWall)
+            .any(|structure| structure.cell == cell && structure.kind == structure::STONE_WALL)
     );
 
     application
         .execute(Command::DesignateConstruction {
-            kind: StructureKind::Door,
+            kind: structure::DOOR,
             cell,
         })
         .unwrap();
@@ -906,7 +903,7 @@ fn door_designation_replaces_completed_wall_through_public_application_boundary(
         replaced
             .construction_sites
             .iter()
-            .any(|site| site.cell == cell && site.kind == StructureKind::Door)
+            .any(|site| site.cell == cell && site.kind == structure::DOOR)
     );
 }
 
@@ -919,7 +916,7 @@ fn physical_door_construction_and_open_state_cross_the_public_application_bounda
     let door_cell = WorldCell::new(0, 1);
     application
         .execute(Command::DesignateConstruction {
-            kind: StructureKind::Door,
+            kind: structure::DOOR,
             cell: door_cell,
         })
         .unwrap();
@@ -949,7 +946,7 @@ fn physical_door_construction_and_open_state_cross_the_public_application_bounda
         .iter()
         .find(|structure| structure.id == site_id)
         .unwrap();
-    assert_eq!(door.kind, StructureKind::Door);
+    assert_eq!(door.kind, structure::DOOR);
     assert_eq!(door.door_state, Some(DoorState::Closed));
 
     let cora = EntityId::new(3).unwrap();
@@ -1114,7 +1111,7 @@ fn blocked_move_to_updates_selected_navigation_to_the_closest_approach() {
         .iter()
         .enumerate()
         .find_map(|(index, terrain)| {
-            matches!(terrain, KnownTerrain::Known(Terrain::Water | Terrain::Rock)).then(|| {
+            matches!(terrain, KnownTerrain::Known(terrain::WATER | terrain::ROCK)).then(|| {
                 let x = (index % usize::from(CHUNK_SIDE)) as u16;
                 let y = (index / usize::from(CHUNK_SIDE)) as u16;
                 ChunkCoord::new(0, 0)
@@ -1221,7 +1218,7 @@ fn nutrition_and_physical_eating_cross_the_public_application_boundary() {
     let berries = physical
         .ground_items
         .iter()
-        .filter(|item| item.kind == ItemKind::Berries)
+        .filter(|item| item.kind == item::BERRIES)
         .map(|item| item.quantity)
         .sum::<u32>();
     assert!(

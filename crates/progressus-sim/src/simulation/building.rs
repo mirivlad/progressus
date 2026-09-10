@@ -1,5 +1,7 @@
 //! Construction sites, delivered materials, finished structures and doors.
 
+use progressus_content::structure;
+
 use super::*;
 
 impl Simulation {
@@ -16,15 +18,15 @@ impl Simulation {
 
     pub fn designate_construction(
         &mut self,
-        kind: StructureKind,
+        kind: StructureId,
         cell: WorldCell,
     ) -> Result<EntityId, SimulationError> {
-        if kind == StructureKind::Door {
+        if kind == structure::DOOR {
             if let Some(site_id) = self.construction_world.site_at(cell)
                 && self
                     .construction_world
                     .site(site_id)
-                    .is_some_and(|site| site.kind() == StructureKind::StoneWall)
+                    .is_some_and(|site| site.kind() == structure::STONE_WALL)
             {
                 self.cancel_construction(site_id)?;
             }
@@ -32,7 +34,7 @@ impl Simulation {
                 && self
                     .construction_world
                     .structure(structure_id)
-                    .is_some_and(|structure| structure.kind() == StructureKind::StoneWall)
+                    .is_some_and(|structure| structure.kind() == structure::STONE_WALL)
             {
                 self.construction_world
                     .remove_structure(structure_id)
@@ -135,8 +137,8 @@ impl Simulation {
                     return Err(SimulationError::ConstructionInvariantViolation);
                 };
                 let valid = self.item_world.get(item_id).is_some_and(|item| {
-                    item.kind() == site.kind().material_kind()
-                        && item.quantity().get() >= site.kind().material_quantity()
+                    item.kind() == site.kind().definition().material
+                        && item.quantity().get() >= site.kind().definition().material_quantity
                 });
                 if !valid {
                     self.construction_world
@@ -157,8 +159,8 @@ impl Simulation {
                     return Err(SimulationError::ConstructionInvariantViolation);
                 };
                 let delivered = self.item_world.get(item_id).is_some_and(|item| {
-                    item.kind() == site.kind().material_kind()
-                        && item.quantity().get() >= site.kind().material_quantity()
+                    item.kind() == site.kind().definition().material
+                        && item.quantity().get() >= site.kind().definition().material_quantity
                         && item.ground_position().is_some_and(|position| {
                             cell_manhattan_distance(position.containing_cell(), site.cell()) <= 1
                         })
@@ -201,8 +203,8 @@ impl Simulation {
             .iter()
             .filter_map(|item| {
                 let position = item.ground_position()?;
-                (item.kind() == site.kind().material_kind()
-                    && item.quantity().get() >= site.kind().material_quantity()
+                (item.kind() == site.kind().definition().material
+                    && item.quantity().get() >= site.kind().definition().material_quantity
                     && self.is_explored(position.containing_cell())
                     && self.job_world.item_job_for_item(item.id()).is_none()
                     && self
@@ -292,8 +294,8 @@ impl Simulation {
         let Some(item_position) = item.ground_position() else {
             return Ok(());
         };
-        if item.kind() != site.kind().material_kind()
-            || item.quantity().get() < site.kind().material_quantity()
+        if item.kind() != site.kind().definition().material
+            || item.quantity().get() < site.kind().definition().material_quantity
         {
             self.construction_world
                 .release_material(site_id)
@@ -375,8 +377,8 @@ impl Simulation {
             return false;
         };
         self.item_world.get(item_id).is_some_and(|item| {
-            item.kind() == site.kind().material_kind()
-                && item.quantity().get() >= site.kind().material_quantity()
+            item.kind() == site.kind().definition().material
+                && item.quantity().get() >= site.kind().definition().material_quantity
                 && item.ground_position().is_some_and(|position| {
                     cell_manhattan_distance(position.containing_cell(), site.cell()) <= 1
                 })
@@ -401,7 +403,7 @@ impl Simulation {
             .material_item_id()
             .ok_or(SimulationError::ConstructionInvariantViolation)?;
         self.item_world
-            .consume(item_id, site.kind().material_quantity())
+            .consume(item_id, site.kind().definition().material_quantity)
             .map_err(|_| SimulationError::ConstructionInvariantViolation)?;
         self.job_world
             .remove(job_id)
@@ -420,13 +422,14 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::simulation::test_support::*;
+    use progressus_content::{item, terrain};
 
     #[test]
     fn cancelling_construction_during_delivery_drops_material_and_cleans_reservations() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         let wall_cell = empty_stockpile_cells(&simulation, 1)[0];
         let site_id = simulation
-            .designate_construction(StructureKind::StoneWall, wall_cell)
+            .designate_construction(structure::STONE_WALL, wall_cell)
             .unwrap();
 
         let mut carried = None;
@@ -469,12 +472,12 @@ mod tests {
         let wall_cell = empty_stockpile_cells(&simulation, 1)[0];
         let stone_before = simulation
             .items()
-            .filter(|item| item.kind() == ItemKind::Stone)
+            .filter(|item| item.kind() == item::STONE)
             .map(|item| item.quantity().get())
             .sum::<u32>();
 
         let site_id = simulation
-            .designate_construction(StructureKind::StoneWall, wall_cell)
+            .designate_construction(structure::STONE_WALL, wall_cell)
             .unwrap();
         let mut saw_carried_material = false;
         let mut saw_delivered_material = false;
@@ -509,10 +512,10 @@ mod tests {
         assert_eq!(
             simulation
                 .items()
-                .filter(|item| item.kind() == ItemKind::Stone)
+                .filter(|item| item.kind() == item::STONE)
                 .map(|item| item.quantity().get())
                 .sum::<u32>(),
-            stone_before - StructureKind::StoneWall.material_quantity()
+            stone_before - structure::STONE_WALL.definition().material_quantity
         );
         assert!(!simulation.is_walkable(wall_cell).unwrap());
         let cora = EntityId::new(3).unwrap();
@@ -520,7 +523,7 @@ mod tests {
         for y in 0..=2 {
             for x in -1..=1 {
                 simulation
-                    .set_terrain_override(WorldCell::new(x, y), Terrain::Grass)
+                    .set_terrain_override(WorldCell::new(x, y), terrain::GRASS)
                     .unwrap();
             }
         }
@@ -551,19 +554,19 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         let cell = empty_stockpile_cells(&simulation, 1)[0];
         let wall_id = simulation
-            .designate_construction(StructureKind::StoneWall, cell)
+            .designate_construction(structure::STONE_WALL, cell)
             .unwrap();
         assert_eq!(simulation.construction_site_at(cell), Some(wall_id));
 
         let door_id = simulation
-            .designate_construction(StructureKind::Door, cell)
+            .designate_construction(structure::DOOR, cell)
             .unwrap();
         assert_ne!(door_id, wall_id);
         assert!(simulation.construction_world.site(wall_id).is_none());
         assert_eq!(simulation.construction_site_at(cell), Some(door_id));
         assert_eq!(
             simulation.construction_world.site(door_id).unwrap().kind(),
-            StructureKind::Door
+            structure::DOOR
         );
         assert!(simulation.construction_world.indexes_are_consistent());
         assert!(simulation.job_world.indexes_are_consistent());
@@ -577,11 +580,7 @@ mod tests {
         let wall_id = simulation.id_allocator.allocate().unwrap();
         simulation
             .construction_world
-            .insert_site(ConstructionSite::new(
-                wall_id,
-                StructureKind::StoneWall,
-                cell,
-            ))
+            .insert_site(ConstructionSite::new(wall_id, structure::STONE_WALL, cell))
             .unwrap();
         simulation
             .construction_world
@@ -591,7 +590,7 @@ mod tests {
         assert!(!simulation.is_walkable(cell).unwrap());
 
         let door_id = simulation
-            .designate_construction(StructureKind::Door, cell)
+            .designate_construction(structure::DOOR, cell)
             .unwrap();
         assert_ne!(door_id, wall_id);
         assert!(simulation.construction_world.structure(wall_id).is_none());
@@ -599,7 +598,7 @@ mod tests {
         assert_eq!(simulation.construction_site_at(cell), Some(door_id));
         assert_eq!(
             simulation.construction_world.site(door_id).unwrap().kind(),
-            StructureKind::Door
+            structure::DOOR
         );
         assert!(simulation.is_walkable(cell).unwrap());
         assert!(simulation.construction_world.indexes_are_consistent());
@@ -613,17 +612,13 @@ mod tests {
         let goal = WorldCell::new(2, 1);
         for cell in [start, door_cell, goal] {
             simulation
-                .set_terrain_override(cell, Terrain::Grass)
+                .set_terrain_override(cell, terrain::GRASS)
                 .unwrap();
         }
         let door_id = simulation.id_allocator.allocate().unwrap();
         simulation
             .construction_world
-            .insert_site(ConstructionSite::new(
-                door_id,
-                StructureKind::Door,
-                door_cell,
-            ))
+            .insert_site(ConstructionSite::new(door_id, structure::DOOR, door_cell))
             .unwrap();
         simulation
             .construction_world

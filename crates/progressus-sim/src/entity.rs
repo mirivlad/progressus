@@ -56,7 +56,6 @@ pub const DEFAULT_CHARACTER_SPEED: MovementSpeed = MovementSpeed(256);
 pub const DEFAULT_CHARACTER_INTERACTION_RADIUS: InteractionRadius = InteractionRadius::new(768);
 pub const MAX_SATIETY: u8 = 100;
 pub const HUNGRY_SATIETY: u8 = 50;
-pub const BERRIES_MEAL_SATIETY: u8 = 50;
 pub const SATIETY_DECAY_INTERVAL_TICKS: u64 = 16;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

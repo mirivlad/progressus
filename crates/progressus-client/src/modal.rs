@@ -1,8 +1,8 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use progressus_app::{
-    ClientSnapshot, Command, EntityId, ItemCategory, ItemKind, MAX_PRODUCTION_ORDER_RUNS,
-    ProductionOrderSnapshot, ProductionTarget, RecipeId, StockpileSnapshot, WorkstationKind,
+    ClientSnapshot, Command, EntityId, ItemCategory, ItemId, MAX_PRODUCTION_ORDER_RUNS,
+    ProductionOrderSnapshot, ProductionTarget, RecipeId, StockpileSnapshot, WorkstationId, recipe,
 };
 
 use crate::i18n::{Locale, TextKey};
@@ -110,7 +110,7 @@ pub(crate) struct RotateWorkbenchOutputsButton {
 #[derive(Component)]
 pub(crate) struct ToggleStockpileItemButton {
     stockpile_id: EntityId,
-    kind: ItemKind,
+    kind: ItemId,
 }
 
 #[derive(Component)]
@@ -686,7 +686,7 @@ fn spawn_stockpile_modal(
                     ));
 
                     for category in ItemCategory::ALL {
-                        let kinds = category.kinds().collect::<Vec<_>>();
+                        let kinds = category.items().collect::<Vec<_>>();
                         let allowed = kinds
                             .iter()
                             .filter(|kind| !stockpile.disallowed_items.contains(kind))
@@ -773,7 +773,7 @@ fn spawn_workstation_modal(
     commands: &mut Commands,
     snapshot: &ClientSnapshot,
     workstation_id: EntityId,
-    workstation_kind: WorkstationKind,
+    workstation_kind: WorkstationId,
     locale: Locale,
     font: &UiFont,
     workbench_image: Handle<Image>,
@@ -837,7 +837,7 @@ fn spawn_workstation_modal(
 fn spawn_title_row(
     panel: &mut ChildSpawnerCommands,
     workstation_id: EntityId,
-    workstation_kind: WorkstationKind,
+    workstation_kind: WorkstationId,
     locale: Locale,
     font: &UiFont,
 ) {
@@ -1047,7 +1047,7 @@ fn spawn_recipe_row(
         ))
         .with_children(|row| {
             row.spawn(text_bundle(
-                locale.recipe_name(RecipeId::PrimitiveTool),
+                locale.recipe_name(recipe::PRIMITIVE_TOOL),
                 font,
                 16.0,
                 TEXT,
@@ -1063,7 +1063,7 @@ fn spawn_recipe_row(
                         Button,
                         AddOrderButton {
                             workstation_id,
-                            recipe_id: RecipeId::PrimitiveTool,
+                            recipe_id: recipe::PRIMITIVE_TOOL,
                         },
                         UiCapture,
                         button_node(),
@@ -1077,7 +1077,7 @@ fn spawn_recipe_row(
                         Button,
                         AddInfiniteOrderButton {
                             workstation_id,
-                            recipe_id: RecipeId::PrimitiveTool,
+                            recipe_id: recipe::PRIMITIVE_TOOL,
                         },
                         UiCapture,
                         button_node(),
@@ -1441,7 +1441,7 @@ pub(crate) fn modal_interaction(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        let kinds = button.category.kinds().collect::<Vec<_>>();
+        let kinds = button.category.items().collect::<Vec<_>>();
         let Some(target_allowed) = authoritative
             .snapshot()
             .stockpiles

@@ -137,12 +137,12 @@ pub(crate) fn audible_cues(
 mod tests {
     use super::*;
     use progressus_app::{
-        Application, JobSnapshot, NewGameOptions, SimulationTick, SnapshotQuery, WorldSeed,
+        Application, JobSnapshot, NewGameOptions, SimulationTick, SnapshotQuery, WorldSeed, item,
     };
 
     #[test]
     fn pickup_and_drop_require_observed_physical_transitions() {
-        use progressus_app::{CarriedItemSnapshot, ItemKind, WorldPosition};
+        use progressus_app::{CarriedItemSnapshot, WorldPosition};
         let app = Application::new_game(NewGameOptions {
             seed: WorldSeed::new(0),
         })
@@ -154,7 +154,7 @@ mod tests {
         let id = EntityId::new(500).unwrap();
         snapshot.carried_items.push(CarriedItemSnapshot {
             id,
-            kind: ItemKind::Wood,
+            kind: item::WOOD,
             quantity: 1,
             character_id: snapshot.characters[0].id,
         });
@@ -163,7 +163,7 @@ mod tests {
         snapshot.carried_items.clear();
         let ground = GroundItemSnapshot {
             id,
-            kind: ItemKind::Wood,
+            kind: item::WOOD,
             quantity: 1,
             position: WorldPosition::from_cell_center(WorldCell::new(0, 0)).unwrap(),
         };

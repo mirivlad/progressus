@@ -20,6 +20,7 @@ bevy = { version = "0.18.1", default-features = false, features = [
     "x11",
 ] }
 progressus-app = { path = "../progressus-app" }
+progressus-content = { path = "../progressus-content" }
 
 [[bin]]
 name = "progressus-client"

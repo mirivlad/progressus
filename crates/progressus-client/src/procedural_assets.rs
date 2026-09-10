@@ -7,7 +7,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::image::ImageSampler;
 use bevy::prelude::{Assets, Handle, Image, ResMut, Resource};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use progressus_app::{EntityId, WorkstationKind};
+use progressus_app::{EntityId, WorkstationId};
 
 const ART_PIXELS: u32 = 16;
 const VARIANT_COUNT: u8 = 8;
@@ -52,11 +52,9 @@ impl ProceduralAssetRegistry {
     }
 }
 
-pub(crate) fn workstation_asset(kind: WorkstationKind, id: EntityId) -> ProceduralAssetKey {
-    match kind {
-        WorkstationKind::Workbench => ProceduralAssetKey {
-            variant: mix64(id.value()) as u8 % VARIANT_COUNT,
-        },
+pub(crate) fn workstation_asset(_kind: WorkstationId, id: EntityId) -> ProceduralAssetKey {
+    ProceduralAssetKey {
+        variant: mix64(id.value()) as u8 % VARIANT_COUNT,
     }
 }
 
@@ -186,6 +184,7 @@ impl Canvas {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use progressus_app::workstation;
 
     #[test]
     fn workstation_icon_preserves_original_pixels() {
@@ -216,7 +215,7 @@ mod tests {
         let mut registry = ProceduralAssetRegistry::default();
         let mut images = Assets::default();
         for id in 1..1000 {
-            let key = workstation_asset(WorkstationKind::Workbench, EntityId::new(id).unwrap());
+            let key = workstation_asset(workstation::WORKBENCH, EntityId::new(id).unwrap());
             assert!(key.variant < VARIANT_COUNT);
             let first = registry.image_handle(&mut images, key);
             let second = registry.image_handle(&mut images, key);

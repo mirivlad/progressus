@@ -26,11 +26,11 @@ if grep -Eq '^progressus-(sim|worldgen) v' <<<"${client_direct_tree}"; then
     exit 1
 fi
 
-if grep -Evq '^(progressus-client|bevy|progressus-app) v' <<<"${client_direct_tree}"; then
-    echo "error: progressus-client direct dependencies must be Bevy and progressus-app only" >&2
+if grep -Evq '^(progressus-client|bevy|progressus-app|progressus-content) v' <<<"${client_direct_tree}"; then
+    echo "error: progressus-client direct dependencies must be Bevy, progressus-app and progressus-content only" >&2
     echo "${client_direct_tree}" >&2
     exit 1
 fi
 
 echo "headless dependency boundary: no Bevy packages in the application chain"
-echo "client dependency boundary: direct dependencies are Bevy and progressus-app only"
+echo "client dependency boundary: direct dependencies are Bevy, progressus-app and progressus-content only"

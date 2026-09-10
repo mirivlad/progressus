@@ -253,7 +253,8 @@ pub(crate) enum ProductionWorldError {
 #[cfg(test)]
 mod tests {
     use super::{ProductionOrder, ProductionTarget, ProductionWorld};
-    use crate::{EntityId, RecipeId};
+    use crate::EntityId;
+    use progressus_content::recipe;
 
     fn id(value: u64) -> EntityId {
         EntityId::new(value).unwrap()
@@ -266,7 +267,7 @@ mod tests {
             .insert(ProductionOrder::new(
                 id(10),
                 id(5),
-                RecipeId::PrimitiveTool,
+                recipe::PRIMITIVE_TOOL,
                 ProductionTarget::finite(2),
             ))
             .unwrap();
@@ -274,7 +275,7 @@ mod tests {
             .insert(ProductionOrder::new(
                 id(11),
                 id(5),
-                RecipeId::PrimitiveTool,
+                recipe::PRIMITIVE_TOOL,
                 ProductionTarget::finite(3),
             ))
             .unwrap();
@@ -306,7 +307,7 @@ mod tests {
             .insert(ProductionOrder::new(
                 id(10),
                 id(5),
-                RecipeId::PrimitiveTool,
+                recipe::PRIMITIVE_TOOL,
                 ProductionTarget::Infinite,
             ))
             .unwrap();

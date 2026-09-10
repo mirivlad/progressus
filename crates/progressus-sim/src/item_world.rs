@@ -1,46 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 
+use progressus_content::{ItemId, MAX_STACK_QUANTITY};
+
 use crate::{ChunkCoord, EntityId, WorldPosition};
-
-pub const MAX_STACK_QUANTITY: u32 = 1024;
-
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum ItemKind {
-    Wood,
-    Stone,
-    PrimitiveTool,
-    Berries,
-}
-
-impl ItemKind {
-    pub const ALL: [Self; 4] = [Self::Wood, Self::Stone, Self::PrimitiveTool, Self::Berries];
-
-    pub const fn category(self) -> ItemCategory {
-        match self {
-            Self::Wood | Self::Stone => ItemCategory::Resources,
-            Self::Berries => ItemCategory::Food,
-            Self::PrimitiveTool => ItemCategory::Products,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum ItemCategory {
-    Resources,
-    Food,
-    Products,
-}
-
-impl ItemCategory {
-    pub const ALL: [Self; 3] = [Self::Resources, Self::Food, Self::Products];
-
-    pub fn kinds(self) -> impl Iterator<Item = ItemKind> {
-        ItemKind::ALL
-            .into_iter()
-            .filter(move |kind| kind.category() == self)
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ItemQuantity(NonZeroU32);
@@ -67,7 +30,7 @@ pub enum ItemLocation {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ItemStack {
     id: EntityId,
-    kind: ItemKind,
+    kind: ItemId,
     quantity: ItemQuantity,
     location: ItemLocation,
 }
@@ -75,7 +38,7 @@ pub struct ItemStack {
 impl ItemStack {
     pub(crate) const fn new_ground(
         id: EntityId,
-        kind: ItemKind,
+        kind: ItemId,
         quantity: ItemQuantity,
         position: WorldPosition,
     ) -> Self {
@@ -91,7 +54,7 @@ impl ItemStack {
         self.id
     }
 
-    pub const fn kind(&self) -> ItemKind {
+    pub const fn kind(&self) -> ItemId {
         self.kind
     }
 
@@ -531,8 +494,9 @@ pub(crate) enum ItemWorldError {
 #[cfg(test)]
 mod tests {
     use crate::{EntityId, WorldCell, WorldPosition};
+    use progressus_content::item;
 
-    use super::{ItemKind, ItemQuantity, ItemStack, ItemWorld, ItemWorldError, MAX_STACK_QUANTITY};
+    use super::{ItemQuantity, ItemStack, ItemWorld, ItemWorldError, MAX_STACK_QUANTITY};
 
     fn id(value: u64) -> EntityId {
         EntityId::new(value).unwrap()
@@ -556,7 +520,7 @@ mod tests {
         world
             .insert_ground(ItemStack::new_ground(
                 id(20),
-                ItemKind::Wood,
+                item::WOOD,
                 ItemQuantity::new(1000).unwrap(),
                 position,
             ))
@@ -564,7 +528,7 @@ mod tests {
         world
             .insert_ground(ItemStack::new_ground(
                 id(21),
-                ItemKind::Wood,
+                item::WOOD,
                 ItemQuantity::new(24).unwrap(),
                 position.checked_translate(100, 100).unwrap(),
             ))
@@ -585,7 +549,7 @@ mod tests {
         world
             .insert_ground(ItemStack::new_ground(
                 id(30),
-                ItemKind::Wood,
+                item::WOOD,
                 ItemQuantity::new(115).unwrap(),
                 position,
             ))
@@ -595,7 +559,7 @@ mod tests {
 
         assert_eq!(world.get(id(30)).unwrap().quantity().get(), 113);
         let split = world.get(id(31)).unwrap();
-        assert_eq!(split.kind(), ItemKind::Wood);
+        assert_eq!(split.kind(), item::WOOD);
         assert_eq!(split.quantity().get(), 2);
         assert_eq!(split.ground_position(), Some(position));
         assert_eq!(
@@ -612,7 +576,7 @@ mod tests {
         world
             .insert_ground(ItemStack::new_ground(
                 id(11),
-                ItemKind::Wood,
+                item::WOOD,
                 ItemQuantity::new(5).unwrap(),
                 position,
             ))
@@ -653,12 +617,8 @@ mod tests {
     fn transfer_updates_exactly_one_location_index_and_preserves_identity() {
         let position = WorldPosition::from_cell_center(WorldCell::new(2, -3)).unwrap();
         let dropped = position.checked_translate(200, -100).unwrap();
-        let item = ItemStack::new_ground(
-            id(8),
-            ItemKind::Wood,
-            ItemQuantity::new(7).unwrap(),
-            position,
-        );
+        let item =
+            ItemStack::new_ground(id(8), item::WOOD, ItemQuantity::new(7).unwrap(), position);
         let mut world = ItemWorld::default();
         world.insert_ground(item).unwrap();
         assert!(world.indexes_are_consistent());
@@ -679,7 +639,7 @@ mod tests {
         );
         let carried = world.carried_items_by(id(3)).next().unwrap();
         assert_eq!(carried.id(), id(8));
-        assert_eq!(carried.kind(), ItemKind::Wood);
+        assert_eq!(carried.kind(), item::WOOD);
         assert_eq!(carried.quantity().get(), 7);
 
         world.move_to_ground(id(8), id(3), dropped).unwrap();

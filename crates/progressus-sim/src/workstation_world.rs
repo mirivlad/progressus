@@ -1,21 +1,18 @@
 use std::collections::BTreeMap;
 
-use crate::{EntityId, WorldCell};
+use progressus_content::WorkstationId;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum WorkstationKind {
-    Workbench,
-}
+use crate::{EntityId, WorldCell};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Workstation {
     id: EntityId,
-    kind: WorkstationKind,
+    kind: WorkstationId,
     cell: WorldCell,
 }
 
 impl Workstation {
-    pub(crate) const fn new(id: EntityId, kind: WorkstationKind, cell: WorldCell) -> Self {
+    pub(crate) const fn new(id: EntityId, kind: WorkstationId, cell: WorldCell) -> Self {
         Self { id, kind, cell }
     }
 
@@ -23,7 +20,7 @@ impl Workstation {
         self.id
     }
 
-    pub const fn kind(&self) -> WorkstationKind {
+    pub const fn kind(&self) -> WorkstationId {
         self.kind
     }
 
@@ -121,8 +118,9 @@ pub(crate) enum WorkstationWorldError {
 #[cfg(test)]
 mod tests {
     use crate::{EntityId, WorldCell};
+    use progressus_content::workstation;
 
-    use super::{Workstation, WorkstationKind, WorkstationWorld, WorkstationWorldError};
+    use super::{Workstation, WorkstationWorld, WorkstationWorldError};
 
     fn id(value: u64) -> EntityId {
         EntityId::new(value).unwrap()
@@ -133,13 +131,13 @@ mod tests {
         let mut world = WorkstationWorld::default();
         let cell = WorldCell::new(4, -3);
         world
-            .insert(Workstation::new(id(20), WorkstationKind::Workbench, cell))
+            .insert(Workstation::new(id(20), workstation::WORKBENCH, cell))
             .unwrap();
         assert_eq!(world.workstation_at(cell), Some(id(20)));
         assert!(world.indexes_are_consistent());
 
         assert_eq!(
-            world.insert(Workstation::new(id(21), WorkstationKind::Workbench, cell)),
+            world.insert(Workstation::new(id(21), workstation::WORKBENCH, cell)),
             Err(WorkstationWorldError::CellAlreadyOccupied {
                 cell,
                 workstation_id: id(20),

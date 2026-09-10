@@ -10,8 +10,7 @@ use bevy::window::{Monitor, PrimaryMonitor, PrimaryWindow, WindowPosition};
 use bevy::winit::{UpdateMode, WinitSettings};
 use progressus_app::{
     Application, ApplicationError, ChunkCoord, ClientSnapshot, Command, EntityId, JobKind,
-    NewGameOptions, SnapshotQuery, StructureKind, WorkstationKind, WorldCell, WorldPosition,
-    WorldSeed,
+    NewGameOptions, SnapshotQuery, WorldCell, WorldPosition, WorldSeed, structure, workstation,
 };
 
 use crate::client_diagnostics::{
@@ -454,7 +453,7 @@ fn apply_point_tool(
             authoritative
                 .application
                 .execute(Command::DesignateConstruction {
-                    kind: StructureKind::Door,
+                    kind: structure::DOOR,
                     cell,
                 })?;
         }
@@ -463,7 +462,7 @@ fn apply_point_tool(
                 authoritative
                     .application
                     .execute(Command::PlaceWorkstation {
-                        kind: WorkstationKind::Workbench,
+                        kind: workstation::WORKBENCH,
                         cell,
                     })?;
             }
@@ -538,7 +537,7 @@ fn apply_tool_area(
             let mut stockpile_id = (overlapping.len() == 1)
                 .then(|| *overlapping.first().expect("one overlap has one id"));
             for cell in cells {
-                if known_terrain_at(&area_snapshot, cell) != Some(progressus_app::Terrain::Grass)
+                if known_terrain_at(&area_snapshot, cell) != Some(progressus_app::terrain::GRASS)
                     || resource_cells.contains(&cell)
                     || production_zone_cells.contains(&cell)
                 {
@@ -664,7 +663,7 @@ fn apply_tool_area(
                 .map(|character| character.containing_cell)
                 .collect::<BTreeSet<_>>();
             for cell in cells {
-                if known_terrain_at(&area_snapshot, cell) != Some(progressus_app::Terrain::Grass)
+                if known_terrain_at(&area_snapshot, cell) != Some(progressus_app::terrain::GRASS)
                     || resource_cells.contains(&cell)
                     || stockpile_cells.contains(&cell)
                     || workstation_cells.contains(&cell)
@@ -678,7 +677,7 @@ fn apply_tool_area(
                 authoritative
                     .application
                     .execute(Command::DesignateConstruction {
-                        kind: StructureKind::StoneWall,
+                        kind: structure::STONE_WALL,
                         cell,
                     })?;
             }
@@ -741,7 +740,10 @@ fn rectangle_cells(first: WorldCell, last: WorldCell) -> Option<Vec<WorldCell>> 
     Some(cells)
 }
 
-fn known_terrain_at(snapshot: &ClientSnapshot, cell: WorldCell) -> Option<progressus_app::Terrain> {
+fn known_terrain_at(
+    snapshot: &ClientSnapshot,
+    cell: WorldCell,
+) -> Option<progressus_app::TerrainId> {
     let (coordinate, local) = cell.split();
     snapshot
         .chunks
@@ -1073,8 +1075,8 @@ mod tests {
     use crate::navigation::{SelectedCharacter, VisualMotion};
     use bevy::prelude::{App, ButtonInput, KeyCode, Time, Update};
     use progressus_app::{
-        CHUNK_SIDE, ChunkCoord, Command, Direction, EntityId, MovementState, Terrain, WorldCell,
-        WorldPosition,
+        CHUNK_SIDE, ChunkCoord, Command, Direction, EntityId, MovementState, TerrainId, WorldCell,
+        WorldPosition, terrain,
     };
 
     fn test_app() -> App {
@@ -1204,7 +1206,7 @@ mod tests {
             .unwrap()
             .containing_cell;
         let blocked_target = blocked_direction.adjacent(blocked_from).unwrap();
-        assert_ne!(terrain_at(&authoritative, blocked_target), Terrain::Grass);
+        assert_ne!(terrain_at(&authoritative, blocked_target), terrain::GRASS);
 
         let mut app = test_app();
         app.insert_resource(authoritative)
@@ -1355,7 +1357,7 @@ mod tests {
                 let Some(Some(terrain)) = terrain_by_cell.get(&neighbor) else {
                     continue;
                 };
-                if *terrain != Terrain::Grass {
+                if *terrain != terrain::GRASS {
                     let mut reversed = Vec::new();
                     let mut cursor = position;
                     while cursor != start {
@@ -1376,7 +1378,7 @@ mod tests {
         panic!("seed-0 public terrain snapshots contain no reachable blocked cardinal step")
     }
 
-    fn terrain_at(authoritative: &AuthoritativeClient, position: WorldCell) -> Terrain {
+    fn terrain_at(authoritative: &AuthoritativeClient, position: WorldCell) -> TerrainId {
         let (chunk, local) = position.split();
         authoritative.terrain_snapshot(vec![chunk]).unwrap().chunks[0]
             .known_terrain_at(local)

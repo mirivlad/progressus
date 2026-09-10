@@ -271,11 +271,15 @@ impl Simulation {
                     self.cancel_job(job_id)?;
                     return Ok(());
                 }
-                let Some(item_position) = self.item_world.get(item_id).and_then(|item| {
-                    (item.kind() == ItemKind::Berries)
-                        .then(|| item.ground_position())
-                        .flatten()
-                }) else {
+                let Some((item_position, _nutrition)) =
+                    self.item_world.get(item_id).and_then(|item| {
+                        let nutrition = item.kind().definition().nutrition;
+                        (nutrition > 0)
+                            .then(|| item.ground_position())
+                            .flatten()
+                            .map(|position| (position, nutrition))
+                    })
+                else {
                     self.cancel_job(job_id)?;
                     return Ok(());
                 };
@@ -463,7 +467,7 @@ impl Simulation {
                         .expect("worker was checked above")
                         .set_movement(MovementState::Idle);
                     self.job_world
-                        .start_working(job_id, recipe_definition(recipe_id).work_ticks)
+                        .start_working(job_id, recipe_id.definition().work_ticks)
                         .map_err(SimulationError::from_job_world)?;
                 } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
                     self.job_world
@@ -578,7 +582,7 @@ impl Simulation {
                         .expect("worker was checked above")
                         .set_movement(MovementState::Idle);
                     self.job_world
-                        .start_working(job_id, site.kind().work_ticks())
+                        .start_working(job_id, site.kind().definition().work_ticks)
                         .map_err(SimulationError::from_job_world)?;
                 } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
                     let route = self.plan_navigation_route(worker_id, target)?;
@@ -788,11 +792,15 @@ impl Simulation {
                         .map_err(SimulationError::from_job_world)?;
                     return Ok(());
                 };
-                let Some(item_position) = self.item_world.get(item_id).and_then(|item| {
-                    (item.kind() == ItemKind::Berries)
-                        .then(|| item.ground_position())
-                        .flatten()
-                }) else {
+                let Some((item_position, nutrition)) =
+                    self.item_world.get(item_id).and_then(|item| {
+                        let nutrition = item.kind().definition().nutrition;
+                        (nutrition > 0)
+                            .then(|| item.ground_position())
+                            .flatten()
+                            .map(|position| (position, nutrition))
+                    })
+                else {
                     self.cancel_job(job_id)?;
                     return Ok(());
                 };
@@ -819,7 +827,7 @@ impl Simulation {
                 self.characters
                     .get_mut(&character_id)
                     .expect("eat worker is still present")
-                    .restore_satiety(BERRIES_MEAL_SATIETY);
+                    .restore_satiety(nutrition);
                 self.job_world
                     .remove(job_id)
                     .map_err(SimulationError::from_job_world)?;
@@ -903,43 +911,35 @@ impl Simulation {
             .resource_revision
             .checked_add(1)
             .ok_or(SimulationError::ResourceRevisionOverflow)?;
-        let renewable_ready_tick = if resource.kind() == NaturalResourceKind::BerryBush {
-            Some(SimulationTick::new(
+        let renewable_ready_tick = match resource.kind().definition().regrow_ticks {
+            Some(delay) => Some(SimulationTick::new(
                 self.clock
                     .tick()
                     .value()
-                    .checked_add(BERRY_BUSH_REGROW_TICKS)
+                    .checked_add(delay)
                     .ok_or(SimulationError::TickOverflow)?,
-            ))
-        } else {
-            None
+            )),
+            None => None,
         };
         let item_id = self.id_allocator.allocate()?;
-        let kind = match resource.kind() {
-            NaturalResourceKind::Tree => ItemKind::Wood,
-            NaturalResourceKind::StoneOutcrop => ItemKind::Stone,
-            NaturalResourceKind::BerryBush => ItemKind::Berries,
-        };
+        let kind = resource.kind().definition().yields;
         let quantity = ItemQuantity::new(resource.yield_quantity())
             .expect("worldgen natural-resource yields are positive");
         let position = WorldPosition::from_cell_center(source)?;
         self.item_world
             .insert_ground(ItemStack::new_ground(item_id, kind, quantity, position))
             .expect("allocated item IDs are unique and harvested outputs start on the ground");
-        match resource.kind() {
-            NaturalResourceKind::BerryBush => {
+        match renewable_ready_tick {
+            Some(ready_tick) => {
                 if self
                     .renewable_resource_regrowth
-                    .insert(
-                        source,
-                        renewable_ready_tick.expect("berry bushes precompute a regrowth tick"),
-                    )
+                    .insert(source, ready_tick)
                     .is_some()
                 {
                     return Err(SimulationError::JobInvariantViolation);
                 }
             }
-            NaturalResourceKind::Tree | NaturalResourceKind::StoneOutcrop => {
+            None => {
                 if !self.depleted_resources.insert(source) {
                     return Err(SimulationError::JobInvariantViolation);
                 }
@@ -960,6 +960,7 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::simulation::test_support::*;
+    use progressus_content::item;
 
     #[test]
     fn harvest_job_completes_into_one_physical_stack_and_cleans_reservation() {
@@ -998,10 +999,11 @@ mod tests {
             .items()
             .find(|item| item.id() == output_id)
             .unwrap();
-        let expected_kind = match resource.kind() {
-            NaturalResourceKind::Tree => ItemKind::Wood,
-            NaturalResourceKind::StoneOutcrop => ItemKind::Stone,
-            NaturalResourceKind::BerryBush => ItemKind::Berries,
+        let expected_kind = match resource.kind().name() {
+            "tree" => item::WOOD,
+            "stone_outcrop" => item::STONE,
+            "berry_bush" => item::BERRIES,
+            other => panic!("harvest fixture uses unexpected resource {other}"),
         };
         assert_eq!(output.kind(), expected_kind);
         assert_eq!(output.quantity().get(), resource.yield_quantity());
@@ -1124,10 +1126,11 @@ mod tests {
                 .unwrap();
         }
         let (source, resource) = harvest_fixture(&simulation);
-        let output_kind = match resource.kind() {
-            NaturalResourceKind::Tree => ItemKind::Wood,
-            NaturalResourceKind::StoneOutcrop => ItemKind::Stone,
-            NaturalResourceKind::BerryBush => ItemKind::Berries,
+        let output_kind = match resource.kind().name() {
+            "tree" => item::WOOD,
+            "stone_outcrop" => item::STONE,
+            "berry_bush" => item::BERRIES,
+            other => panic!("harvest fixture uses unexpected resource {other}"),
         };
         let initial_stockpile_quantity = simulation
             .items()

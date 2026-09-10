@@ -21,7 +21,7 @@ impl Simulation {
     pub fn set_stockpile_item_allowed(
         &mut self,
         stockpile_id: EntityId,
-        kind: ItemKind,
+        kind: ItemId,
         allowed: bool,
     ) -> Result<(), SimulationError> {
         if self.stockpile_world.get(stockpile_id).is_none() {
@@ -425,6 +425,7 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::simulation::test_support::*;
+    use progressus_content::{item, terrain};
 
     #[test]
     fn stockpile_cells_are_unique_validated_and_remove_when_empty() {
@@ -453,7 +454,7 @@ mod tests {
             .flat_map(|x| (-5..=5).map(move |y| WorldCell::new(x, y)))
             .find(|cell| {
                 simulation.is_explored(*cell)
-                    && simulation.effective_terrain_at(*cell).unwrap() != Terrain::Grass
+                    && simulation.effective_terrain_at(*cell).unwrap() != terrain::GRASS
             })
             .unwrap();
         assert_eq!(
@@ -557,7 +558,7 @@ mod tests {
         }
 
         let merged = simulation.item_world.get(target_id).unwrap();
-        assert_eq!(merged.kind(), ItemKind::Wood);
+        assert_eq!(merged.kind(), item::WOOD);
         assert_eq!(merged.quantity().get(), 18);
         assert_eq!(
             merged.ground_position().unwrap().containing_cell(),
@@ -659,9 +660,9 @@ mod tests {
         let rejected = simulation.create_stockpile(cells[0]).unwrap();
         let accepted = simulation.create_stockpile(cells[1]).unwrap();
         simulation
-            .set_stockpile_item_allowed(rejected, ItemKind::Wood, false)
+            .set_stockpile_item_allowed(rejected, item::WOOD, false)
             .unwrap();
-        let item_id = insert_ground_stack(&mut simulation, ItemKind::Wood, 4, cells[2]);
+        let item_id = insert_ground_stack(&mut simulation, item::WOOD, 4, cells[2]);
 
         assert_eq!(
             simulation
@@ -717,7 +718,7 @@ mod tests {
             .item_world
             .insert_ground(ItemStack::new_ground(
                 target_id,
-                ItemKind::Wood,
+                item::WOOD,
                 ItemQuantity::new(1020).unwrap(),
                 WorldPosition::from_cell_center(cells[0]).unwrap(),
             ))
@@ -726,7 +727,7 @@ mod tests {
             .item_world
             .insert_ground(ItemStack::new_ground(
                 source_id,
-                ItemKind::Wood,
+                item::WOOD,
                 ItemQuantity::new(10).unwrap(),
                 WorldPosition::from_cell_center(cells[1]).unwrap(),
             ))
@@ -764,7 +765,7 @@ mod tests {
         assert_eq!(
             simulation
                 .items()
-                .filter(|item| item.kind() == ItemKind::Wood)
+                .filter(|item| item.kind() == item::WOOD)
                 .map(|item| item.quantity().get())
                 .sum::<u32>(),
             1030
@@ -793,11 +794,11 @@ mod tests {
             simulation.advance_ticks(1).unwrap();
             let wood = simulation
                 .items()
-                .filter(|item| item.kind() == ItemKind::Wood)
+                .filter(|item| item.kind() == item::WOOD)
                 .count();
             let stone = simulation
                 .items()
-                .filter(|item| item.kind() == ItemKind::Stone)
+                .filter(|item| item.kind() == item::STONE)
                 .count();
             if wood == 1 && stone == 1 {
                 break;
@@ -806,11 +807,11 @@ mod tests {
 
         let wood = simulation
             .items()
-            .filter(|item| item.kind() == ItemKind::Wood)
+            .filter(|item| item.kind() == item::WOOD)
             .collect::<Vec<_>>();
         let stone = simulation
             .items()
-            .filter(|item| item.kind() == ItemKind::Stone)
+            .filter(|item| item.kind() == item::STONE)
             .collect::<Vec<_>>();
         assert_eq!(wood.len(), 1);
         assert_eq!(wood[0].quantity().get(), 18);

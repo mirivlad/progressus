@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+progressus-content = { path = "../progressus-content" }
 progressus-worldgen = { path = "../progressus-worldgen" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

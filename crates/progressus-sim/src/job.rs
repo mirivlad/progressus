@@ -679,7 +679,8 @@ pub(crate) enum JobWorldError {
 
 #[cfg(test)]
 mod tests {
-    use crate::{EntityId, RecipeId, WorldCell};
+    use crate::{EntityId, WorldCell};
+    use progressus_content::recipe;
 
     use super::{Job, JobKind, JobState, JobWorld};
 
@@ -762,7 +763,7 @@ mod tests {
             JobKind::Craft {
                 workstation_id: id(20),
                 order_id: id(25),
-                recipe_id: RecipeId::PrimitiveTool,
+                recipe_id: recipe::PRIMITIVE_TOOL,
             },
         ))
         .unwrap();

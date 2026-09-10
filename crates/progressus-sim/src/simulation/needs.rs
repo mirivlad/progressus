@@ -1,5 +1,7 @@
 //! Authoritative hunger: deterministic satiety decay and the physical Eat job.
 
+use progressus_content::{item, natural_resource};
+
 use super::*;
 
 impl Simulation {
@@ -39,7 +41,7 @@ impl Simulation {
                 .get(&character_id)
                 .is_some_and(Character::is_hungry);
             let valid_food = self.item_world.get(item_id).is_some_and(|item| {
-                item.kind() == ItemKind::Berries && item.ground_position().is_some()
+                item.kind() == item::BERRIES && item.ground_position().is_some()
             });
             if !valid_character || !valid_food {
                 self.cancel_job(job_id)?;
@@ -68,7 +70,7 @@ impl Simulation {
                 .iter()
                 .filter_map(|item| {
                     let position = item.ground_position()?;
-                    (item.kind() == ItemKind::Berries
+                    (item.kind() == item::BERRIES
                         && self.is_explored(position.containing_cell())
                         && self.job_world.item_job_for_item(item.id()).is_none())
                     .then_some((
@@ -182,7 +184,7 @@ impl Simulation {
                 let Some(resource) = self.natural_resource_at(cell)? else {
                     continue;
                 };
-                if resource.kind() == NaturalResourceKind::BerryBush
+                if resource.kind() == natural_resource::BERRY_BUSH
                     && self.job_world.harvest_job_for_source(cell).is_none()
                 {
                     candidates.push((cell_manhattan_distance(character_cell, cell), cell));
@@ -226,7 +228,7 @@ impl Simulation {
             return Ok(());
         }
         let Some(item_position) = self.item_world.get(item_id).and_then(|item| {
-            (item.kind() == ItemKind::Berries)
+            (item.kind() == item::BERRIES)
                 .then(|| item.ground_position())
                 .flatten()
         }) else {
@@ -294,7 +296,7 @@ mod tests {
             simulation
                 .item_world
                 .get(*item_id)
-                .is_some_and(|item| item.kind() == ItemKind::Berries && item.quantity().get() == 1)
+                .is_some_and(|item| item.kind() == item::BERRIES && item.quantity().get() == 1)
                 && matches!(state, JobState::Reserved { .. } | JobState::Working { .. })
         }));
         assert_eq!(total_berries(&simulation), BOOTSTRAP_BERRIES);
@@ -322,7 +324,7 @@ mod tests {
         let cora = cora();
         let food_position = simulation
             .items()
-            .find(|item| item.kind() == ItemKind::Berries)
+            .find(|item| item.kind() == item::BERRIES)
             .and_then(ItemStack::ground_position)
             .unwrap();
         place_on_grass(&mut simulation, cora, food_position.containing_cell());
@@ -343,7 +345,7 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         let source = WorldCell::new(-3, -3);
         let resource = simulation.natural_resource_at(source).unwrap().unwrap();
-        assert_eq!(resource.kind(), NaturalResourceKind::BerryBush);
+        assert_eq!(resource.kind(), natural_resource::BERRY_BUSH);
         let berries_before = total_berries(&simulation);
 
         let job_id = simulation.designate_harvest(source).unwrap();
@@ -360,7 +362,7 @@ mod tests {
             berries_before + resource.yield_quantity()
         );
         assert!(simulation.items().any(|item| {
-            item.kind() == ItemKind::Berries
+            item.kind() == item::BERRIES
                 && item.ground_position() == Some(WorldPosition::from_cell_center(source).unwrap())
         }));
 
@@ -379,7 +381,7 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         let initial_berries = simulation
             .items()
-            .filter(|item| item.kind() == ItemKind::Berries)
+            .filter(|item| item.kind() == item::BERRIES)
             .map(|item| (item.id(), item.quantity().get()))
             .collect::<Vec<_>>();
         for (item_id, quantity) in initial_berries {
@@ -391,7 +393,7 @@ mod tests {
                 .set_stockpile_cell(stockpile_id, cell, true)
                 .unwrap();
         }
-        for kind in [ItemKind::Wood, ItemKind::Stone, ItemKind::PrimitiveTool] {
+        for kind in [item::WOOD, item::STONE, item::PRIMITIVE_TOOL] {
             simulation
                 .set_stockpile_item_allowed(stockpile_id, kind, false)
                 .unwrap();
@@ -404,7 +406,7 @@ mod tests {
             simulation.advance_ticks(1).unwrap();
             stockpiled = simulation
                 .items()
-                .filter(|item| item.kind() == ItemKind::Berries)
+                .filter(|item| item.kind() == item::BERRIES)
                 .filter_map(ItemStack::ground_position)
                 .filter(|position| {
                     simulation.stockpile_at(position.containing_cell()) == Some(stockpile_id)
@@ -425,7 +427,7 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         let initial_berries = simulation
             .items()
-            .filter(|item| item.kind() == ItemKind::Berries)
+            .filter(|item| item.kind() == item::BERRIES)
             .map(|item| (item.id(), item.quantity().get()))
             .collect::<Vec<_>>();
         for (item_id, quantity) in initial_berries {
@@ -438,7 +440,7 @@ mod tests {
                 .set_stockpile_cell(stockpile_id, cell, true)
                 .unwrap();
         }
-        for kind in [ItemKind::Wood, ItemKind::Stone, ItemKind::PrimitiveTool] {
+        for kind in [item::WOOD, item::STONE, item::PRIMITIVE_TOOL] {
             simulation
                 .set_stockpile_item_allowed(stockpile_id, kind, false)
                 .unwrap();
@@ -471,7 +473,7 @@ mod tests {
             simulation
                 .generator
                 .natural_resource_at(WorldCell::new(-3, -3))
-                .is_some_and(|resource| resource.kind() == NaturalResourceKind::BerryBush)
+                .is_some_and(|resource| resource.kind() == natural_resource::BERRY_BUSH)
         );
     }
 
@@ -516,7 +518,7 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         let berries = simulation
             .items()
-            .find(|item| item.kind() == ItemKind::Berries)
+            .find(|item| item.kind() == item::BERRIES)
             .unwrap()
             .id();
         let berry_quantity = simulation.item_world.get(berries).unwrap().quantity().get();
@@ -528,7 +530,7 @@ mod tests {
             if simulation
                 .generator
                 .natural_resource_at(cell)
-                .is_some_and(|resource| resource.kind() == NaturalResourceKind::BerryBush)
+                .is_some_and(|resource| resource.kind() == natural_resource::BERRY_BUSH)
             {
                 simulation
                     .renewable_resource_regrowth

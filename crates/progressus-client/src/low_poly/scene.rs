@@ -1,7 +1,7 @@
 use super::*;
 use progressus_app::{
-    ChunkCoord, ChunkSnapshot, DoorState, ItemKind, LocalCell, NaturalResourceKind, SnapshotQuery,
-    StructureKind, WorldPosition,
+    ChunkCoord, ChunkSnapshot, DoorState, ItemId, LocalCell, SnapshotQuery, WorldPosition,
+    structure,
 };
 use std::collections::BTreeSet;
 
@@ -45,12 +45,13 @@ impl SceneCache {
     }
 }
 
-fn item_model(kind: ItemKind) -> ModelKind {
-    match kind {
-        ItemKind::Wood => ModelKind::Wood,
-        ItemKind::Stone => ModelKind::Stone,
-        ItemKind::PrimitiveTool => ModelKind::PrimitiveTool,
-        ItemKind::Berries => ModelKind::Berries,
+fn item_model(kind: ItemId) -> ModelKind {
+    match kind.name() {
+        "wood" => ModelKind::Wood,
+        "stone" => ModelKind::Stone,
+        "primitive_tool" => ModelKind::PrimitiveTool,
+        "berries" => ModelKind::Berries,
+        _ => ModelKind::Placeholder,
     }
 }
 fn object_transform(object: &Object, origin: WorldCell) -> Transform {
@@ -255,10 +256,11 @@ pub(crate) fn sync(
         }
     };
     for r in &cache.resources {
-        let kind = match r.kind {
-            NaturalResourceKind::Tree => ModelKind::Tree,
-            NaturalResourceKind::StoneOutcrop => ModelKind::StoneOutcrop,
-            NaturalResourceKind::BerryBush => ModelKind::BerryBush,
+        let kind = match r.kind.name() {
+            "tree" => ModelKind::Tree,
+            "stone_outcrop" => ModelKind::StoneOutcrop,
+            "berry_bush" => ModelKind::BerryBush,
+            _ => ModelKind::Placeholder,
         };
         let variant = (r.cell.x() as u64)
             .wrapping_mul(37)
@@ -277,15 +279,16 @@ pub(crate) fn sync(
         .chain(game.snapshot().construction_sites.iter().map(|s| s.cell))
         .collect();
     for s in &game.snapshot().structures {
-        let kind = match s.kind {
-            StructureKind::StoneWall => ModelKind::Wall,
-            StructureKind::Door => {
+        let kind = match s.kind.name() {
+            "stone_wall" => ModelKind::Wall,
+            "door" => {
                 if s.door_state == Some(DoorState::Open) {
                     ModelKind::OpenDoor
                 } else {
                     ModelKind::Door
                 }
             }
+            _ => ModelKind::Placeholder,
         };
         insert(
             ObjectKey::Structure(s.id),
@@ -298,7 +301,7 @@ pub(crate) fn sync(
     for s in &game.snapshot().construction_sites {
         insert(
             ObjectKey::Site(s.id),
-            if s.kind == StructureKind::Door {
+            if s.kind == structure::DOOR {
                 ModelKind::ConstructionDoor
             } else {
                 ModelKind::ConstructionWall

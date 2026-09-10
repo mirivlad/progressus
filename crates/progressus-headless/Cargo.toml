@@ -6,6 +6,7 @@ rust-version.workspace = true
 
 [dependencies]
 progressus-app = { path = "../progressus-app" }
+progressus-content = { path = "../progressus-content" }
 
 [[bin]]
 name = "progressus-headless"

@@ -1,5 +1,7 @@
 //! Player movement intent, route planning and per-tick authoritative motion.
 
+use progressus_content::terrain;
+
 use super::*;
 
 impl Simulation {
@@ -352,13 +354,13 @@ impl Simulation {
     }
 
     pub(super) fn is_walkable(&self, position: WorldCell) -> Result<bool, SimulationError> {
-        if self.effective_terrain_at(position)? != Terrain::Grass {
+        if self.effective_terrain_at(position)? != terrain::GRASS {
             return Ok(false);
         }
         Ok(self
             .construction_world
             .structure_kind_at(position)
-            .is_none_or(|kind| kind.navigation_cost().is_some()))
+            .is_none_or(|kind| kind.definition().navigation_cost.is_some()))
     }
 }
 
@@ -366,6 +368,7 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::simulation::test_support::*;
+    use progressus_content::structure;
 
     #[test]
     fn player_move_to_advances_through_newly_explored_terrain_to_the_intended_destination() {
@@ -375,7 +378,7 @@ mod tests {
         place_on_grass(&mut simulation, cora, WorldCell::new(0, 0));
         for x in 0..=20 {
             simulation
-                .set_terrain_override(WorldCell::new(x, 0), Terrain::Grass)
+                .set_terrain_override(WorldCell::new(x, 0), terrain::GRASS)
                 .unwrap();
         }
         simulation.advance_ticks(1).unwrap();
@@ -406,7 +409,7 @@ mod tests {
         place_on_grass(&mut simulation, cora, WorldCell::new(0, 0));
         for x in 0..20 {
             simulation
-                .set_terrain_override(WorldCell::new(x, 0), Terrain::Grass)
+                .set_terrain_override(WorldCell::new(x, 0), terrain::GRASS)
                 .unwrap();
         }
         for cell in [
@@ -416,7 +419,7 @@ mod tests {
             WorldCell::new(20, -1),
         ] {
             simulation
-                .set_terrain_override(cell, Terrain::Rock)
+                .set_terrain_override(cell, terrain::ROCK)
                 .unwrap();
         }
         simulation.advance_ticks(1).unwrap();
@@ -452,7 +455,7 @@ mod tests {
             let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
             let cora = cora();
             simulation
-                .set_terrain_override(destination.containing_cell(), Terrain::Grass)
+                .set_terrain_override(destination.containing_cell(), terrain::GRASS)
                 .unwrap();
             simulation.move_to(cora, destination).unwrap();
             simulation.advance_ticks(20).unwrap();
@@ -471,7 +474,7 @@ mod tests {
 
     #[test]
     fn exact_destination_near_blocked_terrain_remains_still_after_arrival() {
-        for blocked in [Terrain::Water, Terrain::Rock] {
+        for blocked in [terrain::WATER, terrain::ROCK] {
             let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
             let cora = cora();
             let (cell, direction) = find_raw_grass_with_neighbor(&simulation, blocked);
@@ -568,12 +571,12 @@ mod tests {
 
     #[test]
     fn persisted_movement_stops_on_water_at_last_valid_subunit() {
-        persisted_movement_stops_on(Terrain::Water);
+        persisted_movement_stops_on(terrain::WATER);
     }
 
     #[test]
     fn persisted_movement_stops_on_rock_at_last_valid_subunit() {
-        persisted_movement_stops_on(Terrain::Rock);
+        persisted_movement_stops_on(terrain::ROCK);
     }
 
     #[test]
@@ -622,9 +625,9 @@ mod tests {
 
     #[test]
     fn grass_overridden_to_blocked_terrain_stops_only_at_its_boundary() {
-        for blocked in [Terrain::Rock, Terrain::Water] {
+        for blocked in [terrain::ROCK, terrain::WATER] {
             let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
-            let (start, direction) = find_raw_grass_with_neighbor(&simulation, Terrain::Grass);
+            let (start, direction) = find_raw_grass_with_neighbor(&simulation, terrain::GRASS);
             let target = direction.adjacent(start).unwrap();
             let cora = cora();
             place_on_grass(&mut simulation, cora, start);
@@ -643,7 +646,7 @@ mod tests {
 
     #[test]
     fn blocked_terrain_overridden_to_grass_allows_continuous_step() {
-        for blocked in [Terrain::Water, Terrain::Rock] {
+        for blocked in [terrain::WATER, terrain::ROCK] {
             let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
             let (start, direction) = find_raw_grass_with_neighbor(&simulation, blocked);
             let target = direction.adjacent(start).unwrap();
@@ -651,7 +654,7 @@ mod tests {
             place_on_grass(&mut simulation, cora, start);
 
             simulation
-                .set_terrain_override(target, Terrain::Grass)
+                .set_terrain_override(target, terrain::GRASS)
                 .unwrap();
             simulation.set_movement_direction(cora, direction).unwrap();
             simulation.advance_ticks(4).unwrap();
@@ -800,10 +803,10 @@ mod tests {
         let first = WorldPosition::from_cell_center(WorldCell::new(1, 0)).unwrap();
         let blocked = WorldPosition::from_cell_center(WorldCell::new(2, 0)).unwrap();
         simulation
-            .set_terrain_override(WorldCell::new(1, 0), Terrain::Grass)
+            .set_terrain_override(WorldCell::new(1, 0), terrain::GRASS)
             .unwrap();
         simulation
-            .set_terrain_override(WorldCell::new(2, 0), Terrain::Rock)
+            .set_terrain_override(WorldCell::new(2, 0), terrain::ROCK)
             .unwrap();
         simulation.move_to(cora, first).unwrap();
         simulation.move_to(cora, blocked).unwrap();
@@ -831,7 +834,7 @@ mod tests {
         place_on_grass(&mut simulation, cora, WorldCell::new(0, 0));
         for x in 1..=2 {
             simulation
-                .set_terrain_override(WorldCell::new(x, 0), Terrain::Grass)
+                .set_terrain_override(WorldCell::new(x, 0), terrain::GRASS)
                 .unwrap();
         }
         simulation
@@ -842,7 +845,7 @@ mod tests {
             .unwrap();
         simulation.advance_ticks(1).unwrap();
         simulation
-            .set_terrain_override(WorldCell::new(1, 0), Terrain::Rock)
+            .set_terrain_override(WorldCell::new(1, 0), terrain::ROCK)
             .unwrap();
 
         simulation.advance_ticks(1).unwrap();
@@ -865,7 +868,7 @@ mod tests {
             destination_cell,
         ] {
             simulation
-                .set_terrain_override(cell, Terrain::Grass)
+                .set_terrain_override(cell, terrain::GRASS)
                 .unwrap();
         }
         for cell in [
@@ -877,7 +880,7 @@ mod tests {
             WorldCell::new(33, -1),
         ] {
             simulation
-                .set_terrain_override(cell, Terrain::Rock)
+                .set_terrain_override(cell, terrain::ROCK)
                 .unwrap();
         }
         place_on_grass(&mut simulation, cora, start);
@@ -901,7 +904,7 @@ mod tests {
         let destination_cell = WorldCell::new(-1, 0);
         for cell in [start, destination_cell] {
             simulation
-                .set_terrain_override(cell, Terrain::Grass)
+                .set_terrain_override(cell, terrain::GRASS)
                 .unwrap();
         }
         place_on_grass(&mut simulation, cora, start);
@@ -923,7 +926,7 @@ mod tests {
         place_on_grass(&mut simulation, cora, start);
         for cell in [WorldCell::new(1, 0), WorldCell::new(2, 0)] {
             simulation
-                .set_terrain_override(cell, Terrain::Grass)
+                .set_terrain_override(cell, terrain::GRASS)
                 .unwrap();
         }
         let destination = WorldPosition::from_cell_center(WorldCell::new(2, 0)).unwrap();
@@ -957,7 +960,7 @@ mod tests {
         let target = WorldCell::new(1, 0);
         place_on_grass(&mut simulation, cora, start);
         simulation
-            .set_terrain_override(target, Terrain::Grass)
+            .set_terrain_override(target, terrain::GRASS)
             .unwrap();
 
         simulation
@@ -973,7 +976,7 @@ mod tests {
         ));
 
         simulation
-            .set_terrain_override(target, Terrain::Rock)
+            .set_terrain_override(target, terrain::ROCK)
             .unwrap();
         simulation.advance_ticks(1).unwrap();
         assert_eq!(character(&simulation, cora).position().x_subunits(), 1023);
@@ -998,7 +1001,7 @@ mod tests {
         place_on_grass(&mut simulation, cora, start);
         for x in 1..=3 {
             simulation
-                .set_terrain_override(WorldCell::new(x, 0), Terrain::Grass)
+                .set_terrain_override(WorldCell::new(x, 0), terrain::GRASS)
                 .unwrap();
         }
         character_mut(&mut simulation, cora).set_speed(MovementSpeed::new(2_500).unwrap());
@@ -1070,11 +1073,11 @@ mod tests {
             let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
             let cora = cora();
             simulation
-                .set_terrain_override(start, Terrain::Grass)
+                .set_terrain_override(start, terrain::GRASS)
                 .unwrap();
             place_on_grass(&mut simulation, cora, start);
             simulation
-                .set_terrain_override(target, Terrain::Water)
+                .set_terrain_override(target, terrain::WATER)
                 .unwrap();
             character_mut(&mut simulation, cora).set_speed(MovementSpeed::new(2_000).unwrap());
             simulation.set_movement_direction(cora, direction).unwrap();
@@ -1086,7 +1089,7 @@ mod tests {
             assert_eq!(position.containing_cell(), start);
             assert_eq!(
                 simulation.effective_terrain_at(start).unwrap(),
-                Terrain::Grass
+                terrain::GRASS
             );
             assert_eq!(character(&simulation, cora).movement(), MovementState::Idle);
         }
@@ -1137,7 +1140,7 @@ mod tests {
         for y in 0..=1 {
             for x in 0..=4 {
                 simulation
-                    .set_terrain_override(WorldCell::new(x, y), Terrain::Grass)
+                    .set_terrain_override(WorldCell::new(x, y), terrain::GRASS)
                     .unwrap();
             }
         }
@@ -1146,7 +1149,7 @@ mod tests {
             let id = simulation.id_allocator.allocate().unwrap();
             simulation
                 .construction_world
-                .insert_site(ConstructionSite::new(id, StructureKind::Door, cell))
+                .insert_site(ConstructionSite::new(id, structure::DOOR, cell))
                 .unwrap();
             simulation.construction_world.complete_site(id).unwrap();
         }
@@ -1158,7 +1161,7 @@ mod tests {
         assert!(path.iter().any(|cell| cell.y() == 1));
         assert!(
             path.iter()
-                .all(|cell| simulation.structure_kind_at(*cell) != Some(StructureKind::Door))
+                .all(|cell| simulation.structure_kind_at(*cell) != Some(structure::DOOR))
         );
     }
 }

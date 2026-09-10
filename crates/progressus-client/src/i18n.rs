@@ -1,6 +1,6 @@
 use bevy::prelude::Resource;
 use progressus_app::{
-    Direction, ItemCategory, ItemKind, JobKind, JobState, MovementState, RecipeId, WorkstationKind,
+    Direction, ItemCategory, ItemId, JobKind, JobState, MovementState, RecipeId, WorkstationId,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
@@ -44,7 +44,6 @@ pub(crate) enum TextKey {
     AddOrder,
     Delete,
     Close,
-    PrimitiveTool,
     NoOrders,
     RemoveWorkstation,
     Logistics,
@@ -73,6 +72,46 @@ pub(crate) enum TextKey {
     NoneValue,
 }
 
+/// Localized content names, keyed by the stable name each definition owns.
+/// Adding content without adding a row here is caught by a test rather than by
+/// the compiler; see ADR-0021.
+const CONTENT_NAMES: &[(&str, &str, &str, &str)] = &[
+    ("item", "wood", "Дерево", "Wood"),
+    ("item", "stone", "Камень", "Stone"),
+    (
+        "item",
+        "primitive_tool",
+        "Примитивный инструмент",
+        "Primitive tool",
+    ),
+    ("item", "berries", "Ягоды", "Berries"),
+    ("structure", "stone_wall", "Каменная стена", "Stone wall"),
+    ("structure", "door", "Дверь", "Door"),
+    ("workstation", "workbench", "Верстак", "Workbench"),
+    (
+        "recipe",
+        "primitive_tool",
+        "Примитивный инструмент",
+        "Primitive tool",
+    ),
+    ("terrain", "grass", "Трава", "Grass"),
+    ("terrain", "water", "Вода", "Water"),
+    ("terrain", "rock", "Скала", "Rock"),
+    ("natural_resource", "tree", "Дерево", "Tree"),
+    (
+        "natural_resource",
+        "stone_outcrop",
+        "Каменный выход",
+        "Stone outcrop",
+    ),
+    (
+        "natural_resource",
+        "berry_bush",
+        "Ягодный куст",
+        "Berry bush",
+    ),
+];
+
 impl Locale {
     pub(crate) const fn tr(self, key: TextKey) -> &'static str {
         match (self.language, key) {
@@ -94,7 +133,6 @@ impl Locale {
             (Language::Ru, TextKey::AddOrder) => "Добавить",
             (Language::Ru, TextKey::Delete) => "Удалить",
             (Language::Ru, TextKey::Close) => "Закрыть",
-            (Language::Ru, TextKey::PrimitiveTool) => "Примитивный инструмент",
             (Language::Ru, TextKey::NoOrders) => "Заданий пока нет",
             (Language::Ru, TextKey::RemoveWorkstation) => "Убрать верстак",
             (Language::Ru, TextKey::Logistics) => "Логистика",
@@ -139,7 +177,6 @@ impl Locale {
             (Language::En, TextKey::AddOrder) => "Add",
             (Language::En, TextKey::Delete) => "Delete",
             (Language::En, TextKey::Close) => "Close",
-            (Language::En, TextKey::PrimitiveTool) => "Primitive tool",
             (Language::En, TextKey::NoOrders) => "No orders yet",
             (Language::En, TextKey::RemoveWorkstation) => "Remove workbench",
             (Language::En, TextKey::Logistics) => "Logistics",
@@ -169,16 +206,24 @@ impl Locale {
         }
     }
 
-    pub(crate) const fn recipe_name(self, recipe_id: RecipeId) -> &'static str {
-        match recipe_id {
-            RecipeId::PrimitiveTool => self.tr(TextKey::PrimitiveTool),
-        }
+    pub(crate) fn recipe_name(self, recipe_id: RecipeId) -> &'static str {
+        self.content_name("recipe", recipe_id.name())
     }
 
-    pub(crate) const fn workstation_name(self, kind: WorkstationKind) -> &'static str {
-        match kind {
-            WorkstationKind::Workbench => self.tr(TextKey::Workbench),
-        }
+    pub(crate) fn workstation_name(self, kind: WorkstationId) -> &'static str {
+        self.content_name("workstation", kind.name())
+    }
+
+    /// Content is translated by its stable name. An untranslated definition
+    /// shows that name rather than crashing the client or hiding the gap.
+    fn content_name(self, kind: &str, name: &'static str) -> &'static str {
+        CONTENT_NAMES
+            .iter()
+            .find(|(entry_kind, entry_name, _, _)| *entry_kind == kind && *entry_name == name)
+            .map_or(name, |(_, _, ru, en)| match self.language {
+                Language::Ru => ru,
+                Language::En => en,
+            })
     }
 
     pub(crate) const fn direction_name(self, direction: Direction) -> &'static str {
@@ -207,17 +252,8 @@ impl Locale {
         }
     }
 
-    pub(crate) const fn item_name(self, kind: ItemKind) -> &'static str {
-        match (self.language, kind) {
-            (Language::Ru, ItemKind::Wood) => "Дерево",
-            (Language::Ru, ItemKind::Stone) => "Камень",
-            (Language::Ru, ItemKind::PrimitiveTool) => "Примитивный инструмент",
-            (Language::Ru, ItemKind::Berries) => "Ягоды",
-            (Language::En, ItemKind::Wood) => "Wood",
-            (Language::En, ItemKind::Stone) => "Stone",
-            (Language::En, ItemKind::PrimitiveTool) => "Primitive tool",
-            (Language::En, ItemKind::Berries) => "Berries",
-        }
+    pub(crate) fn item_name(self, kind: ItemId) -> &'static str {
+        self.content_name("item", kind.name())
     }
 
     pub(crate) const fn item_category_name(self, category: ItemCategory) -> &'static str {
@@ -266,6 +302,48 @@ impl Locale {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use progressus_app::{NaturalResourceId, StructureId, TerrainId, item};
+
+    /// The compiler can no longer demand a translation for new content, so this
+    /// test does. See ADR-0021.
+    #[test]
+    fn every_content_definition_is_translated_in_every_language() {
+        let entries: Vec<(&str, &str)> = ItemId::all()
+            .map(|id| ("item", id.name()))
+            .chain(StructureId::all().map(|id| ("structure", id.name())))
+            .chain(WorkstationId::all().map(|id| ("workstation", id.name())))
+            .chain(RecipeId::all().map(|id| ("recipe", id.name())))
+            .chain(TerrainId::all().map(|id| ("terrain", id.name())))
+            .chain(NaturalResourceId::all().map(|id| ("natural_resource", id.name())))
+            .collect();
+        for (kind, name) in entries {
+            let row = CONTENT_NAMES
+                .iter()
+                .find(|(entry_kind, entry_name, _, _)| *entry_kind == kind && *entry_name == name);
+            let Some((_, _, ru, en)) = row else {
+                panic!("{kind} {name} has no localized name");
+            };
+            assert!(!ru.is_empty(), "{kind} {name} has no Russian name");
+            assert!(!en.is_empty(), "{kind} {name} has no English name");
+        }
+    }
+
+    #[test]
+    fn untranslated_content_falls_back_to_its_stable_name() {
+        let locale = Locale {
+            language: Language::Ru,
+        };
+        assert_eq!(locale.content_name("item", "copper_ore"), "copper_ore");
+        assert_eq!(locale.item_name(item::WOOD), "Дерево");
+        assert_eq!(
+            Locale {
+                language: Language::En
+            }
+            .item_name(item::WOOD),
+            "Wood"
+        );
+    }
     use super::{Language, Locale, TextKey};
 
     #[test]

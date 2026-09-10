@@ -557,12 +557,11 @@ pub(crate) fn sync_stockpile_inspector(
         }
         return;
     };
-    let allowed = progressus_app::ItemKind::ALL
-        .into_iter()
+    let allowed = progressus_app::ItemId::all()
         .filter(|kind| !stockpile.disallowed_items.contains(kind))
         .map(|kind| locale.item_name(kind))
         .collect::<Vec<_>>();
-    let allowed = if allowed.len() == progressus_app::ItemKind::ALL.len() {
+    let allowed = if allowed.len() == progressus_app::ItemId::all().len() {
         match locale.language {
             Language::Ru => "все".to_owned(),
             Language::En => "all".to_owned(),

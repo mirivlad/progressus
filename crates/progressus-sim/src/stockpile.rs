@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{EntityId, ItemKind, WorldCell};
+use crate::{EntityId, ItemId, WorldCell};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Stockpile {
     id: EntityId,
     cells: BTreeSet<WorldCell>,
-    disallowed_items: BTreeSet<ItemKind>,
+    disallowed_items: BTreeSet<ItemId>,
 }
 
 impl Stockpile {
@@ -30,11 +30,11 @@ impl Stockpile {
         self.cells.contains(&cell)
     }
 
-    pub fn accepts(&self, kind: ItemKind) -> bool {
+    pub fn accepts(&self, kind: ItemId) -> bool {
         !self.disallowed_items.contains(&kind)
     }
 
-    pub fn disallowed_items(&self) -> impl ExactSizeIterator<Item = ItemKind> + '_ {
+    pub fn disallowed_items(&self) -> impl ExactSizeIterator<Item = ItemId> + '_ {
         self.disallowed_items.iter().copied()
     }
 }
@@ -87,7 +87,7 @@ impl StockpileWorld {
     pub(crate) fn set_item_allowed(
         &mut self,
         stockpile_id: EntityId,
-        kind: ItemKind,
+        kind: ItemId,
         allowed: bool,
     ) -> Result<(), StockpileWorldError> {
         let stockpile = self
@@ -185,6 +185,7 @@ pub(crate) enum StockpileWorldError {
 #[cfg(test)]
 mod tests {
     use crate::{EntityId, WorldCell};
+    use progressus_content::item;
 
     use super::{Stockpile, StockpileWorld, StockpileWorldError};
 
@@ -200,43 +201,23 @@ mod tests {
             .insert(Stockpile::new(stockpile_id, WorldCell::new(1, 2)))
             .unwrap();
         let revision = world.revision();
-        assert!(
-            world
-                .get(stockpile_id)
-                .unwrap()
-                .accepts(crate::ItemKind::Wood)
-        );
-        assert!(
-            world
-                .get(stockpile_id)
-                .unwrap()
-                .accepts(crate::ItemKind::Berries)
-        );
+        assert!(world.get(stockpile_id).unwrap().accepts(item::WOOD));
+        assert!(world.get(stockpile_id).unwrap().accepts(item::BERRIES));
 
         world
-            .set_item_allowed(stockpile_id, crate::ItemKind::Wood, false)
+            .set_item_allowed(stockpile_id, item::WOOD, false)
             .unwrap();
-        assert!(
-            !world
-                .get(stockpile_id)
-                .unwrap()
-                .accepts(crate::ItemKind::Wood)
-        );
+        assert!(!world.get(stockpile_id).unwrap().accepts(item::WOOD));
         assert_eq!(world.revision(), revision + 1);
 
         world
-            .set_item_allowed(stockpile_id, crate::ItemKind::Wood, false)
+            .set_item_allowed(stockpile_id, item::WOOD, false)
             .unwrap();
         assert_eq!(world.revision(), revision + 1);
         world
-            .set_item_allowed(stockpile_id, crate::ItemKind::Wood, true)
+            .set_item_allowed(stockpile_id, item::WOOD, true)
             .unwrap();
-        assert!(
-            world
-                .get(stockpile_id)
-                .unwrap()
-                .accepts(crate::ItemKind::Wood)
-        );
+        assert!(world.get(stockpile_id).unwrap().accepts(item::WOOD));
         assert_eq!(world.revision(), revision + 2);
     }
 

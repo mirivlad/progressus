@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use progressus_content::terrain;
 
     #[test]
     fn base_equal_write_removes_override_and_empty_chunk_delta() {
@@ -8,11 +9,11 @@ mod tests {
         let local = LocalCell::new(3, 5);
         let mut world = ModifiedWorld::default();
 
-        world.set_override(coordinate, local, Terrain::Grass, Terrain::Rock);
+        world.set_override(coordinate, local, terrain::GRASS, terrain::ROCK);
         assert_eq!(world.chunks.len(), 1);
-        assert_eq!(world.chunks[&coordinate].overrides[&local], Terrain::Rock);
+        assert_eq!(world.chunks[&coordinate].overrides[&local], terrain::ROCK);
 
-        world.set_override(coordinate, local, Terrain::Grass, Terrain::Grass);
+        world.set_override(coordinate, local, terrain::GRASS, terrain::GRASS);
         assert!(world.chunks.is_empty());
     }
 
@@ -22,9 +23,9 @@ mod tests {
         let local = LocalCell::new(31, 0);
         let mut changed = ModifiedWorld::default();
 
-        changed.set_override(coordinate, local, Terrain::Grass, Terrain::Rock);
-        changed.set_override(coordinate, local, Terrain::Grass, Terrain::Water);
-        changed.set_override(coordinate, local, Terrain::Grass, Terrain::Grass);
+        changed.set_override(coordinate, local, terrain::GRASS, terrain::ROCK);
+        changed.set_override(coordinate, local, terrain::GRASS, terrain::WATER);
+        changed.set_override(coordinate, local, terrain::GRASS, terrain::GRASS);
 
         assert_eq!(changed, ModifiedWorld::default());
     }
@@ -35,18 +36,18 @@ mod tests {
         let second = (ChunkCoord::new(7_000, -8_000), LocalCell::new(30, 31));
         let mut world = ModifiedWorld::default();
 
-        world.set_override(first.0, first.1, Terrain::Grass, Terrain::Rock);
-        world.set_override(second.0, second.1, Terrain::Water, Terrain::Grass);
-        world.set_override(first.0, first.1, Terrain::Grass, Terrain::Grass);
+        world.set_override(first.0, first.1, terrain::GRASS, terrain::ROCK);
+        world.set_override(second.0, second.1, terrain::WATER, terrain::GRASS);
+        world.set_override(first.0, first.1, terrain::GRASS, terrain::GRASS);
 
         assert!(!world.chunks.contains_key(&first.0));
-        assert_eq!(world.override_at(second.0, second.1), Some(Terrain::Grass));
+        assert_eq!(world.override_at(second.0, second.1), Some(terrain::GRASS));
     }
 }
 
 use std::collections::BTreeMap;
 
-use crate::{CHUNK_SIDE, ChunkCoord, LocalCell, Terrain};
+use crate::{CHUNK_SIDE, ChunkCoord, LocalCell, TerrainId};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ModifiedWorld {
@@ -55,11 +56,13 @@ pub(crate) struct ModifiedWorld {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct ChunkDelta {
-    overrides: BTreeMap<LocalCell, Terrain>,
+    overrides: BTreeMap<LocalCell, TerrainId>,
 }
 
 impl ModifiedWorld {
-    pub(crate) fn overrides(&self) -> impl Iterator<Item = (ChunkCoord, LocalCell, Terrain)> + '_ {
+    pub(crate) fn overrides(
+        &self,
+    ) -> impl Iterator<Item = (ChunkCoord, LocalCell, TerrainId)> + '_ {
         self.chunks.iter().flat_map(|(coordinate, delta)| {
             delta
                 .overrides
@@ -72,7 +75,7 @@ impl ModifiedWorld {
         &mut self,
         coordinate: ChunkCoord,
         local: LocalCell,
-        terrain: Terrain,
+        terrain: TerrainId,
     ) {
         self.chunks
             .entry(coordinate)
@@ -81,7 +84,11 @@ impl ModifiedWorld {
             .insert(local, terrain);
     }
 
-    pub(crate) fn override_at(&self, coordinate: ChunkCoord, local: LocalCell) -> Option<Terrain> {
+    pub(crate) fn override_at(
+        &self,
+        coordinate: ChunkCoord,
+        local: LocalCell,
+    ) -> Option<TerrainId> {
         self.chunks
             .get(&coordinate)
             .and_then(|delta| delta.overrides.get(&local))
@@ -92,8 +99,8 @@ impl ModifiedWorld {
         &mut self,
         coordinate: ChunkCoord,
         local: LocalCell,
-        base: Terrain,
-        requested: Terrain,
+        base: TerrainId,
+        requested: TerrainId,
     ) {
         if requested != base {
             self.chunks
@@ -119,11 +126,11 @@ impl ModifiedWorld {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EffectiveChunk {
     coordinate: ChunkCoord,
-    cells: Vec<Terrain>,
+    cells: Vec<TerrainId>,
 }
 
 impl EffectiveChunk {
-    pub(crate) fn new(coordinate: ChunkCoord, cells: Vec<Terrain>) -> Self {
+    pub(crate) fn new(coordinate: ChunkCoord, cells: Vec<TerrainId>) -> Self {
         Self { coordinate, cells }
     }
 
@@ -131,11 +138,11 @@ impl EffectiveChunk {
         self.coordinate
     }
 
-    pub fn cells(&self) -> &[Terrain] {
+    pub fn cells(&self) -> &[TerrainId] {
         &self.cells
     }
 
-    pub fn terrain_at(&self, local: LocalCell) -> Option<Terrain> {
+    pub fn terrain_at(&self, local: LocalCell) -> Option<TerrainId> {
         if local.x() >= CHUNK_SIDE || local.y() >= CHUNK_SIDE {
             return None;
         }

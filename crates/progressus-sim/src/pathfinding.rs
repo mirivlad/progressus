@@ -1,9 +1,9 @@
+use progressus_content::terrain;
+
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, btree_map::Entry};
 
-use crate::{
-    ChunkCoord, Direction, EffectiveChunk, Simulation, SimulationError, Terrain, WorldCell,
-};
+use crate::{ChunkCoord, Direction, EffectiveChunk, Simulation, SimulationError, WorldCell};
 
 pub(crate) const PATHFINDING_NODE_BUDGET: usize = 50_000;
 
@@ -196,7 +196,7 @@ fn traversal_cost(
         return Ok(None);
     }
     let structure_cost = match simulation.structure_kind_at(cell) {
-        Some(kind) => match kind.navigation_cost() {
+        Some(kind) => match kind.definition().navigation_cost {
             Some(cost) => cost,
             None => return Ok(None),
         },
@@ -206,7 +206,7 @@ fn traversal_cost(
     if let Entry::Vacant(entry) = chunks.entry(coordinate) {
         entry.insert(simulation.effective_chunk(coordinate)?);
     }
-    Ok((chunks[&coordinate].terrain_at(local) == Some(Terrain::Grass)).then_some(structure_cost))
+    Ok((chunks[&coordinate].terrain_at(local) == Some(terrain::GRASS)).then_some(structure_cost))
 }
 
 fn manhattan(first: WorldCell, second: WorldCell) -> u128 {
@@ -228,7 +228,8 @@ fn reconstruct_path(
 
 #[cfg(test)]
 mod tests {
-    use crate::{Simulation, Terrain, WorldCell, WorldSeed};
+    use crate::{Simulation, WorldCell, WorldSeed};
+    use progressus_content::terrain;
 
     use super::{PathfindingError, find_path, find_path_with_budget};
 
@@ -247,11 +248,11 @@ mod tests {
             WorldCell::new(2, -1),
         ] {
             simulation
-                .set_terrain_override(cell, Terrain::Grass)
+                .set_terrain_override(cell, terrain::GRASS)
                 .unwrap();
         }
         simulation
-            .set_terrain_override(WorldCell::new(1, 0), Terrain::Rock)
+            .set_terrain_override(WorldCell::new(1, 0), terrain::ROCK)
             .unwrap();
 
         assert_eq!(
@@ -271,11 +272,11 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
         for cell in [WorldCell::new(1, 0), WorldCell::new(2, 0)] {
             simulation
-                .set_terrain_override(cell, Terrain::Grass)
+                .set_terrain_override(cell, terrain::GRASS)
                 .unwrap();
         }
         simulation
-            .set_terrain_override(WorldCell::new(0, 0), Terrain::Rock)
+            .set_terrain_override(WorldCell::new(0, 0), terrain::ROCK)
             .unwrap();
 
         assert_eq!(
@@ -299,7 +300,7 @@ mod tests {
             WorldCell::new(0, -1),
         ] {
             simulation
-                .set_terrain_override(cell, Terrain::Grass)
+                .set_terrain_override(cell, terrain::GRASS)
                 .unwrap();
         }
         for cell in [
@@ -309,7 +310,7 @@ mod tests {
             WorldCell::new(0, -1),
         ] {
             simulation
-                .set_terrain_override(cell, Terrain::Rock)
+                .set_terrain_override(cell, terrain::ROCK)
                 .unwrap();
         }
         assert_eq!(
@@ -325,7 +326,7 @@ mod tests {
         );
 
         simulation
-            .set_terrain_override(WorldCell::new(1, 0), Terrain::Grass)
+            .set_terrain_override(WorldCell::new(1, 0), terrain::GRASS)
             .unwrap();
         assert_eq!(
             find_path_with_budget(
@@ -349,7 +350,7 @@ mod tests {
             WorldCell::new(2, 0),
         ] {
             simulation
-                .set_terrain_override(cell, Terrain::Grass)
+                .set_terrain_override(cell, terrain::GRASS)
                 .unwrap();
         }
         for cell in [
@@ -358,18 +359,18 @@ mod tests {
             WorldCell::new(0, -1),
         ] {
             simulation
-                .set_terrain_override(cell, Terrain::Rock)
+                .set_terrain_override(cell, terrain::ROCK)
                 .unwrap();
         }
         simulation
-            .set_terrain_override(WorldCell::new(1, 0), Terrain::Rock)
+            .set_terrain_override(WorldCell::new(1, 0), terrain::ROCK)
             .unwrap();
         assert_eq!(
             find_path(&simulation, WorldCell::new(0, 0), WorldCell::new(2, 0)).unwrap(),
             Err(PathfindingError::PathNotFound)
         );
         simulation
-            .set_terrain_override(WorldCell::new(1, 0), Terrain::Grass)
+            .set_terrain_override(WorldCell::new(1, 0), terrain::GRASS)
             .unwrap();
         assert_eq!(
             find_path(&simulation, WorldCell::new(0, 0), WorldCell::new(2, 0)).unwrap(),
@@ -386,7 +387,7 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(2)).unwrap();
         for cell in [WorldCell::new(31, 0), WorldCell::new(32, 0)] {
             simulation
-                .set_terrain_override(cell, Terrain::Grass)
+                .set_terrain_override(cell, terrain::GRASS)
                 .unwrap();
         }
         assert_eq!(

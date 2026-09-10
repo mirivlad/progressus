@@ -3,8 +3,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     use progressus_app::{
-        CharacterSnapshot, ChunkCoord, GroundItemSnapshot, ItemKind, MovementState,
-        NaturalResourceKind, NaturalResourceSnapshot, WorldCell, WorldPosition,
+        CharacterSnapshot, ChunkCoord, GroundItemSnapshot, MovementState, NaturalResourceSnapshot,
+        WorldCell, WorldPosition, item, natural_resource,
     };
 
     use super::{
@@ -90,7 +90,7 @@ mod tests {
         ]);
         let item = GroundItemSnapshot {
             id: progressus_app::EntityId::new(6).unwrap(),
-            kind: ItemKind::Wood,
+            kind: item::WOOD,
             quantity: 8,
             position: WorldPosition::from_subunits(-1888, 180).unwrap(),
         };
@@ -109,7 +109,7 @@ mod tests {
         let rendered = BTreeSet::from([WorldCell::new(2, 3), WorldCell::new(9, 9)]);
         let resource = NaturalResourceSnapshot {
             cell: WorldCell::new(2, 3),
-            kind: NaturalResourceKind::Tree,
+            kind: natural_resource::TREE,
             yield_quantity: 6,
         };
 

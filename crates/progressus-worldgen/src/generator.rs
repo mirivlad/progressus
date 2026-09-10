@@ -1,6 +1,8 @@
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 
+use progressus_content::{NaturalResourceId, TerrainId, natural_resource, terrain};
+
 use crate::{CHUNK_SIDE, ChunkCoord, LocalCell, WorldCell};
 
 pub const CURRENT_WORLDGEN_VERSION: WorldgenVersion = WorldgenVersion::new(3);
@@ -31,35 +33,21 @@ impl WorldgenVersion {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum Terrain {
-    Grass,
-    Water,
-    Rock,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum NaturalResourceKind {
-    Tree,
-    StoneOutcrop,
-    BerryBush,
-}
-
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct NaturalResource {
-    kind: NaturalResourceKind,
+    kind: NaturalResourceId,
     yield_quantity: u32,
 }
 
 impl NaturalResource {
-    const fn new(kind: NaturalResourceKind, yield_quantity: u32) -> Self {
+    const fn new(kind: NaturalResourceId, yield_quantity: u32) -> Self {
         Self {
             kind,
             yield_quantity,
         }
     }
 
-    pub const fn kind(self) -> NaturalResourceKind {
+    pub const fn kind(self) -> NaturalResourceId {
         self.kind
     }
 
@@ -71,7 +59,7 @@ impl NaturalResource {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GeneratedChunk {
     coordinate: ChunkCoord,
-    cells: Vec<Terrain>,
+    cells: Vec<TerrainId>,
     resources: Vec<Option<NaturalResource>>,
 }
 
@@ -80,7 +68,7 @@ impl GeneratedChunk {
         self.coordinate
     }
 
-    pub fn cells(&self) -> &[Terrain] {
+    pub fn cells(&self) -> &[TerrainId] {
         &self.cells
     }
 
@@ -88,7 +76,7 @@ impl GeneratedChunk {
         &self.resources
     }
 
-    pub fn terrain_at(&self, local: LocalCell) -> Option<Terrain> {
+    pub fn terrain_at(&self, local: LocalCell) -> Option<TerrainId> {
         self.cells.get(local_index(local)?).copied()
     }
 
@@ -120,7 +108,7 @@ impl WorldGenerator {
         self.version
     }
 
-    pub fn terrain_at(self, cell: WorldCell) -> Terrain {
+    pub fn terrain_at(self, cell: WorldCell) -> TerrainId {
         match self.version.value() {
             1 => terrain_v1(self.seed, self.version, cell),
             2 | 3 => terrain_v2(self.seed, cell),
@@ -199,9 +187,9 @@ fn local_index(local: LocalCell) -> Option<usize> {
     Some(usize::from(local.y()) * usize::from(CHUNK_SIDE) + usize::from(local.x()))
 }
 
-fn terrain_v1(seed: WorldSeed, version: WorldgenVersion, cell: WorldCell) -> Terrain {
+fn terrain_v1(seed: WorldSeed, version: WorldgenVersion, cell: WorldCell) -> TerrainId {
     if (-2..=2).contains(&cell.x()) && cell.y() == 0 {
-        return Terrain::Grass;
+        return terrain::GRASS;
     }
 
     let mut sample = mix64(seed.value() ^ 0x6a09_e667_f3bc_c909);
@@ -210,9 +198,9 @@ fn terrain_v1(seed: WorldSeed, version: WorldgenVersion, cell: WorldCell) -> Ter
     sample = mix64(sample ^ (cell.y() as u64).rotate_left(32));
 
     match sample % 100 {
-        0..=14 => Terrain::Water,
-        15..=29 => Terrain::Rock,
-        _ => Terrain::Grass,
+        0..=14 => terrain::WATER,
+        15..=29 => terrain::ROCK,
+        _ => terrain::GRASS,
     }
 }
 
@@ -220,9 +208,9 @@ fn natural_resource_v1(
     seed: WorldSeed,
     version: WorldgenVersion,
     cell: WorldCell,
-    terrain: Terrain,
+    terrain: TerrainId,
 ) -> Option<NaturalResource> {
-    if terrain != Terrain::Grass || ((-2..=2).contains(&cell.x()) && cell.y() == 0) {
+    if terrain != terrain::GRASS || ((-2..=2).contains(&cell.x()) && cell.y() == 0) {
         return None;
     }
 
@@ -231,8 +219,8 @@ fn natural_resource_v1(
     sample = mix64(sample ^ cell.x() as u64);
     sample = mix64(sample ^ (cell.y() as u64).rotate_left(32));
     let kind = match sample % 100 {
-        0..=17 => NaturalResourceKind::Tree,
-        18..=25 => NaturalResourceKind::StoneOutcrop,
+        0..=17 => natural_resource::TREE,
+        18..=25 => natural_resource::STONE_OUTCROP,
         _ => return None,
     };
     let yield_quantity = 4 + ((sample >> 32) % 5) as u32;
@@ -242,9 +230,9 @@ fn natural_resource_v1(
 const TERRAIN_FEATURE_REGION: i64 = 10;
 const FOREST_FEATURE_REGION: i64 = 12;
 
-fn terrain_v2(seed: WorldSeed, cell: WorldCell) -> Terrain {
+fn terrain_v2(seed: WorldSeed, cell: WorldCell) -> TerrainId {
     if spawn_clearing(cell, 4) {
-        return Terrain::Grass;
+        return terrain::GRASS;
     }
 
     let region_x = cell.x().div_euclid(TERRAIN_FEATURE_REGION);
@@ -271,20 +259,20 @@ fn terrain_v2(seed: WorldSeed, cell: WorldCell) -> Terrain {
                 continue;
             }
             if roll < 20 {
-                return Terrain::Water;
+                return terrain::WATER;
             }
             rock = true;
         }
     }
-    if rock { Terrain::Rock } else { Terrain::Grass }
+    if rock { terrain::ROCK } else { terrain::GRASS }
 }
 
 fn natural_resource_v2(
     seed: WorldSeed,
     cell: WorldCell,
-    terrain: Terrain,
+    terrain: TerrainId,
 ) -> Option<NaturalResource> {
-    if terrain != Terrain::Grass || spawn_clearing(cell, 2) {
+    if terrain != terrain::GRASS || spawn_clearing(cell, 2) {
         return None;
     }
     if let Some(kind) = starter_resource_v2(seed, cell) {
@@ -300,10 +288,10 @@ fn natural_resource_v2(
         WorldCell::new(cell.x(), cell.y().saturating_sub(1)),
     ]
     .into_iter()
-    .any(|neighbor| terrain_v2(seed, neighbor) == Terrain::Rock);
+    .any(|neighbor| terrain_v2(seed, neighbor) == terrain::ROCK);
     if (near_rock && sample % 100 < 34) || sample % 1000 < 18 {
         return Some(NaturalResource::new(
-            NaturalResourceKind::StoneOutcrop,
+            natural_resource::STONE_OUTCROP,
             4 + ((sample >> 32) % 5) as u32,
         ));
     }
@@ -340,7 +328,7 @@ fn natural_resource_v2(
     let tree_roll = (sample >> 16) % 100;
     if (inside_forest && tree_roll < 62) || (!inside_forest && sample % 1000 < 22) {
         return Some(NaturalResource::new(
-            NaturalResourceKind::Tree,
+            natural_resource::TREE,
             4 + ((sample >> 40) % 5) as u32,
         ));
     }
@@ -350,16 +338,16 @@ fn natural_resource_v2(
 fn natural_resource_v3(
     seed: WorldSeed,
     cell: WorldCell,
-    terrain: Terrain,
+    terrain: TerrainId,
 ) -> Option<NaturalResource> {
-    if terrain != Terrain::Grass || spawn_clearing(cell, 2) {
+    if terrain != terrain::GRASS || spawn_clearing(cell, 2) {
         return None;
     }
 
     if matches!((cell.x(), cell.y()), (-3, -3) | (3, -3) | (-3, 3) | (3, 3)) {
         let sample = cell_hash(seed, 0x6265_7272_795f_7633, cell);
         return Some(NaturalResource::new(
-            NaturalResourceKind::BerryBush,
+            natural_resource::BERRY_BUSH,
             3 + ((sample >> 32) % 3) as u32,
         ));
     }
@@ -371,14 +359,14 @@ fn natural_resource_v3(
     let sample = cell_hash(seed, 0x6265_7272_795f_7764, cell);
     if sample % 1000 < 18 {
         return Some(NaturalResource::new(
-            NaturalResourceKind::BerryBush,
+            natural_resource::BERRY_BUSH,
             3 + ((sample >> 40) % 3) as u32,
         ));
     }
     None
 }
 
-fn starter_resource_v2(seed: WorldSeed, cell: WorldCell) -> Option<NaturalResourceKind> {
+fn starter_resource_v2(seed: WorldSeed, cell: WorldCell) -> Option<NaturalResourceId> {
     const RING: [(i64, i64); 12] = [
         (-4, -2),
         (-4, 2),
@@ -398,9 +386,9 @@ fn starter_resource_v2(seed: WorldSeed, cell: WorldCell) -> Option<NaturalResour
     let tree = RING[tree_index];
     let stone = RING[stone_index];
     if (cell.x(), cell.y()) == tree {
-        Some(NaturalResourceKind::Tree)
+        Some(natural_resource::TREE)
     } else if (cell.x(), cell.y()) == stone {
-        Some(NaturalResourceKind::StoneOutcrop)
+        Some(natural_resource::STONE_OUTCROP)
     } else {
         None
     }

@@ -8,6 +8,7 @@ cargo fmt --all -- --check
 
 printf '%s\n' '== clippy authoritative/headless =='
 cargo clippy \
+  -p progressus-content \
   -p progressus-worldgen \
   -p progressus-sim \
   -p progressus-app \
@@ -20,6 +21,7 @@ cargo clippy -p progressus-client --all-targets -- -D warnings
 
 printf '%s\n' '== automated tests =='
 cargo test \
+  -p progressus-content \
   -p progressus-worldgen \
   -p progressus-sim \
   -p progressus-app \

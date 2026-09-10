@@ -9,9 +9,9 @@ use std::{
 
 use progressus_app::{
     Application, ChunkCoord, ClientSnapshot, Command, DEFAULT_CHARACTER_SPEED, Direction, EntityId,
-    ItemKind, KnownTerrain, LocalCell, NewGameOptions, ProductionTarget,
-    RESIDENT_CHUNKS_PER_CENTER, RecipeId, SUBUNITS_PER_CELL, SnapshotQuery, StructureKind, Terrain,
-    WorkstationKind, WorldCell, WorldPosition, WorldSeed,
+    KnownTerrain, LocalCell, NewGameOptions, ProductionTarget, RESIDENT_CHUNKS_PER_CENTER,
+    SUBUNITS_PER_CELL, SnapshotQuery, TerrainId, WorldCell, WorldPosition, WorldSeed, item, recipe,
+    structure, terrain, workstation,
 };
 
 const USAGE: &str = "usage: progressus-headless --seed <u64> (--ticks <u64> | --travel-chunks <positive u64> | --activity-smoke)";
@@ -112,19 +112,20 @@ fn run_ticks(application: &mut Application, seed: u64, ticks: u64) -> Result<(),
         );
     }
 
-    let mut grass = 0_usize;
-    let mut water = 0_usize;
-    let mut rock = 0_usize;
+    // Counted over the terrain registry, so a new terrain reports itself.
+    let mut known = BTreeMap::new();
     let mut unknown = 0_usize;
     for terrain in snapshot.chunks.iter().flat_map(|chunk| chunk.cells.iter()) {
         match terrain {
-            progressus_app::KnownTerrain::Known(Terrain::Grass) => grass += 1,
-            progressus_app::KnownTerrain::Known(Terrain::Water) => water += 1,
-            progressus_app::KnownTerrain::Known(Terrain::Rock) => rock += 1,
+            progressus_app::KnownTerrain::Known(kind) => *known.entry(*kind).or_insert(0) += 1,
             progressus_app::KnownTerrain::Unknown => unknown += 1,
         }
     }
-    println!("terrain grass={grass} water={water} rock={rock} unknown={unknown}");
+    let census = TerrainId::all()
+        .map(|kind| format!("{}={}", kind.name(), known.get(&kind).copied().unwrap_or(0)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    println!("terrain {census} unknown={unknown}");
 
     Ok(())
 }
@@ -367,13 +368,13 @@ fn run_activity_smoke(application: &mut Application, seed: u64) -> Result<(), Bo
     let tools = snapshot
         .ground_items
         .iter()
-        .filter(|item| item.kind == ItemKind::PrimitiveTool)
+        .filter(|item| item.kind == item::PRIMITIVE_TOOL)
         .map(|item| u64::from(item.quantity))
         .sum::<u64>()
         + snapshot
             .carried_items
             .iter()
-            .filter(|item| item.kind == ItemKind::PrimitiveTool)
+            .filter(|item| item.kind == item::PRIMITIVE_TOOL)
             .map(|item| u64::from(item.quantity))
             .sum::<u64>();
     if tools == 0 {
@@ -406,7 +407,7 @@ fn run_activity_smoke(application: &mut Application, seed: u64) -> Result<(), Bo
 
 fn setup_activity_world(application: &mut Application) -> Result<usize, Box<dyn Error>> {
     application.execute(Command::PlaceWorkstation {
-        kind: WorkstationKind::Workbench,
+        kind: workstation::WORKBENCH,
         cell: WorldCell::new(0, 1),
     })?;
     let workstation_id = application
@@ -435,7 +436,7 @@ fn setup_activity_world(application: &mut Application) -> Result<usize, Box<dyn 
 
     application.execute(Command::AddProductionOrder {
         workstation_id,
-        recipe_id: RecipeId::PrimitiveTool,
+        recipe_id: recipe::PRIMITIVE_TOOL,
         target: ProductionTarget::Infinite,
     })?;
 
@@ -445,7 +446,7 @@ fn setup_activity_world(application: &mut Application) -> Result<usize, Box<dyn 
     })?;
     for cell in activity_construction_cells(&discovery, 3)? {
         application.execute(Command::DesignateConstruction {
-            kind: StructureKind::StoneWall,
+            kind: structure::STONE_WALL,
             cell,
         })?;
     }
@@ -495,7 +496,7 @@ fn activity_construction_cells(
         for y in 0..chunk.side {
             for x in 0..chunk.side {
                 let local = LocalCell::new(x, y);
-                if chunk.terrain_at(local) != Some(KnownTerrain::Known(Terrain::Grass)) {
+                if chunk.terrain_at(local) != Some(KnownTerrain::Known(terrain::GRASS)) {
                     continue;
                 }
                 let Some(cell) = chunk.coordinate.world_cell(local) else {
@@ -619,7 +620,7 @@ fn select_direction(
         .filter(|(_, cell)| {
             application
                 .known_terrain_at(*cell)
-                .is_ok_and(|terrain| terrain == Some(Terrain::Grass))
+                .is_ok_and(|terrain| terrain == Some(terrain::GRASS))
         })
         .min_by(|(_, first), (_, second)| {
             visit_counts

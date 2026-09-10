@@ -1,4 +1,6 @@
-use progressus_sim::{ChunkCoord, LocalCell, Simulation, Terrain, WorldCell, WorldSeed};
+use progressus_content::terrain;
+
+use progressus_sim::{ChunkCoord, LocalCell, Simulation, TerrainId, WorldCell, WorldSeed};
 
 #[test]
 fn untouched_effective_chunk_matches_raw_generated_chunk() {
@@ -17,7 +19,7 @@ fn point_lookup_and_materialized_chunk_use_the_same_resolution() {
     let modified = WorldCell::new(0, 0);
     let untouched = WorldCell::new(1, 0);
     simulation
-        .set_terrain_override(modified, Terrain::Rock)
+        .set_terrain_override(modified, terrain::ROCK)
         .unwrap();
 
     for cell in [modified, untouched] {
@@ -45,7 +47,7 @@ fn one_override_changes_only_its_local_cell() {
         .to_vec();
 
     simulation
-        .set_terrain_override(WorldCell::new(0, 0), Terrain::Rock)
+        .set_terrain_override(WorldCell::new(0, 0), terrain::ROCK)
         .unwrap();
     let after = simulation
         .effective_chunk(coordinate)
@@ -66,19 +68,17 @@ fn one_override_changes_only_its_local_cell() {
             .effective_chunk(coordinate)
             .unwrap()
             .terrain_at(target),
-        Some(Terrain::Rock)
+        Some(terrain::ROCK)
     );
 }
 
-fn different_from(base: Terrain) -> Terrain {
-    match base {
-        Terrain::Grass => Terrain::Rock,
-        Terrain::Water => Terrain::Grass,
-        Terrain::Rock => Terrain::Grass,
-    }
+fn different_from(base: TerrainId) -> TerrainId {
+    TerrainId::all()
+        .find(|terrain| *terrain != base)
+        .expect("the terrain registry defines more than one kind")
 }
 
-fn effective_cells(simulation: &Simulation, coordinate: ChunkCoord) -> Vec<Terrain> {
+fn effective_cells(simulation: &Simulation, coordinate: ChunkCoord) -> Vec<TerrainId> {
     simulation
         .effective_chunk(coordinate)
         .unwrap()

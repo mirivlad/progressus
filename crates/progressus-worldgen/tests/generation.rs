@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use progressus_worldgen::{
-    CURRENT_WORLDGEN_VERSION, ChunkCoord, GeneratedChunk, NaturalResourceKind, Terrain, WorldCell,
-    WorldGenerator, WorldSeed, WorldgenError, WorldgenVersion,
+    CURRENT_WORLDGEN_VERSION, ChunkCoord, GeneratedChunk, WorldCell, WorldGenerator, WorldSeed,
+    WorldgenError, WorldgenVersion, natural_resource, terrain,
 };
 
 fn terrain_digest(chunk: &GeneratedChunk) -> u64 {
@@ -10,10 +10,11 @@ fn terrain_digest(chunk: &GeneratedChunk) -> u64 {
         .cells()
         .iter()
         .fold(0xcbf2_9ce4_8422_2325, |digest, terrain| {
-            let value = match terrain {
-                Terrain::Grass => 0_u64,
-                Terrain::Water => 1,
-                Terrain::Rock => 2,
+            let value = match terrain.name() {
+                "grass" => 0_u64,
+                "water" => 1,
+                "rock" => 2,
+                other => panic!("golden fixtures do not cover terrain {other}"),
             };
             (digest ^ value).wrapping_mul(0x0000_0100_0000_01b3)
         })
@@ -27,10 +28,11 @@ fn resource_digest(chunk: &GeneratedChunk) -> u64 {
             let value = match resource {
                 None => 0_u64,
                 Some(resource) => {
-                    let kind = match resource.kind() {
-                        NaturalResourceKind::Tree => 1_u64,
-                        NaturalResourceKind::StoneOutcrop => 2_u64,
-                        NaturalResourceKind::BerryBush => 3_u64,
+                    let kind = match resource.kind().name() {
+                        "tree" => 1_u64,
+                        "stone_outcrop" => 2,
+                        "berry_bush" => 3,
+                        other => panic!("golden fixtures do not cover resource {other}"),
                     };
                     kind | (u64::from(resource.yield_quantity()) << 8)
                 }
@@ -112,7 +114,7 @@ fn bootstrap_spawn_cells_are_grass_for_every_seed() {
             let cell = WorldCell::new(x, 0);
             let (chunk_coordinate, local) = cell.split();
             let chunk = generator.generate(chunk_coordinate).unwrap();
-            assert_eq!(chunk.terrain_at(local), Some(Terrain::Grass));
+            assert_eq!(chunk.terrain_at(local), Some(terrain::GRASS));
         }
     }
 }
@@ -182,7 +184,7 @@ fn natural_resources_exist_only_on_grass_and_leave_spawn_corridor_clear() {
                 for x in 0..progressus_worldgen::CHUNK_SIDE {
                     let local = progressus_worldgen::LocalCell::new(x, y);
                     if chunk.natural_resource_at(local).is_some() {
-                        assert_eq!(chunk.terrain_at(local), Some(Terrain::Grass));
+                        assert_eq!(chunk.terrain_at(local), Some(terrain::GRASS));
                     }
                 }
             }
@@ -289,7 +291,7 @@ fn worldgen_v3_preserves_v2_terrain_and_v2_has_no_berry_bushes() {
                 assert_eq!(v3.terrain_at(cell), v2.terrain_at(cell));
                 assert!(
                     v2.natural_resource_at(cell)
-                        .is_none_or(|resource| resource.kind() != NaturalResourceKind::BerryBush)
+                        .is_none_or(|resource| resource.kind() != natural_resource::BERRY_BUSH)
                 );
             }
         }
@@ -311,7 +313,7 @@ fn worldgen_v3_includes_guaranteed_berry_bushes_near_spawn() {
             let resource = generator
                 .natural_resource_at(cell)
                 .expect("starter berry bush");
-            assert_eq!(resource.kind(), NaturalResourceKind::BerryBush);
+            assert_eq!(resource.kind(), natural_resource::BERRY_BUSH);
             assert!((3..=5).contains(&resource.yield_quantity()));
         }
     }

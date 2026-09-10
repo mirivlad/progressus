@@ -1,9 +1,12 @@
+use progressus_content::terrain;
+
 use std::error::Error;
 use std::mem::{size_of, size_of_val};
 use std::time::{Duration, Instant};
 
 use progressus_sim::{
-    ChunkCoord, EntityId, GeneratedChunk, Simulation, Terrain, WorldCell, WorldPosition, WorldSeed,
+    ChunkCoord, EntityId, GeneratedChunk, Simulation, TerrainId, WorldCell, WorldPosition,
+    WorldSeed,
 };
 
 const SEED: WorldSeed = WorldSeed::new(73);
@@ -38,7 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cora = EntityId::new(3).expect("Cora has a stable nonzero bootstrap ID");
     let destination_cell = WorldCell::new(4, 0);
     if !path_simulation.is_explored(destination_cell)
-        || path_simulation.effective_terrain_at(destination_cell)? != Terrain::Grass
+        || path_simulation.effective_terrain_at(destination_cell)? != terrain::GRASS
     {
         return Err("benchmark path destination is not explored grass".into());
     }
@@ -109,11 +112,10 @@ fn estimated_chunk_bytes(chunk: &GeneratedChunk) -> usize {
     size_of::<GeneratedChunk>() + size_of_val(chunk.cells()) + size_of_val(chunk.resources())
 }
 
-fn different_terrain(base: Terrain) -> Terrain {
-    match base {
-        Terrain::Grass => Terrain::Rock,
-        Terrain::Water | Terrain::Rock => Terrain::Grass,
-    }
+fn different_terrain(base: TerrainId) -> TerrainId {
+    TerrainId::all()
+        .find(|terrain| *terrain != base)
+        .expect("the terrain registry defines more than one kind")
 }
 
 fn print_distribution(label: &str, samples: &mut [u128], count: usize) {

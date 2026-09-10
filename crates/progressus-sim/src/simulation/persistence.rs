@@ -1,3 +1,5 @@
+use progressus_content::{item, natural_resource};
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -8,13 +10,13 @@ use super::*;
 use crate::construction::ConstructionWorld;
 use crate::entity::{CharacterRestoreState, EntityIdAllocator, NavigationRoute};
 use crate::exploration::ExploredWorld;
-use crate::item::ItemWorld;
+use crate::item_world::ItemWorld;
 use crate::job::JobWorld;
 use crate::production::ProductionWorld;
 use crate::production_logistics::ProductionLogisticsWorld;
 use crate::residency::ChunkResidency;
 use crate::stockpile::StockpileWorld;
-use crate::workstation::WorkstationWorld;
+use crate::workstation_world::WorkstationWorld;
 use crate::world_state::ModifiedWorld;
 use crate::{MAX_SATIETY, MovementSpeed};
 
@@ -36,6 +38,7 @@ pub enum SaveError {
     UnsupportedFormat { name: String, version: u32 },
     UnsupportedWorldgen(WorldgenError),
     InvalidData(String),
+    UnknownContent { kind: &'static str, name: String },
 }
 
 impl Display for SaveError {
@@ -51,6 +54,10 @@ impl Display for SaveError {
                 write!(formatter, "save uses unsupported worldgen: {error}")
             }
             Self::InvalidData(message) => write!(formatter, "invalid save data: {message}"),
+            Self::UnknownContent { kind, name } => write!(
+                formatter,
+                "save names {kind} {name:?}, which this build does not define"
+            ),
         }
     }
 }
@@ -60,7 +67,9 @@ impl Error for SaveError {
         match self {
             Self::Encode(error) | Self::Decode(error) => Some(error),
             Self::UnsupportedWorldgen(error) => Some(error),
-            Self::UnsupportedFormat { .. } | Self::InvalidData(_) => None,
+            Self::UnsupportedFormat { .. } | Self::InvalidData(_) | Self::UnknownContent { .. } => {
+                None
+            }
         }
     }
 }
@@ -426,6 +435,37 @@ impl PositionSave {
     }
 }
 
+/// Content is persisted by its stable name. A name this build does not define
+/// is an error, never a silently substituted default.
+macro_rules! content_name_save {
+    ($save:ident, $handle:ty, $kind:literal) => {
+        #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+        #[serde(transparent)]
+        struct $save(String);
+
+        impl From<$handle> for $save {
+            fn from(id: $handle) -> Self {
+                Self(id.name().to_owned())
+            }
+        }
+
+        impl $save {
+            fn id(&self) -> Result<$handle, SaveError> {
+                <$handle>::from_name(&self.0).ok_or_else(|| SaveError::UnknownContent {
+                    kind: $kind,
+                    name: self.0.clone(),
+                })
+            }
+        }
+    };
+}
+
+content_name_save!(TerrainSave, TerrainId, "terrain");
+content_name_save!(ItemKindSave, ItemId, "item");
+content_name_save!(StructureKindSave, StructureId, "structure");
+content_name_save!(WorkstationKindSave, WorkstationId, "workstation");
+content_name_save!(RecipeIdSave, RecipeId, "recipe");
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum DirectionSave {
@@ -617,70 +657,11 @@ impl CharacterSave {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum TerrainSave {
-    Grass,
-    Water,
-    Rock,
-}
-
-impl From<Terrain> for TerrainSave {
-    fn from(terrain: Terrain) -> Self {
-        match terrain {
-            Terrain::Grass => Self::Grass,
-            Terrain::Water => Self::Water,
-            Terrain::Rock => Self::Rock,
-        }
-    }
-}
-
-impl From<TerrainSave> for Terrain {
-    fn from(terrain: TerrainSave) -> Self {
-        match terrain {
-            TerrainSave::Grass => Self::Grass,
-            TerrainSave::Water => Self::Water,
-            TerrainSave::Rock => Self::Rock,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct TerrainOverrideSave {
     chunk: ChunkSave,
     local: LocalSave,
     terrain: TerrainSave,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum ItemKindSave {
-    Wood,
-    Stone,
-    PrimitiveTool,
-    Berries,
-}
-
-impl From<ItemKind> for ItemKindSave {
-    fn from(kind: ItemKind) -> Self {
-        match kind {
-            ItemKind::Wood => Self::Wood,
-            ItemKind::Stone => Self::Stone,
-            ItemKind::PrimitiveTool => Self::PrimitiveTool,
-            ItemKind::Berries => Self::Berries,
-        }
-    }
-}
-
-impl From<ItemKindSave> for ItemKind {
-    fn from(kind: ItemKindSave) -> Self {
-        match kind {
-            ItemKindSave::Wood => Self::Wood,
-            ItemKindSave::Stone => Self::Stone,
-            ItemKindSave::PrimitiveTool => Self::PrimitiveTool,
-            ItemKindSave::Berries => Self::Berries,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -735,29 +716,7 @@ impl StockpileSave {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum WorkstationKindSave {
-    Workbench,
-}
-
-impl From<WorkstationKind> for WorkstationKindSave {
-    fn from(kind: WorkstationKind) -> Self {
-        match kind {
-            WorkstationKind::Workbench => Self::Workbench,
-        }
-    }
-}
-
-impl From<WorkstationKindSave> for WorkstationKind {
-    fn from(kind: WorkstationKindSave) -> Self {
-        match kind {
-            WorkstationKindSave::Workbench => Self::Workbench,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct WorkstationSave {
     id: u64,
     kind: WorkstationKindSave,
@@ -770,28 +729,6 @@ impl WorkstationSave {
             id: workstation.id().value(),
             kind: workstation.kind().into(),
             cell: workstation.cell().into(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum RecipeIdSave {
-    PrimitiveTool,
-}
-
-impl From<RecipeId> for RecipeIdSave {
-    fn from(recipe: RecipeId) -> Self {
-        match recipe {
-            RecipeId::PrimitiveTool => Self::PrimitiveTool,
-        }
-    }
-}
-
-impl From<RecipeIdSave> for RecipeId {
-    fn from(recipe: RecipeIdSave) -> Self {
-        match recipe {
-            RecipeIdSave::PrimitiveTool => Self::PrimitiveTool,
         }
     }
 }
@@ -821,7 +758,7 @@ impl From<ProductionTargetSave> for ProductionTarget {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct ProductionOrderSave {
     id: u64,
     workstation_id: u64,
@@ -890,31 +827,6 @@ impl ProductionLogisticsSave {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum StructureKindSave {
-    StoneWall,
-    Door,
-}
-
-impl From<StructureKind> for StructureKindSave {
-    fn from(kind: StructureKind) -> Self {
-        match kind {
-            StructureKind::StoneWall => Self::StoneWall,
-            StructureKind::Door => Self::Door,
-        }
-    }
-}
-
-impl From<StructureKindSave> for StructureKind {
-    fn from(kind: StructureKindSave) -> Self {
-        match kind {
-            StructureKindSave::StoneWall => Self::StoneWall,
-            StructureKindSave::Door => Self::Door,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 enum ConstructionMaterialStateSave {
     Reserved,
     Delivered,
@@ -944,7 +856,7 @@ struct ConstructionMaterialSave {
     state: ConstructionMaterialStateSave,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct ConstructionSiteSave {
     id: u64,
     kind: StructureKindSave,
@@ -970,7 +882,7 @@ impl ConstructionSiteSave {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct StructureSave {
     id: u64,
     kind: StructureKindSave,
@@ -1104,7 +1016,7 @@ impl JobKindSave {
             } => JobKind::Craft {
                 workstation_id: entity_id(workstation_id, "craft workstation_id")?,
                 order_id: entity_id(order_id, "craft order_id")?,
-                recipe_id: recipe_id.into(),
+                recipe_id: recipe_id.id()?,
             },
             Self::SupplyProduction {
                 workstation_id,
@@ -1259,7 +1171,7 @@ fn restore_modified_world(
         let cell = chunk.world_cell(local).ok_or_else(|| {
             SaveError::InvalidData("terrain override world coordinate overflows".to_owned())
         })?;
-        let terrain: Terrain = value.terrain.into();
+        let terrain = value.terrain.id()?;
         if generator.terrain_at(cell) == terrain {
             return invalid(format!(
                 "terrain override at ({}, {}) redundantly equals generated terrain",
@@ -1304,7 +1216,7 @@ fn restore_depleted_resources(
                 cell.y()
             ));
         };
-        if resource.kind() == NaturalResourceKind::BerryBush {
+        if resource.kind() == natural_resource::BERRY_BUSH {
             return invalid(format!(
                 "renewable berry bush at ({}, {}) cannot be permanently depleted",
                 cell.x(),
@@ -1338,7 +1250,7 @@ fn restore_renewable_resource_regrowth(
                 cell.y()
             ));
         };
-        if resource.kind() != NaturalResourceKind::BerryBush {
+        if resource.kind() != natural_resource::BERRY_BUSH {
             return invalid(format!(
                 "renewable resource cell ({}, {}) is not a berry bush",
                 cell.x(),
@@ -1373,7 +1285,7 @@ fn restore_items(
                 value.quantity
             ))
         })?;
-        let kind: ItemKind = value.kind.into();
+        let kind = value.kind.id()?;
         match value.location {
             ItemLocationSave::Ground { position } => world
                 .insert_ground(ItemStack::new_ground(
@@ -1436,9 +1348,9 @@ fn restore_stockpiles(saved: Vec<StockpileSave>) -> Result<StockpileWorld, SaveE
         }
         let mut disallowed_items = value
             .disallowed_items
-            .into_iter()
-            .map(ItemKind::from)
-            .collect::<Vec<_>>();
+            .iter()
+            .map(ItemKindSave::id)
+            .collect::<Result<Vec<_>, _>>()?;
         disallowed_items.sort_unstable();
         if disallowed_items.windows(2).any(|pair| pair[0] == pair[1]) {
             return invalid(format!(
@@ -1462,7 +1374,7 @@ fn restore_workstations(saved: Vec<WorkstationSave>) -> Result<WorkstationWorld,
         world
             .insert(Workstation::new(
                 id,
-                value.kind.into(),
+                value.kind.id()?,
                 value.cell.into_cell(),
             ))
             .map_err(|error| invalid_world_error("workstation", error))?;
@@ -1485,8 +1397,8 @@ fn restore_production_orders(
                 workstation_id.value()
             ))
         })?;
-        let recipe_id: RecipeId = value.recipe_id.into();
-        if recipe_definition(recipe_id).workstation != workstation.kind() {
+        let recipe_id = value.recipe_id.id()?;
+        if recipe_id.definition().workstation != workstation.kind() {
             return invalid(format!(
                 "production order {} recipe is incompatible with workstation {}",
                 id.value(),
@@ -1586,7 +1498,7 @@ fn restore_construction(
     let mut world = ConstructionWorld::default();
     for value in sites {
         let id = entity_id(value.id, "construction site id")?;
-        let kind: StructureKind = value.kind.into();
+        let kind = value.kind.id()?;
         world
             .insert_site(ConstructionSite::new(id, kind, value.cell.into_cell()))
             .map_err(|error| invalid_world_error("construction site", error))?;
@@ -1606,7 +1518,7 @@ fn restore_construction(
     }
     for value in structures {
         let id = entity_id(value.id, "structure id")?;
-        let site = ConstructionSite::new(id, value.kind.into(), value.cell.into_cell());
+        let site = ConstructionSite::new(id, value.kind.id()?, value.cell.into_cell());
         world
             .insert_site(site)
             .map_err(|error| invalid_world_error("structure staging", error))?;
@@ -1833,9 +1745,10 @@ fn validate_job_references(
                 ));
             }
             require_item(items, item_id, job_id)?;
-            if items.get(item_id).is_none_or(|item| {
-                item.kind() != ItemKind::Berries || item.ground_position().is_none()
-            }) {
+            if items
+                .get(item_id)
+                .is_none_or(|item| item.kind() != item::BERRIES || item.ground_position().is_none())
+            {
                 return invalid(format!(
                     "eat job {} references non-food item {}",
                     job_id.value(),
@@ -1901,7 +1814,7 @@ fn validate_job_references(
             })?;
             if order.workstation_id() != workstation_id
                 || order.recipe_id() != recipe_id
-                || recipe_definition(recipe_id).workstation != workstation.kind()
+                || recipe_id.definition().workstation != workstation.kind()
             {
                 return invalid(format!(
                     "craft job {} references incompatible order",
@@ -2035,8 +1948,8 @@ fn validate_restored_simulation(simulation: &Simulation) -> Result<(), SaveError
                     item_id.value()
                 ))
             })?;
-            if item.kind() != site.kind().material_kind()
-                || item.quantity().get() < site.kind().material_quantity()
+            if item.kind() != site.kind().definition().material
+                || item.quantity().get() < site.kind().definition().material_quantity
             {
                 return invalid(format!(
                     "construction site {} has incompatible material stack",
@@ -2169,6 +2082,7 @@ fn validate_restored_job_state(simulation: &Simulation, job: &Job) -> Result<(),
 
 #[cfg(test)]
 mod tests {
+    use progressus_content::{item, natural_resource, recipe, structure, terrain, workstation};
     use serde_json::Value;
 
     use super::*;
@@ -2233,7 +2147,7 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         let stockpile_id = simulation.create_stockpile(WorldCell::new(-2, 0)).unwrap();
         simulation
-            .set_stockpile_item_allowed(stockpile_id, ItemKind::Berries, false)
+            .set_stockpile_item_allowed(stockpile_id, item::BERRIES, false)
             .unwrap();
         let encoded = simulation.save_json().unwrap();
         let restored = Simulation::load_json(&encoded).unwrap();
@@ -2241,8 +2155,8 @@ mod tests {
             .stockpiles()
             .find(|stockpile| stockpile.id() == stockpile_id)
             .unwrap();
-        assert!(!stockpile.accepts(ItemKind::Berries));
-        assert!(stockpile.accepts(ItemKind::Wood));
+        assert!(!stockpile.accepts(item::BERRIES));
+        assert!(stockpile.accepts(item::WOOD));
 
         let mut json: Value = serde_json::from_slice(&encoded).unwrap();
         json["stockpiles"][0]
@@ -2255,7 +2169,7 @@ mod tests {
             .find(|stockpile| stockpile.id() == stockpile_id)
             .unwrap();
         assert!(
-            ItemKind::ALL
+            ItemId::all()
                 .into_iter()
                 .all(|kind| legacy_stockpile.accepts(kind))
         );
@@ -2269,7 +2183,7 @@ mod tests {
             .construction_world
             .insert_site(ConstructionSite::new(
                 id,
-                StructureKind::Door,
+                structure::DOOR,
                 WorldCell::new(0, 1),
             ))
             .unwrap();
@@ -2324,7 +2238,7 @@ mod tests {
     fn active_production_and_navigation_continue_deterministically_after_load() {
         let mut original = Simulation::new(WorldSeed::new(0)).unwrap();
         let workstation_id = original
-            .place_workstation(WorkstationKind::Workbench, WorldCell::new(0, 1))
+            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 1))
             .unwrap();
         let stockpile_id = original.create_stockpile(WorldCell::new(-2, 0)).unwrap();
         original
@@ -2333,12 +2247,12 @@ mod tests {
         original
             .add_production_order(
                 workstation_id,
-                RecipeId::PrimitiveTool,
+                recipe::PRIMITIVE_TOOL,
                 ProductionTarget::Infinite,
             )
             .unwrap();
         original
-            .set_terrain_override(WorldCell::new(7, 7), Terrain::Grass)
+            .set_terrain_override(WorldCell::new(7, 7), terrain::GRASS)
             .unwrap();
 
         let mut saw_active = false;
@@ -2423,7 +2337,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .kind(),
-            NaturalResourceKind::BerryBush
+            natural_resource::BERRY_BUSH
         );
         let job_id = original.designate_harvest(source).unwrap();
         for _ in 0..256 {
@@ -2454,7 +2368,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .kind(),
-            NaturalResourceKind::BerryBush
+            natural_resource::BERRY_BUSH
         );
     }
 
@@ -2463,10 +2377,9 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         let distant_override = WorldCell::new(50_000, -80_000);
         let base = simulation.generator.terrain_at(distant_override);
-        let replacement = match base {
-            Terrain::Grass => Terrain::Rock,
-            Terrain::Water | Terrain::Rock => Terrain::Grass,
-        };
+        let replacement = TerrainId::all()
+            .find(|candidate| *candidate != base)
+            .expect("the terrain registry defines more than one kind");
         simulation
             .set_terrain_override(distant_override, replacement)
             .unwrap();
@@ -2476,7 +2389,7 @@ mod tests {
                 simulation
                     .generator
                     .natural_resource_at(*cell)
-                    .is_some_and(|resource| resource.kind() != NaturalResourceKind::BerryBush)
+                    .is_some_and(|resource| resource.kind() != natural_resource::BERRY_BUSH)
             })
             .unwrap();
         simulation.depleted_resources.insert(depleted);
