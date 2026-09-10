@@ -81,7 +81,7 @@ pub(crate) fn end_client_update(
             started.elapsed().as_secs_f64() * 1000.0
         });
     }
-    diagnostics.add_measurement(&TERRAIN_CHUNKS, || cache.terrain_chunks.len() as f64);
+    diagnostics.add_measurement(&TERRAIN_CHUNKS, || cache.terrain.len() as f64);
 }
 
 pub(crate) fn record_elapsed(

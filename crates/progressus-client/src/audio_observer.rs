@@ -117,24 +117,15 @@ impl WorkObserver {
 // Keep the admission rule independently testable without an audio device.
 pub(crate) fn audible_cues(
     cues: Vec<Cue>,
-    origin: WorldCell,
-    camera: [f32; 2],
-    area: [f32; 4],
+    project: impl Fn(WorldCell) -> Option<[f32; 2]>,
     active: usize,
 ) -> Vec<(Cue, f32)> {
     let budget = 8_usize.saturating_sub(active).min(4);
-    cues.into_iter()
-        .filter_map(|cue| {
-            let x = (i128::from(cue.cell.x()) - i128::from(origin.x())) as f32 * 12.0 - camera[0];
-            let y = (i128::from(cue.cell.y()) - i128::from(origin.y())) as f32 * 12.0 - camera[1];
-            if x < area[0] || y < area[1] || x > area[2] || y > area[3] {
-                return None;
-            }
-            let pan = (x / (area[2] - area[0]).max(1.0) * 2.0).clamp(-0.8, 0.8);
-            Some((cue, pan))
-        })
-        .take(budget)
-        .collect()
+    cues.into_iter().filter_map(|cue| {
+        let [x,y] = project(cue.cell)?;
+        if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) { return None; }
+        Some((cue, ((x - 0.5) * 1.6).clamp(-0.8,0.8)))
+    }).take(budget).collect()
 }
 
 #[cfg(test)]
@@ -239,16 +230,16 @@ mod tests {
                 })
                 .collect()
         };
-        let origin = WorldCell::new(0, 0);
+        let project = |cell: WorldCell| Some([cell.x() as f32 / 100., 0.5]);
         assert_eq!(
-            audible_cues(cues(), origin, [0., 0.], [-100., -100., 100., 100.], 0).len(),
+            audible_cues(cues(), project, 0).len(),
             4
         );
         assert_eq!(
-            audible_cues(cues(), origin, [0., 0.], [-100., -100., 100., 100.], 7).len(),
+            audible_cues(cues(), project, 7).len(),
             1
         );
-        assert!(audible_cues(cues(), origin, [0., 0.], [-100., -100., 100., 100.], 8).is_empty());
+        assert!(audible_cues(cues(), project, 8).is_empty());
     }
 
     #[test]

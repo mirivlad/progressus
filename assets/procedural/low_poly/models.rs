@@ -34,11 +34,11 @@ pub fn model_mesh(kind: ModelKind, variant: u8) -> Mesh {
         ModelKind::BerryBush => berry_bush(&mut geometry, variant),
         ModelKind::Character => character(&mut geometry, variant),
         ModelKind::Workbench => workbench(&mut geometry, variant),
-        ModelKind::Wall => wall(&mut geometry),
+        ModelKind::Wall => wall(&mut geometry, 10),
         ModelKind::Door => door(&mut geometry, false),
         ModelKind::OpenDoor => door(&mut geometry, true),
-        ModelKind::ConstructionWall => construction(&mut geometry, false),
-        ModelKind::ConstructionDoor => construction(&mut geometry, true),
+        ModelKind::ConstructionWall => construction_wall(&mut geometry, 10),
+        ModelKind::ConstructionDoor => construction_door(&mut geometry),
         ModelKind::Wood => wood(&mut geometry, variant),
         ModelKind::Stone => loose_stone(&mut geometry, variant),
         ModelKind::PrimitiveTool => primitive_tool(&mut geometry, variant),
@@ -47,15 +47,40 @@ pub fn model_mesh(kind: ModelKind, variant: u8) -> Mesh {
     geometry.mesh()
 }
 
+/// Connections: north (-Z), east (+X), south (+Z), west (-X).
+pub fn structure_mesh(kind: ModelKind, connections: u8) -> Mesh {
+    let connections = connections & 15;
+    let mut geometry = Geometry::default();
+    match kind {
+        ModelKind::Wall => wall(&mut geometry, connections),
+        ModelKind::ConstructionWall => construction_wall(&mut geometry, connections),
+        ModelKind::Door | ModelKind::OpenDoor | ModelKind::ConstructionDoor => {
+            if kind == ModelKind::ConstructionDoor {
+                construction_door(&mut geometry);
+            } else {
+                door(&mut geometry, kind == ModelKind::OpenDoor);
+            }
+            // An isolated door faces along Z; ties keep this stable default.
+            if (connections & 5).count_ones() > (connections & 10).count_ones() {
+                for vector in geometry.positions.iter_mut().chain(&mut geometry.normals) {
+                    *vector = [-vector[2], vector[1], vector[0]];
+                }
+            }
+        }
+        _ => return model_mesh(kind, 0),
+    }
+    geometry.mesh()
+}
+
 type Rgba = [f32; 4];
 
 const BARK: Rgba = [0.28, 0.13, 0.055, 1.0];
 const BARK_LIGHT: Rgba = [0.42, 0.22, 0.08, 1.0];
-const LEAF: Rgba = [0.16, 0.42, 0.12, 1.0];
-const LEAF_LIGHT: Rgba = [0.29, 0.58, 0.17, 1.0];
+const LEAF: Rgba = [0.13, 0.47, 0.08, 1.0];
+const LEAF_LIGHT: Rgba = [0.30, 0.65, 0.12, 1.0];
 const STONE: Rgba = [0.38, 0.40, 0.38, 1.0];
 const MORTAR: Rgba = [0.56, 0.53, 0.46, 1.0];
-const BLUEPRINT: Rgba = [0.22, 0.63, 0.79, 0.72];
+const BLUEPRINT: Rgba = [0.10, 0.66, 0.88, 0.72];
 
 #[derive(Default)]
 struct Geometry {
@@ -384,26 +409,35 @@ fn workbench(g: &mut Geometry, variant: u8) {
     );
 }
 
-fn wall(g: &mut Geometry) {
+fn wall(g: &mut Geometry, connections: u8) {
+    let connections = if connections == 0 { 10 } else { connections };
+    // Center pier and arms meet without gaps at both junctions and cell edges.
     for row in 0..4 {
-        for column in 0..4 {
-            let shift = if row % 2 == 0 { 0.0 } else { 0.10 };
-            g.cuboid(
-                Vec3::new(
-                    -0.37 + column as f32 * 0.245 + shift,
-                    0.13 + row as f32 * 0.245,
-                    0.,
-                ),
-                Vec3::new(0.22, 0.21, 0.22),
-                if (row + column) % 2 == 0 {
-                    STONE
+        let y = 0.1225 + row as f32 * 0.245;
+        let color = shade(STONE, if row % 2 == 0 { 1.0 } else { 1.12 });
+        g.cuboid(Vec3::new(0., y, 0.), Vec3::new(0.26, 0.245, 0.26), color);
+        for (bit, direction) in [(1, -Vec3::Z), (2, Vec3::X), (4, Vec3::Z), (8, -Vec3::X)] {
+            if connections & bit != 0 {
+                let size = if bit & 5 != 0 {
+                    Vec3::new(0.26, 0.245, 0.37)
                 } else {
-                    shade(STONE, 1.12)
-                },
-            );
+                    Vec3::new(0.37, 0.245, 0.26)
+                };
+                g.cuboid(direction * 0.315 + Vec3::Y * y, size, color);
+            }
         }
     }
-    g.cuboid(Vec3::new(0., 0.99, 0.), Vec3::new(1.0, 0.08, 0.25), MORTAR);
+    g.cuboid(Vec3::new(0., 1.0, 0.), Vec3::new(0.28, 0.08, 0.28), MORTAR);
+    for (bit, direction) in [(1, -Vec3::Z), (2, Vec3::X), (4, Vec3::Z), (8, -Vec3::X)] {
+        if connections & bit != 0 {
+            let size = if bit & 5 != 0 {
+                Vec3::new(0.28, 0.08, 0.36)
+            } else {
+                Vec3::new(0.36, 0.08, 0.28)
+            };
+            g.cuboid(direction * 0.32 + Vec3::Y, size, MORTAR);
+        }
+    }
 }
 
 fn door(g: &mut Geometry, open: bool) {
@@ -442,43 +476,43 @@ fn door(g: &mut Geometry, open: bool) {
     }
 }
 
-fn construction(g: &mut Geometry, doorway: bool) {
-    for x in [-0.46, 0.46] {
+fn construction_wall(g: &mut Geometry, connections: u8) {
+    let connections = if connections == 0 { 10 } else { connections };
+    g.cuboid(Vec3::Y * 0.5, Vec3::new(0.06, 1.0, 0.06), BLUEPRINT);
+    for (bit, direction) in [(1, -Vec3::Z), (2, Vec3::X), (4, Vec3::Z), (8, -Vec3::X)] {
+        if connections & bit == 0 {
+            continue;
+        }
         g.cuboid(
-            Vec3::new(x, 0.5, 0.),
-            Vec3::new(0.055, 1.0, 0.055),
+            direction * 0.47 + Vec3::Y * 0.5,
+            Vec3::new(0.06, 1.0, 0.06),
             BLUEPRINT,
         );
-    }
-    for y in [0.08, 0.92] {
-        g.cuboid(
-            Vec3::new(0., y, 0.),
-            Vec3::new(0.98, 0.055, 0.055),
-            BLUEPRINT,
+        for y in [0.10, 0.95] {
+            let size = if bit & 5 != 0 {
+                Vec3::new(0.06, 0.06, 0.5)
+            } else {
+                Vec3::new(0.5, 0.06, 0.06)
+            };
+            g.cuboid(direction * 0.25 + Vec3::Y * y, size, BLUEPRINT);
+        }
+        g.beam(
+            direction * 0.04 + Vec3::Y * 0.14,
+            direction * 0.44 + Vec3::Y * 0.90,
+            0.02,
+            shade(BLUEPRINT, 1.12),
         );
     }
-    g.beam(
-        Vec3::new(-0.45, 0.1, 0.),
-        Vec3::new(0.45, 0.9, 0.),
-        0.025,
-        shade(BLUEPRINT, 1.15),
-    );
-    if doorway {
-        g.cuboid(
-            Vec3::new(-0.30, 0.50, 0.015),
-            Vec3::new(0.045, 0.78, 0.045),
-            shade(BLUEPRINT, 0.85),
-        );
-        g.cuboid(
-            Vec3::new(0.30, 0.50, 0.015),
-            Vec3::new(0.045, 0.78, 0.045),
-            shade(BLUEPRINT, 0.85),
-        );
-        g.cuboid(
-            Vec3::new(0., 0.87, 0.015),
-            Vec3::new(0.64, 0.045, 0.045),
-            shade(BLUEPRINT, 0.85),
-        );
+}
+
+fn construction_door(g: &mut Geometry) {
+    // Paired jamb uprights and lintel outline the future doorway without
+    // a diagonal brace obscuring the walkable opening.
+    for x in [-0.47, -0.35, 0.35, 0.47] {
+        g.cuboid(Vec3::new(x, 0.5, 0.), Vec3::new(0.06, 1.0, 0.06), BLUEPRINT);
+    }
+    for y in [0.92, 1.01] {
+        g.cuboid(Vec3::new(0., y, 0.), Vec3::new(1.0, 0.06, 0.06), BLUEPRINT);
     }
 }
 
@@ -574,6 +608,71 @@ mod tests {
             VertexAttributeValues::Float32x3(values) => values,
             other => panic!("unexpected attribute {other:?}"),
         }
+    }
+
+    fn mesh_bounds(mesh: &Mesh) -> (Vec3, Vec3) {
+        float3(mesh, Mesh::ATTRIBUTE_POSITION).iter().fold(
+            (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
+            |(min, max), p| (min.min(Vec3::from(*p)), max.max(Vec3::from(*p))),
+        )
+    }
+
+    #[test]
+    fn connected_walls_and_blueprints_reach_only_requested_cell_edges() {
+        for kind in [ModelKind::Wall, ModelKind::ConstructionWall] {
+            for mask in 1..16 {
+                let (min, max) = mesh_bounds(&structure_mesh(kind, mask));
+                for (bit, extent) in [(1, -min.z), (2, max.x), (4, max.z), (8, -min.x)] {
+                    assert!(extent <= 0.50001, "{kind:?} mask {mask}: exceeds cell");
+                    if mask & bit != 0 {
+                        assert!((extent - 0.5).abs() < 0.00001, "{kind:?} mask {mask}: gap");
+                    } else {
+                        assert!(extent < 0.2, "{kind:?} mask {mask}: unwanted arm");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn doorway_axis_follows_neighbors_and_opening_stays_clear() {
+        for kind in [
+            ModelKind::Door,
+            ModelKind::OpenDoor,
+            ModelKind::ConstructionDoor,
+        ] {
+            let (min, max) = mesh_bounds(&structure_mesh(kind, 5));
+            assert!((min.z + 0.5).abs() < 0.00001);
+            assert!((max.z - 0.5).abs() < 0.00001);
+            let ew = structure_mesh(kind, 10);
+            let ns = structure_mesh(kind, 5);
+            assert_ne!(
+                float3(&ew, Mesh::ATTRIBUTE_POSITION),
+                float3(&ns, Mesh::ATTRIBUTE_POSITION)
+            );
+        }
+        let blocks_opening = |kind| {
+            let mesh = structure_mesh(kind, 10);
+            // Project triangles onto XY to cast through the center of the door.
+            float3(&mesh, Mesh::ATTRIBUTE_POSITION)
+                .chunks_exact(3)
+                .any(|t| {
+                    let a = Vec3::from(t[0]);
+                    let b = Vec3::from(t[1]) - a;
+                    let c = Vec3::from(t[2]) - a;
+                    let p = Vec3::new(0., 0.5, 0.) - a;
+                    let determinant = b.x * c.y - b.y * c.x;
+                    if determinant.abs() < 0.00001 {
+                        return false;
+                    }
+                    let u = (p.x * c.y - p.y * c.x) / determinant;
+                    let v = (b.x * p.y - b.y * p.x) / determinant;
+                    u >= 0. && v >= 0. && u + v <= 1.
+                })
+        };
+        assert!(blocks_opening(ModelKind::Door));
+        assert!(!blocks_opening(ModelKind::OpenDoor));
+        assert!(!blocks_opening(ModelKind::ConstructionDoor));
     }
 
     #[test]

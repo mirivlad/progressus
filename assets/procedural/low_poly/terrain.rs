@@ -1,80 +1,138 @@
-use bevy::{asset::RenderAssetUsages, mesh::PrimitiveTopology, prelude::*};
-use progressus_app::{ChunkSnapshot, KnownTerrain, Terrain};
+use std::collections::BTreeMap;
 
-pub(super) fn terrain_mesh(chunk: &ChunkSnapshot) -> Mesh {
+use bevy::{asset::RenderAssetUsages, mesh::PrimitiveTopology, prelude::*};
+use progressus_app::{ChunkSnapshot, KnownTerrain, LocalCell, Terrain, WorldCell};
+
+pub(super) fn terrain_mesh(chunk: &ChunkSnapshot, known: &BTreeMap<WorldCell, Terrain>) -> Mesh {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut colors = Vec::new();
     let side = usize::from(chunk.side);
     let mut triangle = |a: Vec3, b: Vec3, c: Vec3, color: [f32; 4]| {
-        let normal = (b - a).cross(c - a).normalize_or_zero().to_array();
+        if (b - a).cross(c - a).length_squared() < 0.000001 {
+            return;
+        }
+        let normal = (b - a).cross(c - a).normalize().to_array();
         positions.extend([a.to_array(), b.to_array(), c.to_array()]);
         normals.extend([normal; 3]);
         colors.extend([color; 3]);
     };
-    for (i, known) in chunk.cells.iter().enumerate() {
-        let KnownTerrain::Known(kind) = known else {
+    for (i, terrain) in chunk.cells.iter().enumerate() {
+        let KnownTerrain::Known(kind) = terrain else {
             continue;
+        };
+        let Some(cell) = chunk
+            .coordinate
+            .world_cell(LocalCell::new((i % side) as u16, (i / side) as u16))
+        else {
+            continue;
+        };
+        let neighbour = |dx: i64, dy: i64| {
+            cell.x()
+                .checked_add(dx)
+                .zip(cell.y().checked_add(dy))
+                .and_then(|(x, y)| known.get(&WorldCell::new(x, y)))
+                .copied()
         };
         let x = (i % side) as f32;
         let z = -((i / side) as f32);
-        let hash = (chunk.coordinate.x() as u64)
+        let hash = (cell.x() as u64)
             .wrapping_mul(731)
-            .wrapping_add(chunk.coordinate.y() as u64)
-            .wrapping_mul(157)
-            .wrapping_add(i as u64 * 71);
-        let variation = (hash % 7) as f32 * 0.005;
-        let (h, color) = match kind {
-            Terrain::Grass => (
-                0.,
-                [0.25 + variation, 0.39 + variation, 0.16 + variation, 1.],
-            ),
-            Terrain::Water => (
-                -0.16,
-                [0.09 + variation, 0.31 + variation, 0.39 + variation, 1.],
-            ),
-            Terrain::Rock => (
-                0.03,
-                [0.39 + variation, 0.40 + variation, 0.34 + variation, 1.],
-            ),
+            .wrapping_add((cell.y() as u64).wrapping_mul(157));
+        let variation = (hash % 11) as f32 * 0.006;
+        let color = match kind {
+            Terrain::Grass => [0.24 + variation, 0.43 + variation, 0.12 + variation, 1.],
+            Terrain::Water => [0.035, 0.34 + variation, 0.46 + variation, 1.],
+            Terrain::Rock => [0.39 + variation, 0.41 + variation, 0.38 + variation, 1.],
         };
+        let sand = [0.68, 0.56, 0.32, 1.];
+        let base = if *kind == Terrain::Water { -0.14 } else { 0. };
         let corners = [
-            Vec3::new(x - 0.5, h, z - 0.5),
-            Vec3::new(x - 0.5, h, z + 0.5),
-            Vec3::new(x + 0.5, h, z + 0.5),
-            Vec3::new(x + 0.5, h, z - 0.5),
+            Vec3::new(-0.5, 0., -0.5),
+            Vec3::new(-0.5, 0., 0.5),
+            Vec3::new(0.5, 0., 0.5),
+            Vec3::new(0.5, 0., -0.5),
         ];
-        if *kind == Terrain::Rock {
-            let center = Vec3::new(x + 0.1, h + 0.18 + (hash % 4) as f32 * 0.06, z - 0.06);
-            for j in 0..4 {
-                triangle(corners[j], corners[(j + 1) % 4], center, color);
-            }
-        } else {
-            triangle(corners[0], corners[1], corners[2], color);
-            triangle(corners[0], corners[2], corners[3], color);
-        }
-        // Shallow banks and an earth edge hide gaps at water/discovery boundaries.
-        // These skirts do not query hidden neighbouring terrain.
-        let edge = [color[0] * 0.7, color[1] * 0.7, color[2] * 0.65, 1.];
+        // This clockwise ring has upward winding in world X/Z coordinates.
+        let offsets = [(-1, 0), (0, -1), (1, 0), (0, 1)];
+        let same: [bool; 4] =
+            std::array::from_fn(|j| neighbour(offsets[j].0, offsets[j].1) == Some(*kind));
+        let origin = Vec3::new(x, 0., z);
+        let mut ring = Vec::with_capacity(8);
         for j in 0..4 {
-            let column = i % side;
-            let row = i / side;
-            let neighbour = match j {
-                0 if column > 0 => Some(i - 1),
-                1 if row > 0 => Some(i - side),
-                2 if column + 1 < side => Some(i + 1),
-                3 if row + 1 < side => Some(i + side),
-                _ => None,
+            let previous = (j + 3) % 4;
+            let corner = corners[j];
+            let cut = *kind != Terrain::Grass && !same[previous] && !same[j];
+            let height = if *kind == Terrain::Rock
+                && same[previous]
+                && same[j]
+                && neighbour(
+                    offsets[previous].0 + offsets[j].0,
+                    offsets[previous].1 + offsets[j].1,
+                ) == Some(Terrain::Rock)
+            {
+                1.9
+            } else {
+                base
             };
-            if neighbour.is_some_and(|n| chunk.cells[n] == *known) {
-                continue;
+            if cut {
+                let a = corner.lerp(corners[previous], 0.23) + origin;
+                let b = corner.lerp(corners[(j + 1) % 4], 0.23) + origin;
+                triangle(
+                    corner + origin,
+                    b,
+                    a,
+                    if *kind == Terrain::Water {
+                        sand
+                    } else {
+                        [0.30, 0.40, 0.17, 1.]
+                    },
+                );
+                ring.push((a + Vec3::Y * base, true));
+                ring.push((b + Vec3::Y * base, !same[j]));
+            } else {
+                ring.push((corner + origin + Vec3::Y * height, !same[j]));
             }
-            let a = corners[j];
-            let b = corners[(j + 1) % 4];
-            let bottom_a = Vec3::new(a.x, -0.28, a.z);
-            let bottom_b = Vec3::new(b.x, -0.28, b.z);
-            triangle(a, bottom_a, b, edge);
-            triangle(b, bottom_a, bottom_b, edge);
+            // Edge midpoint is shared across chunks and connects mountain ridges.
+            if *kind == Terrain::Rock {
+                let h = if same[j] { 1.9 } else { 0. };
+                ring.push((
+                    corner.lerp(corners[(j + 1) % 4], 0.5) + origin + Vec3::Y * h,
+                    !same[j],
+                ));
+            }
+        }
+        let center = origin
+            + Vec3::Y
+                * if *kind == Terrain::Rock {
+                    2.8 + (hash % 7) as f32 * 0.11
+                } else {
+                    base
+                };
+        for j in 0..ring.len() {
+            let (a, exposed) = ring[j];
+            let b = ring[(j + 1) % ring.len()].0;
+            if *kind == Terrain::Water && exposed {
+                let inner_a = a.lerp(center, 0.18);
+                let inner_b = b.lerp(center, 0.18);
+                let bank_a = Vec3::new(a.x, 0., a.z);
+                let bank_b = Vec3::new(b.x, 0., b.z);
+                triangle(bank_a, bank_b, inner_b, sand);
+                triangle(bank_a, inner_b, inner_a, sand);
+                triangle(inner_a, inner_b, center, color);
+                triangle(a, bank_a, inner_a, sand);
+                triangle(bank_b, b, inner_b, sand);
+            } else {
+                triangle(a, b, center, color);
+            }
+            // Skirts close exposed biome/discovery edges; same-terrain edges join directly.
+            if exposed {
+                let bottom_a = Vec3::new(a.x, -0.28, a.z);
+                let bottom_b = Vec3::new(b.x, -0.28, b.z);
+                let edge = [color[0] * 0.7, color[1] * 0.7, color[2] * 0.65, 1.];
+                triangle(a, bottom_a, b, edge);
+                triangle(b, bottom_a, bottom_b, edge);
+            }
         }
     }
     Mesh::new(
@@ -90,18 +148,178 @@ pub(super) fn terrain_mesh(chunk: &ChunkSnapshot) -> Mesh {
 mod tests {
     use super::*;
     use progressus_app::ChunkCoord;
+
+    fn chunk(kind: KnownTerrain) -> ChunkSnapshot {
+        ChunkSnapshot {
+            coordinate: ChunkCoord::new(0, 0),
+            side: 1,
+            cells: vec![kind],
+        }
+    }
+
+    fn positions(mesh: &Mesh) -> &Vec<[f32; 3]> {
+        let bevy::mesh::VertexAttributeValues::Float32x3(positions) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap()
+        else {
+            panic!("positions");
+        };
+        positions
+    }
+
+    #[test]
+    fn mountains_rise_well_above_resource_rocks() {
+        let mesh = terrain_mesh(&chunk(KnownTerrain::Known(Terrain::Rock)), &BTreeMap::new());
+        assert!(positions(&mesh).iter().any(|p| p[1] >= 2.5));
+    }
+
     #[test]
     fn hidden_cells_produce_no_geometry() {
-        let mut chunk = ChunkSnapshot {
-            coordinate: ChunkCoord::new(-1, 0),
-            side: 2,
-            cells: vec![KnownTerrain::Unknown; 4],
+        let known = BTreeMap::from([(WorldCell::new(0, 0), Terrain::Rock)]);
+        assert_eq!(
+            terrain_mesh(&chunk(KnownTerrain::Unknown), &known).count_vertices(),
+            0
+        );
+    }
+
+    #[test]
+    fn isolated_water_has_beveled_shore_with_sand_above_water() {
+        let mesh = terrain_mesh(
+            &chunk(KnownTerrain::Known(Terrain::Water)),
+            &BTreeMap::new(),
+        );
+        let points = positions(&mesh);
+        assert!(points.iter().any(|p| p[1] == -0.14));
+        assert!(
+            points
+                .iter()
+                .any(|p| p[1] == 0. && (p[0].abs() - 0.27).abs() < 0.001)
+        );
+        let bevy::mesh::VertexAttributeValues::Float32x4(colors) =
+            mesh.attribute(Mesh::ATTRIBUTE_COLOR).unwrap()
+        else {
+            panic!("colors");
         };
-        assert_eq!(terrain_mesh(&chunk).count_vertices(), 0);
-        chunk.cells[0] = KnownTerrain::Known(Terrain::Grass);
-        let grass = terrain_mesh(&chunk).count_vertices();
-        assert_eq!(grass, 30);
-        chunk.cells[1] = KnownTerrain::Known(Terrain::Rock);
-        assert_eq!(terrain_mesh(&chunk).count_vertices(), grass + 36);
+        assert!(colors.contains(&[0.68, 0.56, 0.32, 1.]));
+    }
+
+    #[test]
+    fn known_rock_edges_share_the_same_ridge_height() {
+        let mut left = chunk(KnownTerrain::Known(Terrain::Rock));
+        left.side = 32;
+        left.cells = vec![KnownTerrain::Unknown; 32 * 32];
+        left.cells[31] = KnownTerrain::Known(Terrain::Rock);
+        let mut right = chunk(KnownTerrain::Known(Terrain::Rock));
+        right.coordinate = ChunkCoord::new(1, 0);
+        let known = BTreeMap::from([
+            (WorldCell::new(31, 0), Terrain::Rock),
+            (WorldCell::new(32, 0), Terrain::Rock),
+        ]);
+        let a = terrain_mesh(&left, &known);
+        let b = terrain_mesh(&right, &known);
+        assert!(positions(&a).contains(&[31.5, 1.9, 0.]));
+        assert!(positions(&b).contains(&[-0.5, 1.9, 0.]));
+    }
+    #[test]
+    fn shore_skirts_close_the_actual_square_footprint_at_ground_height() {
+        let mesh = terrain_mesh(
+            &chunk(KnownTerrain::Known(Terrain::Water)),
+            &BTreeMap::new(),
+        );
+        for corner in [
+            [-0.5, 0., -0.5],
+            [-0.5, 0., 0.5],
+            [0.5, 0., 0.5],
+            [0.5, 0., -0.5],
+        ] {
+            let bottom = [corner[0], -0.28, corner[2]];
+            assert!(
+                positions(&mesh)
+                    .chunks_exact(3)
+                    .any(|face| face.contains(&corner) && face.contains(&bottom)),
+                "shore skirt must reach the bank corner {corner:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_neighborhood_covers_the_cell_with_upward_top_faces() {
+        let offsets = [
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+            (-1, 0),
+            (1, 0),
+            (-1, 1),
+            (0, 1),
+            (1, 1),
+        ];
+        for kind in [Terrain::Grass, Terrain::Rock, Terrain::Water] {
+            for mask in 0..256 {
+                let known = offsets
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| mask & (1 << i) != 0)
+                    .map(|(_, &(x, y))| (WorldCell::new(x, y), kind))
+                    .collect();
+                let mesh = terrain_mesh(&chunk(KnownTerrain::Known(kind)), &known);
+                let mut area = 0.;
+                for face in positions(&mesh).chunks_exact(3) {
+                    let [a, b, c] = [
+                        Vec3::from_array(face[0]),
+                        Vec3::from_array(face[1]),
+                        Vec3::from_array(face[2]),
+                    ];
+                    let projected = (b - a).cross(c - a).y;
+                    assert!(
+                        projected >= -0.000001,
+                        "downward face: {kind:?}, mask {mask}, {face:?}"
+                    );
+                    area += projected * 0.5;
+                }
+                assert!(
+                    (area - 1.).abs() < 0.00001,
+                    "cell coverage {area}: {kind:?}, mask {mask}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn four_chunk_corner_height_agrees_for_every_partial_discovery_mask() {
+        let cells = [(31, 31), (32, 31), (31, 32), (32, 32)];
+        for mask in 1..16 {
+            let known = cells
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| mask & (1 << i) != 0)
+                .map(|(_, &(x, y))| (WorldCell::new(x, y), Terrain::Rock))
+                .collect();
+            let expected = if mask == 15 { 1.9 } else { 0. };
+            for (i, &(x, y)) in cells.iter().enumerate() {
+                if mask & (1 << i) == 0 {
+                    continue;
+                }
+                let (coordinate, local) = WorldCell::new(x, y).split();
+                let mut snapshot = ChunkSnapshot {
+                    coordinate,
+                    side: 32,
+                    cells: vec![KnownTerrain::Unknown; 1024],
+                };
+                snapshot.cells[usize::from(local.y()) * 32 + usize::from(local.x())] =
+                    KnownTerrain::Known(Terrain::Rock);
+                let mesh = terrain_mesh(&snapshot, &known);
+                let cx = 31.5 - coordinate.x() as f32 * 32.;
+                let cz = -31.5 + coordinate.y() as f32 * 32.;
+                let heights: Vec<_> = positions(&mesh)
+                    .iter()
+                    .filter(|p| p[0] == cx && p[2] == cz && p[1] >= 0.)
+                    .map(|p| p[1])
+                    .collect();
+                assert!(!heights.is_empty());
+                assert!(
+                    heights.iter().all(|&h| h == expected),
+                    "corner mismatch: mask {mask}, {coordinate:?}, {heights:?}"
+                );
+            }
+        }
     }
 }

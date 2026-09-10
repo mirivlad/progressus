@@ -22,8 +22,7 @@ mod ui_font;
 
 pub use runtime::{ClientError, run, run_with_options, run_with_seed};
 
-#[cfg(feature = "low-poly")]
-pub mod low_poly;
+mod low_poly;
 
 pub(crate) mod continuous_music;
 // This source also contains the offline timbre comparison/export entry points.

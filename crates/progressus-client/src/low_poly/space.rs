@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use progressus_app::{ChunkCoord, SUBUNITS_PER_CELL, WorldCell, WorldPosition};
 
 // Local X points east, local -Z points north; Y never enters authority.
-pub(super) fn local(position: WorldPosition, origin: WorldCell) -> Vec3 {
+pub(crate) fn local(position: WorldPosition, origin: WorldCell) -> Vec3 {
     let origin = WorldPosition::from_cell_center(origin).expect("valid cell center");
     Vec3::new(
         (position.x_subunits() - origin.x_subunits()) as f32 / SUBUNITS_PER_CELL as f32,
@@ -11,7 +11,7 @@ pub(super) fn local(position: WorldPosition, origin: WorldCell) -> Vec3 {
     )
 }
 
-pub(super) fn cell_local(cell: WorldCell, origin: WorldCell) -> Vec3 {
+pub(crate) fn cell_local(cell: WorldCell, origin: WorldCell) -> Vec3 {
     Vec3::new(
         (i128::from(cell.x()) - i128::from(origin.x())) as f32,
         0.0,
@@ -19,7 +19,7 @@ pub(super) fn cell_local(cell: WorldCell, origin: WorldCell) -> Vec3 {
     )
 }
 
-pub(super) fn position(point: Vec3, origin: WorldCell) -> Option<WorldPosition> {
+pub(crate) fn position(point: Vec3, origin: WorldCell) -> Option<WorldPosition> {
     if !point.is_finite() {
         return None;
     }
@@ -32,11 +32,11 @@ pub(super) fn position(point: Vec3, origin: WorldCell) -> Option<WorldPosition> 
         .ok()
 }
 
-pub(super) fn ground(ray: Ray3d) -> Option<Vec3> {
+pub(crate) fn ground(ray: Ray3d) -> Option<Vec3> {
     ray.plane_intersection_point(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y))
 }
 
-pub(super) fn visible_chunks(points: &[Vec3], origin: WorldCell) -> Vec<ChunkCoord> {
+pub(crate) fn visible_chunks(points: &[Vec3], origin: WorldCell) -> Vec<ChunkCoord> {
     let cells: Vec<_> = points
         .iter()
         .filter_map(|&p| position(p, origin))

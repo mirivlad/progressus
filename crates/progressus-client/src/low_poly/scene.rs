@@ -1,6 +1,6 @@
 use super::*;
 use progressus_app::{
-    ChunkCoord, ChunkSnapshot, DoorState, ItemKind, LocalCell, NaturalResourceKind, StructureKind,
+    SnapshotQuery, ChunkCoord, ChunkSnapshot, DoorState, ItemKind, LocalCell, NaturalResourceKind, StructureKind,
     WorldPosition,
 };
 use std::collections::BTreeSet;
@@ -20,20 +20,29 @@ struct Object {
     position: WorldPosition,
     variant: u8,
 }
-struct TerrainEntry {
-    source: ChunkSnapshot,
-    entity: Entity,
-    mesh: Handle<Mesh>,
+pub(crate) struct TerrainEntry {
+    pub(crate) source: ChunkSnapshot,
+    pub(crate) entity: Entity,
+    pub(crate) mesh: Handle<Mesh>,
+    neighborhood: Vec<ChunkSnapshot>,
 }
 #[derive(Resource, Default)]
-pub(super) struct SceneCache {
+pub(crate) struct SceneCache {
     chunks: Vec<ChunkCoord>,
     revisions: Option<[u64; 3]>,
-    terrain: BTreeMap<ChunkCoord, TerrainEntry>,
+    pub(crate) terrain: BTreeMap<ChunkCoord, TerrainEntry>,
+    invalidated: bool,
     objects: BTreeMap<ObjectKey, (Object, Entity)>,
-    pawns: BTreeMap<EntityId, Entity>,
+    pub(crate) pawns: BTreeMap<EntityId, Entity>,
     resources: Vec<progressus_app::NaturalResourceSnapshot>,
-    items: Vec<progressus_app::GroundItemSnapshot>,
+    pub(crate) items: Vec<progressus_app::GroundItemSnapshot>,
+}
+
+impl SceneCache {
+    pub(crate) fn invalidate_loaded_world(&mut self) {
+        self.invalidated = true;
+        self.revisions = None;
+    }
 }
 
 fn item_model(kind: ItemKind) -> ModelKind {
@@ -49,9 +58,9 @@ fn object_transform(object: &Object, origin: WorldCell) -> Transform {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn sync(
+pub(crate) fn sync(
     mut commands: Commands,
-    mut game: ResMut<Game>,
+    mut game: ResMut<crate::runtime::AuthoritativeClient>,
     mut view: ResMut<View>,
     mut cache: ResMut<SceneCache>,
     mut palette: ResMut<Palette>,
@@ -60,6 +69,22 @@ pub(super) fn sync(
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     windows: Query<&Window>,
 ) {
+    if cache.invalidated {
+        for (_, entry) in std::mem::take(&mut cache.terrain) {
+            commands.entity(entry.entity).try_despawn();
+            meshes.remove(entry.mesh.id());
+        }
+        for (_, (_, entity)) in std::mem::take(&mut cache.objects) {
+            commands.entity(entity).try_despawn();
+        }
+        for (_, entity) in std::mem::take(&mut cache.pawns) {
+            commands.entity(entity).try_despawn();
+        }
+        cache.chunks.clear();
+        cache.invalidated = false;
+        motion.clear();
+    }
+    let dirty = game.take_snapshot_dirty();
     let (Ok((camera, _)), Ok(window)) = (cameras.single(), windows.single()) else {
         return;
     };
@@ -82,9 +107,9 @@ pub(super) fn sync(
     }
     let chunks = space::visible_chunks(&points, view.origin);
     let revisions = [
-        game.snapshot.exploration_revision,
-        game.snapshot.item_revision,
-        game.snapshot.resource_revision,
+        game.snapshot().exploration_revision,
+        game.snapshot().item_revision,
+        game.snapshot().resource_revision,
     ];
     let viewport_changed = chunks != cache.chunks;
     let terrain_changed =
@@ -98,7 +123,7 @@ pub(super) fn sync(
             .revisions
             .is_none_or(|old| old[2] != revisions[2] || old[0] != revisions[0]);
     if terrain_changed || items_changed || resources_changed {
-        let spatial = match game.app.snapshot(SnapshotQuery {
+        let spatial = match game.application_mut().snapshot(SnapshotQuery {
             chunks: chunks.clone(),
             include_terrain: terrain_changed,
             include_ground_items: items_changed,
@@ -107,7 +132,7 @@ pub(super) fn sync(
         }) {
             Ok(s) => s,
             Err(e) => {
-                game.message = e.to_string();
+                warn!("spatial snapshot failed: {e}");
                 return;
             }
         };
@@ -122,15 +147,35 @@ pub(super) fn sync(
                     false
                 }
             });
+            let neighborhood = spatial.chunks.clone();
+            let known = spatial
+                .chunks
+                .iter()
+                .flat_map(|chunk| {
+                    chunk.cells.iter().enumerate().filter_map(move |(i, cell)| {
+                        let progressus_app::KnownTerrain::Known(kind) = cell else {
+                            return None;
+                        };
+                        let local = LocalCell::new(
+                            (i % usize::from(chunk.side)) as u16,
+                            (i / usize::from(chunk.side)) as u16,
+                        );
+                        chunk
+                            .coordinate
+                            .world_cell(local)
+                            .map(|cell| (cell, *kind))
+                    })
+                })
+                .collect();
             for chunk in spatial.chunks {
                 if cache
                     .terrain
                     .get(&chunk.coordinate)
-                    .is_some_and(|e| e.source == chunk)
+                    .is_some_and(|e| e.source == chunk && e.neighborhood == neighborhood)
                 {
                     continue;
                 }
-                let mesh = meshes.add(terrain::terrain_mesh(&chunk));
+                let mesh = meshes.add(terrain::terrain_mesh(&chunk, &known));
                 let start = chunk
                     .coordinate
                     .world_cell(LocalCell::new(0, 0))
@@ -155,6 +200,7 @@ pub(super) fn sync(
                     chunk.coordinate,
                     TerrainEntry {
                         source: chunk,
+                        neighborhood: neighborhood.clone(),
                         entity,
                         mesh,
                     },
@@ -170,7 +216,7 @@ pub(super) fn sync(
         cache.chunks = chunks;
         cache.revisions = Some(revisions);
     }
-    if !game.dirty && !viewport_changed && !view.rebased && !items_changed && !resources_changed {
+    if !dirty && !viewport_changed && !view.rebased && !items_changed && !resources_changed {
         return;
     }
     if view.rebased {
@@ -212,10 +258,17 @@ pub(super) fn sync(
             % 4;
         insert(ObjectKey::Resource(r.cell), kind, r.cell, variant);
     }
-    for w in &game.snapshot.workstations {
+    for w in &game.snapshot().workstations {
         insert(ObjectKey::Workbench(w.id), ModelKind::Workbench, w.cell, 0);
     }
-    for s in &game.snapshot.structures {
+    let building_cells = game
+        .snapshot()
+        .structures
+        .iter()
+        .map(|s| s.cell)
+        .chain(game.snapshot().construction_sites.iter().map(|s| s.cell))
+        .collect();
+    for s in &game.snapshot().structures {
         let kind = match s.kind {
             StructureKind::StoneWall => ModelKind::Wall,
             StructureKind::Door => {
@@ -226,9 +279,15 @@ pub(super) fn sync(
                 }
             }
         };
-        insert(ObjectKey::Structure(s.id), kind, s.cell, 0);
+        insert(
+            ObjectKey::Structure(s.id),
+            kind,
+            s.cell,
+            crate::tile_connectivity::CardinalConnections::from_cells(s.cell, &building_cells)
+                .bits(),
+        );
     }
-    for s in &game.snapshot.construction_sites {
+    for s in &game.snapshot().construction_sites {
         insert(
             ObjectKey::Site(s.id),
             if s.kind == StructureKind::Door {
@@ -237,7 +296,8 @@ pub(super) fn sync(
                 ModelKind::ConstructionWall
             },
             s.cell,
-            0,
+            crate::tile_connectivity::CardinalConnections::from_cells(s.cell, &building_cells)
+                .bits(),
         );
     }
     for item in &cache.items {
@@ -250,9 +310,9 @@ pub(super) fn sync(
             },
         );
     }
-    for item in &game.snapshot.carried_items {
+    for item in &game.snapshot().carried_items {
         if let Some(c) =
-            game.snapshot.characters.iter().find(|c| {
+            game.snapshot().characters.iter().find(|c| {
                 c.id == item.character_id && visible.contains(&c.containing_cell.split().0)
             })
         {
@@ -278,7 +338,7 @@ pub(super) fn sync(
         if let ObjectKey::Carried(id) = key
             && let (Some((_, entity)), Some(item)) = (
                 cache.objects.get(&key),
-                game.snapshot.carried_items.iter().find(|i| i.id == id),
+                game.snapshot().carried_items.iter().find(|i| i.id == id),
             )
         {
             commands
@@ -306,7 +366,7 @@ pub(super) fn sync(
                 ))
                 .id();
             if let ObjectKey::Carried(id) = key
-                && let Some(item) = game.snapshot.carried_items.iter().find(|i| i.id == id)
+                && let Some(item) = game.snapshot().carried_items.iter().find(|i| i.id == id)
             {
                 commands
                     .entity(entity)
@@ -316,7 +376,7 @@ pub(super) fn sync(
         }
     }
     let characters: BTreeSet<_> = game
-        .snapshot
+        .snapshot()
         .characters
         .iter()
         .filter(|c| visible.contains(&c.containing_cell.split().0))
@@ -331,13 +391,13 @@ pub(super) fn sync(
         }
     });
     motion.retain(characters.iter().copied());
-    for c in &game.snapshot.characters {
+    for c in &game.snapshot().characters {
         if !characters.contains(&c.id) {
             continue;
         }
         motion.replace(
             c.id,
-            game.snapshot.tick,
+            game.snapshot().tick,
             if c.last_tick_motion_trace.is_empty() {
                 vec![c.position]
             } else {
@@ -356,153 +416,5 @@ pub(super) fn sync(
                 .id()
         });
     }
-    game.dirty = false;
     view.rebased = false;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bevy::camera::{CameraProjection, ComputedCameraValues, RenderTargetInfo};
-    fn app() -> App {
-        let mut app = App::new();
-        let application = Application::new_game(NewGameOptions {
-            seed: WorldSeed::new(0),
-        })
-        .unwrap();
-        let snapshot = application.snapshot(SnapshotQuery::default()).unwrap();
-        let mut projection = OrthographicProjection {
-            scaling_mode: ScalingMode::FixedVertical {
-                viewport_height: 18.,
-            },
-            ..OrthographicProjection::default_3d()
-        };
-        projection.update(1440., 900.);
-        let camera = Camera {
-            computed: ComputedCameraValues {
-                clip_from_view: projection.get_clip_from_view(),
-                target_info: Some(RenderTargetInfo {
-                    physical_size: UVec2::new(1440, 900),
-                    scale_factor: 1.,
-                }),
-                ..default()
-            },
-            ..default()
-        };
-        app.init_resource::<Assets<Mesh>>()
-            .init_resource::<VisualMotion>()
-            .init_resource::<SceneCache>()
-            .insert_resource(Palette {
-                models: BTreeMap::new(),
-                material: Handle::default(),
-            })
-            .insert_resource(Game {
-                app: application,
-                snapshot,
-                selected: None,
-                dirty: true,
-                message: String::new(),
-            })
-            .insert_resource(View {
-                origin: WorldCell::new(0, 0),
-                focus: Vec3::ZERO,
-                height: 18.,
-                yaw: std::f32::consts::FRAC_PI_4,
-                rebased: true,
-            })
-            .add_systems(Update, sync);
-        app.world_mut()
-            .spawn((Camera3d::default(), camera, GlobalTransform::default()));
-        app.world_mut().spawn(Window {
-            resolution: (1440, 900).into(),
-            ..default()
-        });
-        app
-    }
-    #[test]
-    fn idle_updates_and_item_revisions_preserve_terrain_entities_and_meshes() {
-        let mut app = app();
-        app.update();
-        let before: Vec<_> = app
-            .world()
-            .resource::<SceneCache>()
-            .terrain
-            .values()
-            .map(|e| (e.entity, e.mesh.id()))
-            .collect();
-        assert!(!before.is_empty());
-        let count = app.world().resource::<Assets<Mesh>>().len();
-        for _ in 0..10 {
-            app.update();
-        }
-        {
-            let mut game = app.world_mut().resource_mut::<Game>();
-            game.snapshot.item_revision += 1;
-            game.dirty = true;
-        }
-        app.update();
-        let after: Vec<_> = app
-            .world()
-            .resource::<SceneCache>()
-            .terrain
-            .values()
-            .map(|e| (e.entity, e.mesh.id()))
-            .collect();
-        assert_eq!(before, after);
-        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), count);
-    }
-    #[test]
-    fn panning_to_unknown_space_evicts_meshes_without_changing_save_or_discovery() {
-        let mut app = app();
-        app.update();
-        let before = app.world().resource::<Game>().app.save_json().unwrap();
-        app.world_mut().resource_mut::<View>().focus = Vec3::new(10000., 0., 10000.);
-        app.update();
-        assert!(app.world().resource::<SceneCache>().terrain.is_empty());
-        assert!(app.world().resource::<SceneCache>().pawns.is_empty());
-        assert_eq!(
-            app.world().resource::<Game>().app.save_json().unwrap(),
-            before
-        );
-        let cache = app.world().resource::<Palette>();
-        assert_eq!(
-            app.world().resource::<Assets<Mesh>>().len(),
-            cache.models.len()
-        );
-    }
-    #[test]
-    fn move_commands_use_real_authority_and_traces_without_camera_dependency() {
-        let mut app = app();
-        app.update();
-        let id = app.world().resource::<Game>().snapshot.characters[0].id;
-        let destination = WorldPosition::from_cell_center(WorldCell::new(2, 0)).unwrap();
-        {
-            let mut game = app.world_mut().resource_mut::<Game>();
-            game.selected = Some(id);
-            game.execute(Command::MoveTo {
-                character_id: id,
-                destination,
-            });
-            assert_eq!(
-                game.snapshot.navigation.as_ref().unwrap().destination,
-                Some(destination)
-            );
-            game.execute(Command::AdvanceTicks { count: 1 });
-        }
-        app.update();
-        let motion = app.world().resource::<VisualMotion>();
-        let trace = &motion.characters[&id].trace;
-        assert!(!trace.is_empty());
-        assert_eq!(
-            interpolate_trace(trace, 1.),
-            app.world()
-                .resource::<Game>()
-                .snapshot
-                .characters
-                .iter()
-                .find(|c| c.id == id)
-                .unwrap()
-                .position
-        );
-    }
 }

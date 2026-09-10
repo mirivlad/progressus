@@ -2,7 +2,7 @@ use crate::{
     ambient_synthesis::WORK_VOICE_GAIN,
     audio_observer::{WorkObserver, audible_cues},
     audio_synthesis::{EffectKind, effect_wav},
-    render::PresentationCache,
+    low_poly::{View, space},
     runtime::AuthoritativeClient,
 };
 use bevy::{audio::Volume, prelude::*};
@@ -90,8 +90,9 @@ pub(crate) fn update_audio(
     mut state: ResMut<SettlementAudio>,
     settings: Res<AudioSettings>,
     authoritative: Res<AuthoritativeClient>,
-    cache: Res<PresentationCache>,
-    cameras: Query<(&Transform, &Projection), With<Camera2d>>,
+    view: Res<View>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     effects: Query<(Entity, &EffectVoice)>,
 ) {
     let now = time.elapsed_secs_f64();
@@ -120,23 +121,11 @@ pub(crate) fn update_audio(
     if settings.effects == 0 {
         return;
     }
-    let (Some(origin), Ok((camera, Projection::Orthographic(projection)))) =
-        (cache.render_origin, cameras.single())
-    else {
-        return;
-    };
-    let admitted = audible_cues(
-        cues,
-        origin,
-        [camera.translation.x, camera.translation.y],
-        [
-            projection.area.min.x,
-            projection.area.min.y,
-            projection.area.max.x,
-            projection.area.max.y,
-        ],
-        effects.iter().count(),
-    );
+    let (Ok((camera, transform)), Ok(window)) = (cameras.single(), windows.single()) else { return; };
+    let admitted = audible_cues(cues, |cell| {
+        let p = camera.world_to_viewport(transform, space::cell_local(cell, view.origin)).ok()?;
+        Some([p.x / window.width().max(1.), p.y / window.height().max(1.)])
+    }, effects.iter().count());
     for (cue, pan) in admitted {
         let Some(asset) = state.effects.get(&(cue.kind, cue.variant % 3)) else {
             continue;

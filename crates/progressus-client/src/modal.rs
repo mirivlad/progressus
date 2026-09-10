@@ -219,7 +219,7 @@ pub(crate) fn save_modal_interaction(
     mut state: SaveModalState,
     buttons: Query<(&Interaction, &SaveSlotButton), Changed<Interaction>>,
     locale: Res<Locale>,
-    mut cameras: Query<&mut Transform, With<Camera2d>>,
+    mut view: ResMut<crate::low_poly::View>,
 ) {
     let Some((_, button)) = buttons
         .iter()
@@ -280,10 +280,14 @@ pub(crate) fn save_modal_interaction(
             state.tool.cancel_drag();
             state.cache.invalidate_loaded_world();
             state.scheduler.reset_timing();
-            if let Ok(mut camera) = cameras.single_mut() {
-                camera.translation.x = 0.0;
-                camera.translation.y = 0.0;
-            }
+            view.reset(
+                state
+                    .authoritative
+                    .snapshot()
+                    .characters
+                    .first()
+                    .map_or(progressus_app::WorldCell::new(0, 0), |c| c.containing_cell),
+            );
             state.save_store.set_notice(SaveNotice::Loaded(button.slot));
             state.modal.close();
         }
