@@ -499,7 +499,7 @@ fn stone_outcrop(g: &mut Geometry, variant: u8) {
         g.gem(
             Vec3::new(
                 a.cos() * shape.spread,
-                shape.height * scale,
+                shape.height * scale * 0.62,
                 a.sin() * shape.spread,
             ),
             Vec3::new(
@@ -526,8 +526,10 @@ fn berry_bush(g: &mut Geometry, variant: u8) {
 
     for i in 0..lobes {
         let a = turn + TAU * i as f32 / lobes as f32;
+        // Stems part at the root rather than rising from one point, so the
+        // bush is planted in the ground instead of balanced on a stick.
         g.beam(
-            Vec3::new(0., 0.03, 0.),
+            Vec3::new(a.cos() * reach * 0.28, 0., a.sin() * reach * 0.28),
             Vec3::new(a.cos() * reach * 1.15, height, a.sin() * reach * 1.15),
             0.018,
             BARK,
@@ -577,13 +579,13 @@ fn character(g: &mut Geometry, variant: u8) {
         1.,
     ];
     g.beam(
-        Vec3::new(-0.09, 0.03, 0.),
+        Vec3::new(-0.09, 0., 0.),
         Vec3::new(-0.07, 0.40, 0.),
         0.045,
         [0.19, 0.15, 0.12, 1.],
     );
     g.beam(
-        Vec3::new(0.09, 0.03, 0.),
+        Vec3::new(0.09, 0., 0.),
         Vec3::new(0.07, 0.40, 0.),
         0.045,
         [0.19, 0.15, 0.12, 1.],
@@ -765,12 +767,12 @@ fn wood(g: &mut Geometry, variant: u8) {
     for offset in [-0.065_f32, 0.065] {
         let from = Vec3::new(
             -angle.cos() * 0.16,
-            0.10 + offset.abs() * 0.2,
+            0.026 + offset.abs() * 0.2,
             -angle.sin() * 0.16 + offset,
         );
         let to = Vec3::new(
             angle.cos() * 0.16,
-            0.10 + offset.abs() * 0.2,
+            0.026 + offset.abs() * 0.2,
             angle.sin() * 0.16 + offset,
         );
         g.beam(from, to, 0.05, BARK_LIGHT);
@@ -794,7 +796,7 @@ fn copper_vein(g: &mut Geometry, variant: u8) {
     let turn = variant as f32 * 0.97;
 
     g.gem(
-        Vec3::new(turn.cos() * 0.05, height, turn.sin() * 0.05),
+        Vec3::new(turn.cos() * 0.05, height * 0.62, turn.sin() * 0.05),
         Vec3::new(radius, height, radius * 0.9),
         sides,
         shade(STONE, 0.88 + index as f32 * 0.05),
@@ -817,13 +819,13 @@ fn copper_vein(g: &mut Geometry, variant: u8) {
 fn copper_ore(g: &mut Geometry, variant: u8) {
     let s = 0.09 + variant as f32 * 0.007;
     g.gem(
-        Vec3::new(0., s, 0.),
+        Vec3::new(0., s * 0.6, 0.),
         Vec3::new(0.15, s, 0.12),
         6,
         shade(STONE, 0.9),
     );
     g.gem(
-        Vec3::new(0.03, s * 1.5, -0.02),
+        Vec3::new(0.03, s * 1.1, -0.02),
         Vec3::new(0.07, s * 0.6, 0.06),
         5,
         COPPER,
@@ -832,20 +834,26 @@ fn copper_ore(g: &mut Geometry, variant: u8) {
 
 fn loose_stone(g: &mut Geometry, variant: u8) {
     let s = 0.10 + variant as f32 * 0.008;
-    g.gem(Vec3::new(0., s, 0.), Vec3::new(0.16, s, 0.13), 6, STONE);
+    g.gem(
+        Vec3::new(0., s * 0.6, 0.),
+        Vec3::new(0.16, s, 0.13),
+        6,
+        STONE,
+    );
 }
 
 fn primitive_tool(g: &mut Geometry, variant: u8) {
     let turn = variant as f32 * 0.28;
     let direction = Vec3::new(turn.cos(), 0., turn.sin());
+    // A dropped tool lies on the ground rather than hovering over it.
     g.beam(
-        -direction * 0.15 + Vec3::Y * 0.08,
-        direction * 0.14 + Vec3::Y * 0.12,
+        -direction * 0.15 + Vec3::Y * 0.026,
+        direction * 0.14 + Vec3::Y * 0.055,
         0.025,
         BARK_LIGHT,
     );
     g.gem(
-        direction * 0.18 + Vec3::Y * 0.14,
+        direction * 0.18 + Vec3::Y * 0.055,
         Vec3::new(0.10, 0.055, 0.075),
         5,
         shade(STONE, 0.82),
@@ -963,6 +971,64 @@ mod tests {
                 assert!(
                     min.y >= -0.2,
                     "{kind:?} variant {variant} sinks below ground"
+                );
+            }
+        }
+    }
+
+    /// A `gem` is a bipyramid: centring one at exactly its own vertical radius
+    /// leaves the lower apex touching the ground at a single point, and from a
+    /// low camera the object reads as hovering over its own shadow. Anything
+    /// that stands on the ground must meet it with a footprint, not a point,
+    /// and must not float above it either.
+    #[test]
+    fn ground_resting_models_meet_the_ground_with_a_footprint() {
+        let standing = |kind: ModelKind| {
+            kind.accepts_pose_variety()
+                || matches!(
+                    kind,
+                    ModelKind::Wood
+                        | ModelKind::Stone
+                        | ModelKind::Berries
+                        | ModelKind::CopperOre
+                        | ModelKind::PrimitiveTool
+                        | ModelKind::Workbench
+                        | ModelKind::Character
+                )
+        };
+        for kind in ModelKind::ALL.into_iter().filter(|k| standing(*k)) {
+            for variant in 0..kind.variant_count() {
+                let mesh = model_mesh(kind, variant);
+                let points = float3(&mesh, Mesh::ATTRIBUTE_POSITION);
+                // A footprint is either vertices sitting on the ground or the
+                // cross-section of geometry that passes through it. A gem has
+                // no vertices near the ground at all, only its two apexes, so
+                // measuring vertices alone would miss a buried one entirely.
+                let mut contact: Vec<Vec3> = points
+                    .iter()
+                    .map(|p| Vec3::from(*p))
+                    .filter(|p| p.y.abs() <= 0.02)
+                    .collect();
+                for triangle in points.chunks_exact(3) {
+                    for i in 0..3 {
+                        let (a, b) = (Vec3::from(triangle[i]), Vec3::from(triangle[(i + 1) % 3]));
+                        if (a.y < 0.) != (b.y < 0.) && (b.y - a.y).abs() > 1e-6 {
+                            contact.push(a + (b - a) * (-a.y / (b.y - a.y)));
+                        }
+                    }
+                }
+                assert!(
+                    !contact.is_empty(),
+                    "{kind:?} variant {variant} floats above the ground"
+                );
+                let spread = contact.iter().fold(0.0_f32, |widest, a| {
+                    contact.iter().fold(widest, |widest, b| {
+                        widest.max((Vec3::new(a.x, 0., a.z) - Vec3::new(b.x, 0., b.z)).length())
+                    })
+                });
+                assert!(
+                    spread >= 0.08,
+                    "{kind:?} variant {variant} meets the ground on a {spread:.3} wide point"
                 );
             }
         }
