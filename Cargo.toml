@@ -2,6 +2,7 @@
 members = [
     "crates/progressus-app",
     "crates/progressus-client",
+    "crates/progressus-content",
     "crates/progressus-headless",
     "crates/progressus-sim",
     "crates/progressus-worldgen",
