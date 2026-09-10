@@ -1244,9 +1244,10 @@ fn restore_depleted_resources(
                 cell.y()
             ));
         };
-        if resource.kind() == natural_resource::BERRY_BUSH {
+        if resource.kind().is_renewable() {
             return invalid(format!(
-                "renewable berry bush at ({}, {}) cannot be permanently depleted",
+                "renewable {} at ({}, {}) cannot be permanently depleted",
+                resource.kind().name(),
                 cell.x(),
                 cell.y()
             ));
@@ -1278,11 +1279,12 @@ fn restore_renewable_resource_regrowth(
                 cell.y()
             ));
         };
-        if resource.kind() != natural_resource::BERRY_BUSH {
+        if !resource.kind().is_renewable() {
             return invalid(format!(
-                "renewable resource cell ({}, {}) is not a berry bush",
+                "resource cell ({}, {}) holds {}, which does not regrow",
                 cell.x(),
-                cell.y()
+                cell.y(),
+                resource.kind().name()
             ));
         }
         if regrowth
