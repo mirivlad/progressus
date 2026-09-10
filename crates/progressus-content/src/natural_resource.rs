@@ -4,6 +4,7 @@
 //! travels on the placed resource. What harvesting it produces, and whether it
 //! comes back, are properties of the kind and live here.
 
+use crate::capability::{self, CapabilityId};
 use crate::item::{self, ItemId};
 use crate::registry::content_handle;
 
@@ -16,7 +17,13 @@ pub struct NaturalResourceDefinition {
     /// Ticks until a harvested source is gatherable again.
     /// `None` means harvesting depletes it permanently.
     pub regrow_ticks: Option<u64>,
+    /// What a worker must be equipped to do before they can extract this.
+    /// Empty means bare hands suffice, which is what keeps the settlement's
+    /// first tools reachable at all.
+    pub requires: &'static [CapabilityId],
 }
+
+static COPPER_VEIN_REQUIREMENTS: &[CapabilityId] = &[capability::MINE];
 
 /// Append-only: registry order is part of deterministic simulation outcomes.
 pub static NATURAL_RESOURCES: &[NaturalResourceDefinition] = &[
@@ -24,21 +31,25 @@ pub static NATURAL_RESOURCES: &[NaturalResourceDefinition] = &[
         name: "tree",
         yields: item::WOOD,
         regrow_ticks: None,
+        requires: &[],
     },
     NaturalResourceDefinition {
         name: "stone_outcrop",
         yields: item::STONE,
         regrow_ticks: None,
+        requires: &[],
     },
     NaturalResourceDefinition {
         name: "berry_bush",
         yields: item::BERRIES,
         regrow_ticks: Some(512),
+        requires: &[],
     },
     NaturalResourceDefinition {
         name: "copper_vein",
         yields: item::COPPER_ORE,
         regrow_ticks: None,
+        requires: COPPER_VEIN_REQUIREMENTS,
     },
 ];
 
@@ -50,6 +61,11 @@ content_handle!(
 );
 
 impl NaturalResourceId {
+    /// Whether bare hands can extract this at all.
+    pub const fn needs_no_tool(self) -> bool {
+        self.definition().requires.is_empty()
+    }
+
     /// Renewable sources regrow instead of depleting permanently.
     pub const fn is_renewable(self) -> bool {
         self.definition().regrow_ticks.is_some()
@@ -99,6 +115,17 @@ mod tests {
                 None => assert!(!id.is_renewable()),
             }
         }
+    }
+
+    /// The settlement must be able to reach its first tool with bare hands, or
+    /// nothing can ever be extracted that needs one.
+    #[test]
+    fn the_bootstrap_materials_need_no_tool() {
+        assert!(TREE.needs_no_tool());
+        assert!(STONE_OUTCROP.needs_no_tool());
+        assert!(BERRY_BUSH.needs_no_tool());
+        assert!(!COPPER_VEIN.needs_no_tool());
+        assert_eq!(COPPER_VEIN.definition().requires, [capability::MINE]);
     }
 
     #[test]

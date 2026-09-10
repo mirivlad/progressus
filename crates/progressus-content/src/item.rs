@@ -1,6 +1,8 @@
 //! Physical item kinds.
 
+use crate::capability::CapabilityId;
 use crate::registry::content_handle;
+use crate::slot::SlotId;
 
 /// The largest quantity one physical stack may hold. This is storage
 /// granularity on the ground, unrelated to what a person can lift.
@@ -56,7 +58,13 @@ pub struct ItemDefinition {
     /// How many of this one pair of hands holds. Authored in the item's own
     /// units, which is what a designer can reason about.
     pub hand_load: u32,
+    /// Where this may be equipped, if anywhere.
+    pub equip_slot: Option<SlotId>,
+    /// What equipping this lets its bearer do.
+    pub provides: &'static [CapabilityId],
 }
+
+static PRIMITIVE_TOOL_CAPABILITIES: &[CapabilityId] = &[crate::capability::MINE];
 
 /// Append-only: registry order is part of deterministic simulation outcomes.
 pub static ITEMS: &[ItemDefinition] = &[
@@ -65,36 +73,51 @@ pub static ITEMS: &[ItemDefinition] = &[
         category: ItemCategory::Resources,
         nutrition: 0,
         hand_load: 10,
+        equip_slot: None,
+        provides: &[],
     },
     ItemDefinition {
         name: "stone",
         category: ItemCategory::Resources,
         nutrition: 0,
         hand_load: 5,
+        equip_slot: None,
+        provides: &[],
     },
     ItemDefinition {
         name: "primitive_tool",
         category: ItemCategory::Products,
         nutrition: 0,
         hand_load: 3,
+        equip_slot: Some(crate::slot::TOOL),
+        provides: PRIMITIVE_TOOL_CAPABILITIES,
     },
     ItemDefinition {
         name: "berries",
         category: ItemCategory::Food,
         nutrition: 50,
         hand_load: 20,
+        equip_slot: None,
+        provides: &[],
     },
     ItemDefinition {
         name: "copper_ore",
         category: ItemCategory::Resources,
         nutrition: 0,
         hand_load: 4,
+        equip_slot: None,
+        provides: &[],
     },
 ];
 
 content_handle!(ItemId, ItemDefinition, ITEMS, item);
 
 impl ItemId {
+    /// Whether equipping this grants the capability.
+    pub fn provides(self, capability: CapabilityId) -> bool {
+        self.definition().provides.contains(&capability)
+    }
+
     /// Food is a property, not an identity: anything nourishing can be eaten.
     pub const fn is_food(self) -> bool {
         self.definition().nutrition > 0

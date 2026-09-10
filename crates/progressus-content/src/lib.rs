@@ -21,16 +21,20 @@
 
 mod registry;
 
+pub mod capability;
 pub mod item;
 pub mod natural_resource;
 pub mod recipe;
+pub mod slot;
 pub mod structure;
 pub mod terrain;
 pub mod workstation;
 
+pub use capability::{CapabilityDefinition, CapabilityId};
 pub use item::{HAND_LOAD_UNITS, ItemCategory, ItemDefinition, ItemId, MAX_STACK_QUANTITY};
 pub use natural_resource::{NaturalResourceDefinition, NaturalResourceId};
 pub use recipe::{RecipeDefinition, RecipeId, RecipeInput};
+pub use slot::{SlotDefinition, SlotId};
 pub use structure::{StructureDefinition, StructureId};
 pub use terrain::{TerrainDefinition, TerrainId};
 pub use workstation::{WorkstationDefinition, WorkstationId};
@@ -82,6 +86,37 @@ mod tests {
             items.iter().map(|id| id.name()).collect::<Vec<_>>(),
             ["wood", "stone", "primitive_tool", "berries", "copper_ore"]
         );
+    }
+
+    /// Anything a resource requires must be something some item can provide,
+    /// or that resource is unextractable in every possible game.
+    #[test]
+    fn every_required_capability_is_provided_by_some_item() {
+        for id in NaturalResourceId::all() {
+            for required in id.definition().requires {
+                assert!(
+                    ItemId::all().any(|item| item.provides(*required)),
+                    "{} requires {}, which no item grants",
+                    id.name(),
+                    required.name()
+                );
+            }
+        }
+    }
+
+    /// An item that grants a capability must be equippable, or the capability
+    /// could never reach a character.
+    #[test]
+    fn every_capability_granting_item_can_be_equipped() {
+        for id in ItemId::all() {
+            if !id.definition().provides.is_empty() {
+                assert!(
+                    id.definition().equip_slot.is_some(),
+                    "{} grants a capability but fits in no slot",
+                    id.name()
+                );
+            }
+        }
     }
 
     /// A definition may only reference content that exists, or a recipe could
