@@ -1,4 +1,4 @@
-use progressus_content::{item, natural_resource};
+use progressus_content::item;
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
