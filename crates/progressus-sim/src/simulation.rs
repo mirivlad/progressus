@@ -322,12 +322,25 @@ impl Simulation {
         self.resource_revision
     }
 
+    /// A cell the player has claimed by building or zoning on it. Placement
+    /// already refuses to build over a resource, so this only matters in the
+    /// other direction: an added worldgen layer must not grow a resource under
+    /// something that already stands there. See ADR-0022.
+    fn cell_is_claimed(&self, cell: WorldCell) -> bool {
+        self.construction_world.structure_at(cell).is_some()
+            || self.construction_world.site_at(cell).is_some()
+            || self.stockpile_world.stockpile_at(cell).is_some()
+            || self.workstation_world.workstation_at(cell).is_some()
+            || self.production_logistics_world.zone_at(cell).is_some()
+    }
+
     pub fn natural_resource_at(
         &self,
         position: WorldCell,
     ) -> Result<Option<NaturalResource>, SimulationError> {
         if self.depleted_resources.contains(&position)
             || self.renewable_resource_regrowth.contains_key(&position)
+            || self.cell_is_claimed(position)
         {
             return Ok(None);
         }
@@ -357,6 +370,7 @@ impl Simulation {
                     ))?;
                 if !self.depleted_resources.contains(&cell)
                     && !self.renewable_resource_regrowth.contains_key(&cell)
+                    && !self.cell_is_claimed(cell)
                 {
                     resources.push((cell, resource));
                 }

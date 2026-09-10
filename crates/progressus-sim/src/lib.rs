@@ -38,8 +38,9 @@ pub use progressus_content::{
     recipe, structure, terrain, workstation,
 };
 pub use progressus_worldgen::{
-    CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, GeneratedChunk, LocalCell, NaturalResource,
-    WorldCell, WorldSeed, WorldgenVersion,
+    CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, GeneratedChunk, LocalCell,
+    MAX_RESOURCE_LAYERS, NaturalResource, ResourceLayerId, ResourceLayers, WorldCell, WorldSeed,
+    WorldgenVersion,
 };
 pub use residency::{RESIDENT_CHUNK_RADIUS, RESIDENT_CHUNKS_PER_CENTER};
 pub use simulation::{SAVE_FORMAT_VERSION, SaveError, SaveMetadata, Simulation, SimulationError};

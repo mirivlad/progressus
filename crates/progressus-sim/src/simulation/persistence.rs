@@ -18,7 +18,7 @@ use crate::residency::ChunkResidency;
 use crate::stockpile::StockpileWorld;
 use crate::workstation_world::WorkstationWorld;
 use crate::world_state::ModifiedWorld;
-use crate::{MAX_SATIETY, MovementSpeed};
+use crate::{MAX_SATIETY, MovementSpeed, ResourceLayerId};
 
 pub const SAVE_FORMAT_VERSION: u32 = 1;
 const SAVE_FORMAT_NAME: &str = "progressus-save";
@@ -102,6 +102,11 @@ struct SaveHeader {
     version: u32,
     world_seed: u64,
     worldgen_version: u32,
+    /// Resource layers active when this world was written. Loading applies
+    /// every layer this build knows, so a newer build's layer is additive; a
+    /// layer recorded here that this build lacks is an error. See ADR-0022.
+    #[serde(default)]
+    worldgen_layers: Vec<String>,
     tick: u64,
 }
 
@@ -134,6 +139,12 @@ impl SaveV1 {
                 version: SAVE_FORMAT_VERSION,
                 world_seed: simulation.generator.seed().value(),
                 worldgen_version: simulation.generator.version().value(),
+                worldgen_layers: simulation
+                    .generator
+                    .layers()
+                    .iter()
+                    .map(|layer| layer.name().to_owned())
+                    .collect(),
                 tick: simulation.clock.tick().value(),
             },
             next_entity_id: simulation.id_allocator.peek().map(EntityId::value),
@@ -218,6 +229,7 @@ impl SaveV1 {
         validate_collection_uniqueness(&self)?;
         let seed = WorldSeed::new(self.header.world_seed);
         let version = WorldgenVersion::new(self.header.worldgen_version);
+        recorded_layers_are_known(&self.header)?;
         let generator =
             WorldGenerator::new(seed, version).map_err(SaveError::UnsupportedWorldgen)?;
 
@@ -318,6 +330,22 @@ fn validate_header(header: &SaveHeader) -> Result<(), SaveError> {
         WorldgenVersion::new(header.worldgen_version),
     )
     .map_err(SaveError::UnsupportedWorldgen)?;
+    recorded_layers_are_known(header)?;
+    Ok(())
+}
+
+/// A world may gain layers it did not have, but never silently lose one: a
+/// recorded layer this build does not define means the save came from a newer
+/// build whose resources this build cannot reproduce.
+fn recorded_layers_are_known(header: &SaveHeader) -> Result<(), SaveError> {
+    for name in &header.worldgen_layers {
+        if ResourceLayerId::from_name(name).is_none() {
+            return Err(SaveError::UnknownContent {
+                kind: "worldgen layer",
+                name: name.clone(),
+            });
+        }
+    }
     Ok(())
 }
 
@@ -2082,6 +2110,129 @@ fn validate_restored_job_state(simulation: &Simulation, job: &Job) -> Result<(),
 
 #[cfg(test)]
 mod tests {
+    use crate::ResourceLayers;
+
+    /// A save records the layers it was written with so that a world from a
+    /// newer build is refused instead of quietly losing resources it has.
+    #[test]
+    fn a_save_records_its_worldgen_layers_and_rejects_one_this_build_lacks() {
+        let simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let bytes = simulation.save_json().unwrap();
+        let json = String::from_utf8(bytes).unwrap();
+        let recorded: Vec<String> = serde_json::from_str::<serde_json::Value>(&json)
+            .unwrap()
+            .get("worldgen_layers")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .expect("the header records its worldgen layers");
+        let expected: Vec<String> = ResourceLayers::all()
+            .iter()
+            .map(|layer| layer.name().to_owned())
+            .collect();
+        assert_eq!(recorded, expected);
+
+        let forged = json.replace(
+            "\"worldgen_layers\": []",
+            "\"worldgen_layers\": [\"copper_veins_from_a_newer_build\"]",
+        );
+        assert_ne!(forged, json, "the fixture must actually alter the header");
+        let error = Simulation::load_json(forged.as_bytes()).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                SaveError::UnknownContent { kind, name }
+                    if *kind == "worldgen layer" && name == "copper_veins_from_a_newer_build"
+            ),
+            "a save naming an unknown layer must be refused, got {error:?}"
+        );
+        assert!(Simulation::save_metadata(forged.as_bytes()).is_err());
+    }
+
+    /// An added worldgen layer must not grow a resource under something the
+    /// player already built. Placement refuses the opposite direction, so a
+    /// resource and a claim can only meet once a layer exists; this pins the
+    /// guard that will keep them apart when one does.
+    #[test]
+    fn every_kind_of_claimed_cell_reports_no_natural_resource() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let free = |simulation: &Simulation, skip: &[WorldCell]| {
+            (-8..8)
+                .flat_map(|y| (-8..8).map(move |x| WorldCell::new(x, y)))
+                .find(|cell| {
+                    !skip.contains(cell)
+                        && simulation.is_explored(*cell)
+                        && simulation.is_walkable(*cell).unwrap()
+                        && simulation.natural_resource_at(*cell).unwrap().is_none()
+                        && !simulation.cell_is_claimed(*cell)
+                        && simulation
+                            .characters
+                            .values()
+                            .all(|character| character.position().containing_cell() != *cell)
+                        && simulation.item_world.iter().all(|item| {
+                            item.ground_position()
+                                .is_none_or(|position| position.containing_cell() != *cell)
+                        })
+                })
+                .expect("the starting clearing has a free cell")
+        };
+
+        let stockpile_cell = free(&simulation, &[]);
+        let stockpile = simulation.create_stockpile(stockpile_cell).unwrap();
+        assert!(simulation.cell_is_claimed(stockpile_cell));
+
+        // A workbench also needs free port cells around it, so try candidates.
+        let workstation_cell = (-8..8)
+            .flat_map(|y| (-8..8).map(move |x| WorldCell::new(x, y)))
+            .find(|cell| {
+                *cell != stockpile_cell
+                    && simulation
+                        .place_workstation(workstation::WORKBENCH, *cell)
+                        .is_ok()
+            })
+            .expect("the starting clearing fits one workbench");
+        assert!(simulation.cell_is_claimed(workstation_cell));
+
+        let site_cell = free(&simulation, &[stockpile_cell, workstation_cell]);
+        simulation
+            .designate_construction(structure::STONE_WALL, site_cell)
+            .unwrap();
+        assert!(simulation.cell_is_claimed(site_cell));
+
+        // Every claim hides a resource from both the point and the chunk query,
+        // so a layer cannot make one appear under a claim through either path.
+        for cell in [stockpile_cell, workstation_cell, site_cell] {
+            assert!(simulation.natural_resource_at(cell).unwrap().is_none());
+            let (coordinate, _) = cell.split();
+            assert!(
+                !simulation
+                    .natural_resources_in_chunk(coordinate)
+                    .unwrap()
+                    .iter()
+                    .any(|(resource_cell, _)| *resource_cell == cell)
+            );
+        }
+
+        // Production ports around the workbench are claims of their own.
+        let ports: Vec<_> = simulation
+            .production_logistics()
+            .flat_map(|logistics| {
+                logistics
+                    .cells(ProductionZoneKind::Input)
+                    .chain(logistics.cells(ProductionZoneKind::Output))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert!(!ports.is_empty());
+        for cell in ports {
+            assert!(simulation.cell_is_claimed(cell));
+            assert!(simulation.natural_resource_at(cell).unwrap().is_none());
+        }
+
+        // Releasing a claim releases the cell.
+        simulation
+            .set_stockpile_cell(stockpile, stockpile_cell, false)
+            .unwrap();
+        assert!(!simulation.cell_is_claimed(stockpile_cell));
+    }
     use progressus_content::{item, natural_resource, recipe, structure, terrain, workstation};
     use serde_json::Value;
 

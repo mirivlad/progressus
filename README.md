@@ -159,6 +159,7 @@ The application API and its external-consumer contract test live in `crates/prog
 - [`docs/adr/0005-procedural-visual-assets-as-code.md`](docs/adr/0005-procedural-visual-assets-as-code.md) — procedural visual assets as deterministic source code.
 - [`docs/adr/0019-primary-low-poly-client.md`](docs/adr/0019-primary-low-poly-client.md) — the low-poly 3D client is the only client; it supersedes the raster world-rendering part of ADR-0005.
 - [`docs/adr/0021-content-registry.md`](docs/adr/0021-content-registry.md) — items, terrain, resources, structures, workstations and recipes are definitions with stable names, and behavior reads their properties.
+- [`docs/adr/0022-additive-worldgen-layers.md`](docs/adr/0022-additive-worldgen-layers.md) — a world keeps a pinned base generation and gains additive resource layers, so an update reaches worlds that already exist.
 - [`docs/adr/0006-stockpiles-remain-physical-ground.md`](docs/adr/0006-stockpiles-remain-physical-ground.md) — stockpile floor areas keep items physically on the ground.
 - [`docs/adr/0012-production-input-output-logistics-zones.md`](docs/adr/0012-production-input-output-logistics-zones.md) — production uses explicit physical Input/Output buffers and dedicated supply jobs.
 - [`docs/adr/0013-workbench-two-port-io-layouts.md`](docs/adr/0013-workbench-two-port-io-layouts.md) — the bootstrap Workbench uses two rotatable material-input ports and two rotatable product-output ports.
