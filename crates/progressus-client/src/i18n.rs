@@ -276,6 +276,7 @@ impl Locale {
 
     pub(crate) const fn job_kind_name(self, kind: JobKind) -> &'static str {
         match (self.language, kind) {
+            (Language::Ru, JobKind::EquipTool { .. }) => "за инструментом",
             (Language::Ru, JobKind::Harvest { .. }) => "добыча",
             (Language::Ru, JobKind::Eat { .. }) => "еда",
             (Language::Ru, JobKind::Haul { .. }) => "перенос на склад",
@@ -283,6 +284,7 @@ impl Locale {
             (Language::Ru, JobKind::SupplyProduction { .. }) => "подача сырья",
             (Language::Ru, JobKind::DeliverConstruction { .. }) => "доставка на стройку",
             (Language::Ru, JobKind::Construct { .. }) => "строительство",
+            (Language::En, JobKind::EquipTool { .. }) => "fetching a tool",
             (Language::En, JobKind::Harvest { .. }) => "harvest",
             (Language::En, JobKind::Eat { .. }) => "eat",
             (Language::En, JobKind::Haul { .. }) => "haul",

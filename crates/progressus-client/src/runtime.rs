@@ -600,7 +600,8 @@ fn apply_tool_area(
                     | JobKind::SupplyProduction { .. }
                     | JobKind::Craft { .. }
                     | JobKind::DeliverConstruction { .. }
-                    | JobKind::Construct { .. } => None,
+                    | JobKind::Construct { .. }
+                    | JobKind::EquipTool { .. } => None,
                 })
                 .collect::<BTreeSet<_>>();
             let selected = cells.into_iter().collect::<BTreeSet<_>>();
@@ -696,7 +697,8 @@ fn apply_tool_area(
                     | JobKind::SupplyProduction { .. }
                     | JobKind::Craft { .. }
                     | JobKind::DeliverConstruction { .. }
-                    | JobKind::Construct { .. } => None,
+                    | JobKind::Construct { .. }
+                    | JobKind::EquipTool { .. } => None,
                 })
                 .collect::<Vec<_>>();
             for job_id in jobs {

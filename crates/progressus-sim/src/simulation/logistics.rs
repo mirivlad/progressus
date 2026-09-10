@@ -284,6 +284,7 @@ impl Simulation {
                 | JobKind::Eat { .. }
                 | JobKind::Craft { .. }
                 | JobKind::SupplyProduction { .. }
+                | JobKind::EquipTool { .. }
                 | JobKind::DeliverConstruction { .. }
                 | JobKind::Construct { .. } => None,
             })
@@ -845,7 +846,8 @@ mod tests {
                 | JobKind::Craft { .. }
                 | JobKind::SupplyProduction { .. }
                 | JobKind::DeliverConstruction { .. }
-                | JobKind::Construct { .. } => None,
+                | JobKind::Construct { .. }
+                | JobKind::EquipTool { .. } => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(hauls.len(), 2);

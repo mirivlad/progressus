@@ -269,6 +269,7 @@ impl Simulation {
             self.maintain_craft_jobs()?;
             self.maintain_craft_supply_jobs()?;
             self.maintain_haul_jobs()?;
+            self.maintain_equip_jobs()?;
             self.advance_jobs_one_tick()?;
             self.maintain_idle_behavior()?;
             self.maintain_doors()?;

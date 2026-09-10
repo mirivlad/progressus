@@ -127,6 +127,7 @@ impl SimulationError {
             | JobWorldError::CraftOrderAlreadyDesignated(_)
             | JobWorldError::ConstructionDeliveryAlreadyDesignated(_)
             | JobWorldError::ConstructionAlreadyDesignated(_)
+            | JobWorldError::EquipItemAlreadyReserved(_)
             | JobWorldError::JobNotCraft(_)
             | JobWorldError::WorkerAlreadyReserved(_)
             | JobWorldError::JobNotAvailable(_)

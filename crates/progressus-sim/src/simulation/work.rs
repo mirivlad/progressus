@@ -34,7 +34,8 @@ impl Simulation {
                 JobKind::Harvest { .. }
                 | JobKind::Eat { .. }
                 | JobKind::Craft { .. }
-                | JobKind::Construct { .. } => None,
+                | JobKind::Construct { .. }
+                | JobKind::EquipTool { .. } => None,
             };
             if let Some(item_id) = item_id {
                 let position = self
@@ -86,7 +87,8 @@ impl Simulation {
                 JobKind::Harvest { .. }
                 | JobKind::Eat { .. }
                 | JobKind::Craft { .. }
-                | JobKind::Construct { .. } => None,
+                | JobKind::Construct { .. }
+                | JobKind::EquipTool { .. } => None,
             };
             if let Some(item_id) = item_id {
                 let position = self
@@ -137,6 +139,7 @@ impl Simulation {
         kind: JobKind,
     ) -> Result<(), SimulationError> {
         match kind {
+            JobKind::EquipTool { item_id } => self.try_assign_equip(job_id, item_id),
             JobKind::Harvest { source } => self.try_assign_harvest(job_id, source),
             JobKind::Eat {
                 character_id,
@@ -188,6 +191,114 @@ impl Simulation {
         candidates.into_iter().map(|(_, id)| id).collect()
     }
 
+    /// Sends someone to fetch a tool when work is waiting that nobody is
+    /// equipped to do. Without this the requirement would simply stall the
+    /// job forever, since nothing else ever puts a tool in a slot.
+    pub(super) fn maintain_equip_jobs(&mut self) -> Result<(), SimulationError> {
+        let mut wanted: BTreeSet<CapabilityId> = BTreeSet::new();
+        for job in self.job_world.iter() {
+            let (JobKind::Harvest { source }, JobState::Available) = (job.kind(), job.state())
+            else {
+                continue;
+            };
+            let Some(resource) = self.natural_resource_at(source)? else {
+                continue;
+            };
+            for capability in resource.kind().definition().requires {
+                if !self
+                    .characters
+                    .keys()
+                    .any(|id| self.can_perform(*id, *capability))
+                {
+                    wanted.insert(*capability);
+                }
+            }
+        }
+        if wanted.is_empty() {
+            return Ok(());
+        }
+
+        for capability in wanted {
+            // A tool already on its way is enough; do not send a second worker.
+            if self.job_world.iter().any(|job| {
+                let JobKind::EquipTool { item_id } = job.kind() else {
+                    return false;
+                };
+                self.item_world
+                    .get(item_id)
+                    .is_some_and(|item| item.kind().provides(capability))
+            }) {
+                continue;
+            }
+            let Some(item_id) = self
+                .item_world
+                .iter()
+                .filter(|item| {
+                    item.kind().provides(capability)
+                        && item.ground_position().is_some()
+                        && self.job_world.item_job_for_item(item.id()).is_none()
+                })
+                .map(ItemStack::id)
+                .next()
+            else {
+                continue;
+            };
+            let job_id = self.id_allocator.allocate()?;
+            self.job_world
+                .insert(Job::new(job_id, JobKind::EquipTool { item_id }))
+                .map_err(SimulationError::from_job_world)?;
+        }
+        Ok(())
+    }
+
+    /// Sends the nearest worker with a free tool slot to fetch this tool.
+    pub(super) fn try_assign_equip(
+        &mut self,
+        job_id: EntityId,
+        item_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        let Some(item) = self.item_world.get(item_id) else {
+            self.job_world
+                .remove(job_id)
+                .map_err(SimulationError::from_job_world)?;
+            return Ok(());
+        };
+        let Some(position) = item.ground_position() else {
+            self.cancel_job(job_id)?;
+            return Ok(());
+        };
+        let Some(slot) = item.kind().definition().equip_slot else {
+            self.cancel_job(job_id)?;
+            return Ok(());
+        };
+        let cell = position.containing_cell();
+        for worker_id in self.available_workers_by_distance(cell) {
+            if self
+                .item_world
+                .equipped_by(worker_id)
+                .any(|(filled, _)| filled == slot)
+            {
+                continue;
+            }
+            let route = match self.plan_navigation_route(worker_id, position) {
+                Ok(route) => route,
+                Err(
+                    SimulationError::MoveToDestinationBlocked(_)
+                    | SimulationError::MoveToDestinationUndiscovered(_)
+                    | SimulationError::MoveToPathNotFound
+                    | SimulationError::MoveToSearchBudgetExceeded,
+                ) => continue,
+                Err(error) => return Err(error),
+            };
+            self.job_world
+                .reserve_worker(job_id, worker_id)
+                .map_err(SimulationError::from_job_world)?;
+            self.apply_navigation_route(worker_id, position, route);
+            return Ok(());
+        }
+        Ok(())
+    }
+
     pub(super) fn try_assign_harvest(
         &mut self,
         job_id: EntityId,
@@ -199,8 +310,15 @@ impl Simulation {
                 .map_err(SimulationError::from_job_world)?;
             return Ok(());
         }
+        let required = self
+            .natural_resource_at(source)?
+            .map(|resource| resource.kind().definition().requires)
+            .unwrap_or_default();
         let destination = WorldPosition::from_cell_center(source)?;
         for worker_id in self.available_workers_by_distance(source) {
+            if !self.meets_requirements(worker_id, required) {
+                continue;
+            }
             let route = match self.plan_navigation_route(worker_id, destination) {
                 Ok(route) => route,
                 Err(
@@ -227,6 +345,43 @@ impl Simulation {
         worker_id: EntityId,
     ) -> Result<(), SimulationError> {
         match kind {
+            JobKind::EquipTool { item_id } => {
+                let Some(item_position) = self
+                    .item_world
+                    .get(item_id)
+                    .and_then(ItemStack::ground_position)
+                else {
+                    self.cancel_job(job_id)?;
+                    return Ok(());
+                };
+                let Some(character) = self.characters.get(&worker_id) else {
+                    self.job_world
+                        .remove(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                };
+                if within_interaction_range(
+                    character.position(),
+                    character.interaction_radius(),
+                    item_position,
+                    InteractionRadius::zero(),
+                ) {
+                    // Take it and put it away in one step: a tool never
+                    // travels in the hands, so it never occupies them.
+                    self.pick_up_within_capacity(worker_id, item_id)?;
+                    self.equip_item(worker_id, item_id)?;
+                    self.job_world
+                        .remove(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    if let Some(character) = self.characters.get_mut(&worker_id) {
+                        character.set_movement(MovementState::Idle);
+                    }
+                } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                }
+            }
             JobKind::Harvest { source } => {
                 if self.natural_resource_at(source)?.is_none() {
                     self.cancel_job(job_id)?;
@@ -600,6 +755,9 @@ impl Simulation {
         worker_id: EntityId,
     ) -> Result<(), SimulationError> {
         match kind {
+            // An equip job finishes the moment the tool is in its slot, so it
+            // never reaches the transporting state.
+            JobKind::EquipTool { .. } => return Err(SimulationError::JobInvariantViolation),
             JobKind::Haul {
                 item_id,
                 stockpile_id,
@@ -760,6 +918,8 @@ impl Simulation {
         remaining_ticks: u32,
     ) -> Result<(), SimulationError> {
         match kind {
+            // An equip job ends when the tool is stowed; it has no work phase.
+            JobKind::EquipTool { .. } => return Err(SimulationError::JobInvariantViolation),
             JobKind::Harvest { source } => {
                 let Some(resource) = self.natural_resource_at(source)? else {
                     self.cancel_job(job_id)?;
@@ -958,9 +1118,116 @@ impl Simulation {
 
 #[cfg(test)]
 mod tests {
+    use progressus_content::{capability, item, natural_resource, slot};
+
+    /// Copper needs a pick. Nobody starts with one, so the settlement must
+    /// fetch and equip the tool it crafted before it can mine at all — which
+    /// is the first time the game's only production chain has a purpose.
+    #[test]
+    fn mining_waits_for_a_tool_and_then_proceeds() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        // Copper is deliberately kept clear of the starting clearing, so the
+        // settlement must reach it the way a player would: by going there.
+        let vein = (-40..40)
+            .flat_map(|y| (-40..40).map(move |x| WorldCell::new(x, y)))
+            .find(|cell| {
+                simulation
+                    .generator
+                    .natural_resource_at(*cell)
+                    .is_some_and(|r| r.kind() == natural_resource::COPPER_VEIN)
+                    && simulation.is_walkable(*cell).unwrap_or(false)
+            })
+            .expect("the copper layer places a vein within reach of the start");
+        let scout = cora();
+        let approach = Direction::East
+            .adjacent(vein)
+            .filter(|cell| simulation.is_walkable(*cell).unwrap_or(false))
+            .unwrap_or(vein);
+        place_on_grass(&mut simulation, scout, approach);
+        simulation.advance_ticks(1).unwrap();
+        assert!(
+            simulation.is_explored(vein),
+            "the scout did not reveal the vein"
+        );
+
+        let requires = natural_resource::COPPER_VEIN.definition().requires;
+        assert_eq!(requires, [capability::MINE]);
+
+        // Nobody is equipped, so nobody qualifies for the work.
+        for id in simulation.characters.keys() {
+            assert!(!simulation.meets_requirements(*id, requires));
+        }
+
+        // Put a pick within reach and let the settlement notice it.
+        let ground = WorldPosition::from_cell_center(approach).unwrap();
+        let tool = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .item_world
+            .insert_ground(ItemStack::new_ground(
+                tool,
+                item::PRIMITIVE_TOOL,
+                ItemQuantity::new(1).unwrap(),
+                ground,
+            ))
+            .unwrap();
+        simulation
+            .designate_harvest(vein)
+            .unwrap_or_else(|_| panic!("the fixture needs a designatable vein at {vein:?}"));
+
+        let mut equipped_by = None;
+        for _ in 0..2048 {
+            simulation.advance_ticks(1).unwrap();
+            if let Some(id) = simulation
+                .characters
+                .keys()
+                .copied()
+                .find(|id| simulation.can_perform(*id, capability::MINE))
+            {
+                equipped_by = Some(id);
+                break;
+            }
+        }
+        let equipped_by =
+            equipped_by.expect("nobody ever fetched the pick, so mining could never start");
+        assert_eq!(simulation.equipment(equipped_by), vec![(slot::TOOL, tool)]);
+        assert_eq!(
+            simulation.carried_load(equipped_by),
+            0,
+            "the pick was still weighing on its bearer's hands"
+        );
+        assert!(simulation.item_world.indexes_are_consistent());
+    }
+
+    /// One tool, one fetcher: a second worker must not be sent after a pick
+    /// that is already on its way to someone's belt.
+    #[test]
+    fn only_one_worker_is_sent_for_the_same_tool() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let ground = WorldPosition::from_cell_center(WorldCell::new(1, 0)).unwrap();
+        let tool = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .item_world
+            .insert_ground(ItemStack::new_ground(
+                tool,
+                item::PRIMITIVE_TOOL,
+                ItemQuantity::new(1).unwrap(),
+                ground,
+            ))
+            .unwrap();
+        simulation.designate_harvest(WorldCell::new(4, 0)).ok();
+
+        for _ in 0..64 {
+            simulation.advance_ticks(1).unwrap();
+            let equip_jobs = simulation
+                .job_world
+                .iter()
+                .filter(|job| matches!(job.kind(), JobKind::EquipTool { .. }))
+                .count();
+            assert!(equip_jobs <= 1, "{equip_jobs} workers chased one pick");
+        }
+    }
     use super::*;
     use crate::simulation::test_support::*;
-    use progressus_content::item;
 
     #[test]
     fn harvest_job_completes_into_one_physical_stack_and_cleans_reservation() {

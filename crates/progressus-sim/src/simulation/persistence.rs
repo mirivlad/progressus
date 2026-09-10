@@ -967,11 +967,17 @@ enum JobKindSave {
     Construct {
         site_id: u64,
     },
+    EquipTool {
+        item_id: u64,
+    },
 }
 
 impl From<JobKind> for JobKindSave {
     fn from(kind: JobKind) -> Self {
         match kind {
+            JobKind::EquipTool { item_id } => Self::EquipTool {
+                item_id: item_id.value(),
+            },
             JobKind::Harvest { source } => Self::Harvest {
                 source: source.into(),
             },
@@ -1023,6 +1029,9 @@ impl From<JobKind> for JobKindSave {
 impl JobKindSave {
     fn into_kind(self) -> Result<JobKind, SaveError> {
         Ok(match self {
+            Self::EquipTool { item_id } => JobKind::EquipTool {
+                item_id: entity_id(item_id, "equip item_id")?,
+            },
             Self::Harvest { source } => JobKind::Harvest {
                 source: source.into_cell(),
             },
@@ -1798,6 +1807,14 @@ fn validate_job_references(
 ) -> Result<(), SaveError> {
     match kind {
         JobKind::Harvest { .. } => {}
+        JobKind::EquipTool { item_id } => {
+            if items.get(item_id).is_none() {
+                return invalid(format!(
+                    "equip job references missing item {}",
+                    item_id.value()
+                ));
+            }
+        }
         JobKind::Eat {
             character_id,
             item_id,

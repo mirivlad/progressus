@@ -36,6 +36,11 @@ pub enum JobKind {
     Construct {
         site_id: EntityId,
     },
+    /// Fetch a tool and put it in its slot, so that work needing a capability
+    /// has someone equipped to do it. See ADR-0024.
+    EquipTool {
+        item_id: EntityId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -109,6 +114,7 @@ pub(crate) struct JobWorld {
     craft_items_by_job: BTreeMap<EntityId, BTreeSet<EntityId>>,
     construction_delivery_by_site: BTreeMap<EntityId, EntityId>,
     construct_by_site: BTreeMap<EntityId, EntityId>,
+    equip_by_item: BTreeMap<EntityId, EntityId>,
     worker_jobs: BTreeMap<EntityId, EntityId>,
     revision: u64,
 }
@@ -172,6 +178,11 @@ impl JobWorld {
         self.logistics_job_for_item(item_id)
             .or_else(|| self.eat_job_for_item(item_id))
             .or_else(|| self.craft_job_for_item(item_id))
+            .or_else(|| self.equip_job_for_item(item_id))
+    }
+
+    pub(crate) fn equip_job_for_item(&self, item_id: EntityId) -> Option<EntityId> {
+        self.equip_by_item.get(&item_id).copied()
     }
 
     pub(crate) fn logistics_job_for_destination(&self, destination: WorldCell) -> Option<EntityId> {
@@ -288,6 +299,12 @@ impl JobWorld {
                     return Err(JobWorldError::ConstructionAlreadyDesignated(site_id));
                 }
                 self.construct_by_site.insert(site_id, id);
+            }
+            JobKind::EquipTool { item_id } => {
+                if self.item_job_for_item(item_id).is_some() {
+                    return Err(JobWorldError::EquipItemAlreadyReserved(item_id));
+                }
+                self.equip_by_item.insert(item_id, id);
             }
         }
         self.jobs.insert(id, job);
@@ -482,6 +499,11 @@ impl JobWorld {
                     return Err(JobWorldError::IndexCorruption);
                 }
             }
+            JobKind::EquipTool { item_id } => {
+                if self.equip_by_item.remove(&item_id) != Some(job_id) {
+                    return Err(JobWorldError::IndexCorruption);
+                }
+            }
         }
         self.bump_revision()?;
         Ok(job)
@@ -573,6 +595,11 @@ impl JobWorld {
                 }
                 JobKind::Construct { site_id } => {
                     if self.construct_by_site.get(&site_id) != Some(id) {
+                        return false;
+                    }
+                }
+                JobKind::EquipTool { item_id } => {
+                    if self.equip_by_item.get(&item_id) != Some(id) {
                         return false;
                     }
                 }
@@ -668,6 +695,7 @@ pub(crate) enum JobWorldError {
     CraftInputsAlreadyReserved(EntityId),
     ConstructionDeliveryAlreadyDesignated(EntityId),
     ConstructionAlreadyDesignated(EntityId),
+    EquipItemAlreadyReserved(EntityId),
     JobNotCraft(EntityId),
     WorkerAlreadyReserved(EntityId),
     JobNotAvailable(EntityId),
