@@ -37,8 +37,9 @@ pub(crate) struct SceneCache {
     invalidated: bool,
     objects: BTreeMap<ObjectKey, (Object, Entity)>,
     pub(crate) pawns: BTreeMap<EntityId, Entity>,
-    resources: Vec<progressus_app::NaturalResourceSnapshot>,
+    pub(crate) resources: Vec<progressus_app::NaturalResourceSnapshot>,
     pub(crate) items: Vec<progressus_app::GroundItemSnapshot>,
+    pub(crate) inventory_items: Vec<progressus_app::InventoryItemSnapshot>,
 }
 
 impl SceneCache {
@@ -265,6 +266,7 @@ pub(crate) fn sync(
         }
         if items_changed {
             cache.items = spatial.ground_items;
+            cache.inventory_items = spatial.inventory_items;
         }
         if resources_changed {
             cache.resources = spatial.natural_resources;

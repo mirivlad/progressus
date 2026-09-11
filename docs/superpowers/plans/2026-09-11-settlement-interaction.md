@@ -24,22 +24,39 @@ app/lib.rs and read_model.rs, relevant simulation/application tests.
 
 - [ ] Reproduce cart logistics, release-index, equipment-drop and malformed-save failures with focused tests.
 - [ ] Enforce holder/access/capacity/slot semantics at runtime and save boundaries.
-- [ ] Expose explicit commands and detached inventory/container snapshots; reject reserved mutation without side effects.
+- [x] Expose explicit commands and detached inventory/container snapshots; reject reserved mutation without side effects.
 - [ ] Prove ordinary cart transport, interruption and deterministic save/load.
 - [ ] Strengthen mining test to assert actual ore production and physical delivery, including crafted tool prerequisites.
-- [ ] Run `cargo test -p progressus-sim -p progressus-app -p progressus-content` and review diff.
+- [x] Run `cargo test -p progressus-sim -p progressus-app -p progressus-content` and review diff.
 
 ## Task 2: Inventory client and resource information
 
 Files: client inventory/resource UI module, runtime.rs, ui.rs, low_poly/scene.rs,
 localization and application boundary fixtures.
 
-- [ ] Add localized inventory and source/item inspection text from snapshots.
-- [ ] Add reachable item/container actions, visible rejection feedback, click selection and hover identification.
+- [x] Add localized inventory and source/item inspection text from snapshots.
+- [x] Add reachable item/container actions, visible rejection feedback, click selection and hover identification.
 - [ ] Preserve active tool actions and existing selection priorities; clear stale selection on load.
 - [ ] Show equipped items in presentation, including parked/borne carts and their contents in the inspector.
-- [ ] Test selection/text/actions and run client checks plus executable client tests when feasible.
+- [x] Test selection/text/actions and run client checks plus executable client tests when feasible.
 - [ ] Review and publish the complete inventory/resource interaction stage.
+
+## Status after the inventory and boundary pass
+
+Player-facing inventory is implemented end to end and covered by the gate,
+including the heavy client link. What the remaining Task 1/2 bullets still
+owe, and why they are not ticked:
+
+- save boundaries do not yet re-validate location, slot and capacity rules,
+  and no malformed-save regression exists;
+- cart transport is proven through completion but not through interruption
+  or a mid-haul save/load;
+- the mining test still does not assert actual ore production and physical
+  delivery behind a crafted tool;
+- equipped items are not drawn on the character in the 3D scene — a parked
+  cart renders as an ordinary ground stack, and its contents appear only in
+  the inspector;
+- stale selection is not explicitly cleared on load.
 
 ## Task 3: Construction preparation
 

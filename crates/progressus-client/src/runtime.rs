@@ -197,6 +197,7 @@ pub(crate) fn pointer_navigation(
     mut authoritative: ResMut<AuthoritativeClient>,
     view: Res<crate::low_poly::View>,
     pawns: Query<(&crate::low_poly::Pawn, &Transform)>,
+    mut inspection: ResMut<crate::inventory::InspectionState>,
 ) {
     let (buttons, keys) = input;
     let (mut selected, mut selected_stockpile, mut stockpile_click, mut tool, mut modal) =
@@ -303,6 +304,24 @@ pub(crate) fn pointer_navigation(
                 error!("authoritative snapshot failed after selection: {error}");
             }
             return;
+        }
+    }
+
+    // Inspecting a thing comes after people, stockpiles and workstations, and
+    // before the active tool acts. A tool in hand keeps the click, so hover
+    // inspection never eats a build or harvest order; Alt asks for the
+    // inspector anyway.
+    if buttons.just_pressed(MouseButton::Left) && !modified_left {
+        let alt_pressed = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
+        if crate::inventory::click_pins_inspection(tool_active, alt_pressed) {
+            match inspection.hovered {
+                Some(object) => {
+                    inspection.pin(object);
+                    tool.cancel_drag();
+                    return;
+                }
+                None => inspection.clear(),
+            }
         }
     }
 
@@ -988,6 +1007,8 @@ pub fn run_with_options(seed: u64, diagnostics_enabled: bool) -> Result<(), Clie
         .insert_resource(Locale::default())
         .insert_resource(ModalState::default())
         .insert_resource(ModalPresentation::default())
+        .insert_resource(crate::inventory::InspectionState::default())
+        .insert_resource(crate::inventory::InventoryPresentation::default())
         .insert_resource(SaveStore::default())
         .insert_resource(ClientUpdateTimer::default())
         .insert_resource(client_winit_settings())
@@ -1011,6 +1032,7 @@ pub fn run_with_options(seed: u64, diagnostics_enabled: bool) -> Result<(), Clie
             setup_toolbar,
             setup_character_inspector,
             setup_stockpile_inspector,
+            crate::inventory::setup_world_hover_tooltip,
         )
             .chain(),
     )
@@ -1036,7 +1058,10 @@ pub fn run_with_options(seed: u64, diagnostics_enabled: bool) -> Result<(), Clie
                 sync_modal,
                 update_ui_capture,
                 camera_controls,
+                crate::inventory::update_world_hover,
                 pointer_navigation,
+                crate::inventory::sync_world_hover_tooltip,
+                crate::inventory::inventory_item_interaction,
             )
                 .chain(),
             (
@@ -1046,6 +1071,7 @@ pub fn run_with_options(seed: u64, diagnostics_enabled: bool) -> Result<(), Clie
                 crate::audio::apply_audio_levels,
                 sync_character_inspector,
                 sync_stockpile_inspector,
+                crate::inventory::sync_inventory_panel,
                 crate::render::interpolate_character_visuals,
                 draw_selected_character,
                 draw_selected_navigation,

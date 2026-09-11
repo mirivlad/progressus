@@ -265,6 +265,21 @@ impl Locale {
         self.content_name("item", kind.name())
     }
 
+    pub(crate) fn natural_resource_name(
+        self,
+        kind: progressus_app::NaturalResourceId,
+    ) -> &'static str {
+        self.content_name("natural_resource", kind.name())
+    }
+
+    pub(crate) fn slot_name(self, name: &'static str) -> &'static str {
+        match (self.language, name) {
+            (Language::Ru, "tool") => "инструмент",
+            (Language::En, "tool") => "tool",
+            _ => name,
+        }
+    }
+
     pub(crate) const fn item_category_name(self, category: ItemCategory) -> &'static str {
         match (self.language, category) {
             (Language::Ru, ItemCategory::Resources) => "Ресурсы",
