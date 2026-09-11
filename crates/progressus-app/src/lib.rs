@@ -3,7 +3,7 @@ use std::fmt::{self, Display, Formatter};
 
 mod read_model;
 
-use progressus_sim::{Simulation, SimulationError};
+use progressus_sim::{ItemStack, Simulation, SimulationError};
 
 pub use progressus_sim::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, ConstructionMaterialState, ConstructionSite,
@@ -12,13 +12,14 @@ pub use progressus_sim::{
     LocalCell, MAX_PRODUCTION_ORDER_RUNS, MAX_SATIETY, MovementSpeed, MovementState,
     NaturalResource, NaturalResourceId, ProductionLogistics, ProductionOrder, ProductionTarget,
     ProductionZoneKind, RESIDENT_CHUNK_RADIUS, RESIDENT_CHUNKS_PER_CENTER, RecipeId,
-    SAVE_FORMAT_VERSION, SUBUNITS_PER_CELL, SaveError, SaveMetadata, SimulationTick, Stockpile,
-    Structure, StructureId, TerrainId, Workstation, WorkstationId, WorldCell, WorldPosition,
-    WorldSeed, WorldgenVersion, item, natural_resource, recipe, structure, terrain, workstation,
+    SAVE_FORMAT_VERSION, SUBUNITS_PER_CELL, SaveError, SaveMetadata, SimulationTick, SlotId,
+    Stockpile, Structure, StructureId, TerrainId, Workstation, WorkstationId, WorldCell,
+    WorldPosition, WorldSeed, WorldgenVersion, item, natural_resource, recipe, slot, structure,
+    terrain, workstation,
 };
 pub use read_model::{
     CarriedItemSnapshot, CharacterSnapshot, ChunkSnapshot, ClientSnapshot,
-    ConstructionSiteSnapshot, GroundItemSnapshot, JobSnapshot, KnownTerrain,
+    ConstructionSiteSnapshot, GroundItemSnapshot, InventoryItemSnapshot, JobSnapshot, KnownTerrain,
     NaturalResourceSnapshot, NavigationSnapshot, ProductionLogisticsSnapshot,
     ProductionOrderSnapshot, StockpileSnapshot, StructureSnapshot, WorkstationSnapshot,
 };
@@ -104,6 +105,36 @@ pub enum Command {
     },
     CancelConstruction {
         site_id: EntityId,
+    },
+    /// Take a reachable ground stack into the hands.
+    PickUpItem {
+        character_id: EntityId,
+        item_id: EntityId,
+    },
+    /// Put a borne stack down where the character stands. This is also how a
+    /// loaded cart is parked: it keeps what it holds.
+    DropItem {
+        character_id: EntityId,
+        item_id: EntityId,
+    },
+    EquipItem {
+        character_id: EntityId,
+        item_id: EntityId,
+    },
+    UnequipItem {
+        character_id: EntityId,
+        item_id: EntityId,
+    },
+    /// Move a reachable ground stack into a container the character bears or
+    /// can reach.
+    LoadContainer {
+        character_id: EntityId,
+        item_id: EntityId,
+        container_id: EntityId,
+    },
+    UnloadContainer {
+        character_id: EntityId,
+        item_id: EntityId,
     },
 }
 
@@ -238,6 +269,53 @@ impl Application {
             Command::CancelConstruction { site_id } => {
                 self.simulation.cancel_construction(site_id)?;
             }
+            Command::PickUpItem {
+                character_id,
+                item_id,
+            } => {
+                self.simulation.pick_up_item(character_id, item_id)?;
+            }
+            Command::DropItem {
+                character_id,
+                item_id,
+            } => {
+                // Where the character stands: putting something down is not a
+                // way to place it anywhere else.
+                let position = self
+                    .simulation
+                    .characters()
+                    .find(|character| character.id() == character_id)
+                    .ok_or(SimulationError::UnknownCharacter(character_id))?
+                    .position();
+                self.simulation.drop_item(character_id, item_id, position)?;
+            }
+            Command::EquipItem {
+                character_id,
+                item_id,
+            } => {
+                self.simulation.equip_item(character_id, item_id)?;
+            }
+            Command::UnequipItem {
+                character_id,
+                item_id,
+            } => {
+                self.simulation.unequip_item(character_id, item_id)?;
+            }
+            Command::LoadContainer {
+                character_id,
+                item_id,
+                container_id,
+            } => {
+                self.simulation
+                    .load_into_container(character_id, item_id, container_id)?;
+            }
+            Command::UnloadContainer {
+                character_id,
+                item_id,
+            } => {
+                self.simulation
+                    .unload_from_container(character_id, item_id)?;
+            }
         }
         Ok(())
     }
@@ -315,6 +393,42 @@ impl Application {
         } else {
             Vec::new()
         };
+        // A stack is visible where it physically rests. Borne goods follow
+        // their bearer, as carried stacks already do; goods standing on the
+        // ground — including whatever a parked container holds — stay subject
+        // to exploration, so nothing is revealed by being packed away.
+        let inventory_items = self
+            .simulation
+            .items()
+            .filter(|item| {
+                match self
+                    .simulation
+                    .item_root(item.id())
+                    .map(ItemStack::location)
+                {
+                    Some(ItemLocation::Carried { .. } | ItemLocation::Equipped { .. }) => true,
+                    Some(ItemLocation::Ground { position }) => {
+                        let cell = position.containing_cell();
+                        query.include_ground_items
+                            && self.simulation.is_explored(cell)
+                            && explored_requested_chunks.contains(&cell.split().0)
+                    }
+                    Some(ItemLocation::Contained { .. }) | None => false,
+                }
+            })
+            .map(|item| {
+                let contained_load = item
+                    .kind()
+                    .capacity()
+                    .map(|_| self.simulation.container_load(item.id()));
+                InventoryItemSnapshot::new(
+                    item,
+                    self.simulation.item_is_reserved(item.id()),
+                    contained_load,
+                )
+            })
+            .collect();
+
         let natural_resources = if query.include_natural_resources {
             explored_requested_chunks
                 .into_iter()
@@ -382,6 +496,7 @@ impl Application {
             chunks,
             ground_items,
             carried_items,
+            inventory_items,
             natural_resources,
             jobs,
             stockpiles,
@@ -447,6 +562,267 @@ impl From<SaveError> for ApplicationError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn nearby_chunks() -> Vec<ChunkCoord> {
+        (-2..=2)
+            .flat_map(|x| (-2..=2).map(move |y| ChunkCoord::new(x, y)))
+            .collect()
+    }
+
+    /// A stack standing on the ground is visible where it lies, so it obeys
+    /// exploration and the requested chunks. Once someone picks it up it
+    /// travels with them, and asking about no chunk at all still shows it —
+    /// otherwise a character's own hands would empty whenever the camera
+    /// looked elsewhere.
+    #[test]
+    fn inventory_rows_follow_borne_goods_and_leave_ground_stacks_to_exploration() {
+        let mut application = Application::new_game(NewGameOptions {
+            seed: WorldSeed::new(0),
+        })
+        .unwrap();
+
+        let unasked = application.snapshot(SnapshotQuery::default()).unwrap();
+        assert!(
+            unasked.inventory_items.is_empty(),
+            "ground stacks appeared without their chunk being asked for"
+        );
+
+        let asked = application
+            .snapshot(SnapshotQuery {
+                chunks: nearby_chunks(),
+                ..SnapshotQuery::default()
+            })
+            .unwrap();
+        let wood = asked
+            .inventory_items
+            .iter()
+            .find(|row| row.kind == item::WOOD)
+            .expect("the starting world puts wood on the ground");
+        assert_eq!(wood.load, item::WOOD.load_cost(wood.quantity));
+        assert_eq!(wood.capacity, None);
+        assert_eq!(wood.contained_load, None);
+        assert!(!wood.reserved);
+
+        let item_id = wood.id;
+        let character_id = asked
+            .characters
+            .iter()
+            .map(|character| character.id)
+            .find(|character_id| {
+                application
+                    .execute(Command::PickUpItem {
+                        character_id: *character_id,
+                        item_id,
+                    })
+                    .is_ok()
+            })
+            .expect("someone stands within reach of a starting stack");
+
+        let borne = application.snapshot(SnapshotQuery::default()).unwrap();
+        let row = borne
+            .inventory_items
+            .iter()
+            .find(|row| row.id == item_id)
+            .expect("a stack in someone's hands is theirs to see");
+        assert_eq!(row.location, ItemLocation::Carried { character_id });
+
+        application
+            .execute(Command::DropItem {
+                character_id,
+                item_id,
+            })
+            .unwrap();
+        let put_down = application.snapshot(SnapshotQuery::default()).unwrap();
+        assert!(
+            !put_down.inventory_items.iter().any(|row| row.id == item_id),
+            "a stack put back on the ground stayed visible through unasked chunks"
+        );
+    }
+
+    /// Each command has to reach its own operation. Sharing a shape with its
+    /// neighbours is exactly what makes a mis-wired arm survive review, so
+    /// this drives a real tool through every state it can occupy.
+    #[test]
+    fn item_commands_each_reach_their_own_operation() {
+        let mut application = Application::new_game(NewGameOptions {
+            seed: WorldSeed::new(0),
+        })
+        .unwrap();
+        application
+            .execute(Command::CreateStockpile {
+                cell: WorldCell::new(-2, 1),
+            })
+            .unwrap();
+        let stockpile_id = application
+            .snapshot(SnapshotQuery::default())
+            .unwrap()
+            .stockpiles[0]
+            .id;
+        for x in -1..=2 {
+            application
+                .execute(Command::SetStockpileCell {
+                    stockpile_id,
+                    cell: WorldCell::new(x, 1),
+                    enabled: true,
+                })
+                .unwrap();
+        }
+        application
+            .execute(Command::AdvanceTicks { count: 400 })
+            .unwrap();
+        let workbench_cell = (2..=5)
+            .flat_map(|y| (-4..=4).map(move |x| WorldCell::new(x, y)))
+            .find(|cell| {
+                application
+                    .execute(Command::PlaceWorkstation {
+                        kind: workstation::WORKBENCH,
+                        cell: *cell,
+                    })
+                    .is_ok()
+            });
+        assert!(workbench_cell.is_some(), "nowhere to stand a workbench");
+        let workstation_id = application
+            .snapshot(SnapshotQuery::default())
+            .unwrap()
+            .workstations[0]
+            .id;
+        application
+            .execute(Command::AddProductionOrder {
+                workstation_id,
+                recipe_id: recipe::PRIMITIVE_TOOL,
+                target: ProductionTarget::Finite { remaining_runs: 1 },
+            })
+            .unwrap();
+
+        let mut tool = None;
+        for _ in 0..40 {
+            application
+                .execute(Command::AdvanceTicks { count: 100 })
+                .unwrap();
+            let snapshot = application
+                .snapshot(SnapshotQuery {
+                    chunks: nearby_chunks(),
+                    ..SnapshotQuery::default()
+                })
+                .unwrap();
+            tool = snapshot
+                .inventory_items
+                .iter()
+                .find(|row| row.kind == item::PRIMITIVE_TOOL && !row.reserved)
+                .map(|row| row.id);
+            if tool.is_some() {
+                break;
+            }
+        }
+        let item_id = tool.expect("the workbench never produced a free tool");
+
+        let snapshot = application
+            .snapshot(SnapshotQuery {
+                chunks: nearby_chunks(),
+                ..SnapshotQuery::default()
+            })
+            .unwrap();
+        let character_id = snapshot
+            .characters
+            .iter()
+            .map(|character| character.id)
+            .find(|character_id| {
+                application
+                    .execute(Command::PickUpItem {
+                        character_id: *character_id,
+                        item_id,
+                    })
+                    .is_ok()
+            })
+            .expect("nobody could reach the finished tool");
+        let location = |application: &Application| {
+            application
+                .snapshot(SnapshotQuery::default())
+                .unwrap()
+                .inventory_items
+                .iter()
+                .find(|row| row.id == item_id)
+                .map(|row| row.location)
+        };
+        assert_eq!(
+            location(&application),
+            Some(ItemLocation::Carried { character_id })
+        );
+
+        application
+            .execute(Command::EquipItem {
+                character_id,
+                item_id,
+            })
+            .unwrap();
+        assert_eq!(
+            location(&application),
+            Some(ItemLocation::Equipped {
+                character_id,
+                slot: slot::TOOL,
+            })
+        );
+
+        // Unloading is not unequipping: nothing contains this tool.
+        assert!(
+            application
+                .execute(Command::UnloadContainer {
+                    character_id,
+                    item_id,
+                })
+                .is_err()
+        );
+        assert_eq!(
+            location(&application),
+            Some(ItemLocation::Equipped {
+                character_id,
+                slot: slot::TOOL,
+            })
+        );
+
+        application
+            .execute(Command::UnequipItem {
+                character_id,
+                item_id,
+            })
+            .unwrap();
+        assert_eq!(
+            location(&application),
+            Some(ItemLocation::Carried { character_id })
+        );
+
+        // A tool is not a container, so nothing can be loaded into it.
+        assert!(
+            application
+                .execute(Command::LoadContainer {
+                    character_id,
+                    item_id,
+                    container_id: item_id,
+                })
+                .is_err()
+        );
+
+        application
+            .execute(Command::DropItem {
+                character_id,
+                item_id,
+            })
+            .unwrap();
+        let ground = application
+            .snapshot(SnapshotQuery {
+                chunks: nearby_chunks(),
+                ..SnapshotQuery::default()
+            })
+            .unwrap();
+        assert!(
+            ground
+                .inventory_items
+                .iter()
+                .any(|row| row.id == item_id
+                    && matches!(row.location, ItemLocation::Ground { .. })),
+            "the tool never reached the ground"
+        );
+    }
 
     #[test]
     fn snapshot_returns_effective_terrain_without_mutating_raw_worldgen() {

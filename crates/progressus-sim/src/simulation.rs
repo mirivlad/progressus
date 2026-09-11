@@ -464,8 +464,8 @@ impl Simulation {
                 item_id,
             });
         }
-        let (kind, quantity) = (item.kind(), item.quantity().get());
-        if self.carried_load(character_id) + kind.load_cost(quantity) > HAND_LOAD_UNITS {
+        // What a container holds comes with it into the hands.
+        if self.carried_load(character_id) + self.item_subtree_load(item_id) > HAND_LOAD_UNITS {
             return Err(SimulationError::CarryCapacityExceeded {
                 character_id,
                 item_id,
@@ -692,6 +692,18 @@ impl Simulation {
 
     pub fn item_is_reserved(&self, item_id: EntityId) -> bool {
         self.job_world.item_job_for_item(item_id).is_some()
+    }
+
+    /// The stack that ultimately holds this one, following it out through any
+    /// containers. Its location says whether a person bears the whole nest or
+    /// it stands on the ground, which is what decides who may see it.
+    pub fn item_root(&self, item_id: EntityId) -> Option<&ItemStack> {
+        self.item_world.root_of(item_id)
+    }
+
+    /// What a stack weighs in a pair of hands, counting whatever it holds.
+    pub fn item_load(&self, item_id: EntityId) -> u64 {
+        self.item_subtree_load(item_id)
     }
 
     fn pick_up_item_for_job(
@@ -1553,6 +1565,51 @@ mod tests {
         assert_eq!(
             simulation.item_world.get(goods).unwrap().ground_position(),
             Some(outside_reach)
+        );
+    }
+
+    /// Taking a cart off its slot puts it in the bearer's hands, and a cart
+    /// holding a load does not become weightless on the way there.
+    #[test]
+    fn a_loaded_cart_cannot_be_taken_into_hands_that_cannot_hold_it() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let character = cora();
+        let position = simulation.characters[&character].position();
+        let place = |simulation: &mut Simulation, kind, quantity| {
+            let id = simulation.id_allocator.allocate().unwrap();
+            simulation
+                .item_world
+                .insert_ground(ItemStack::new_ground(
+                    id,
+                    kind,
+                    ItemQuantity::new(quantity).unwrap(),
+                    position,
+                ))
+                .unwrap();
+            id
+        };
+        let cart = place(&mut simulation, item::CART, 1);
+        let goods = place(&mut simulation, item::WOOD, 10);
+        simulation.pick_up_item(character, cart).unwrap();
+        simulation.equip_item(character, cart).unwrap();
+        simulation
+            .load_into_container(character, goods, cart)
+            .unwrap();
+
+        assert_eq!(
+            simulation.unequip_item(character, cart),
+            Err(SimulationError::CarryCapacityExceeded {
+                character_id: character,
+                item_id: cart,
+            })
+        );
+        assert_eq!(
+            simulation.item_world.get(cart).unwrap().bearer(),
+            Some((character, slot::TOOL))
+        );
+        assert_eq!(
+            simulation.item_world.get(goods).unwrap().container(),
+            Some(cart)
         );
     }
 

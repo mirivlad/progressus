@@ -666,6 +666,13 @@ impl ItemWorld {
         }
     }
 
+    /// The stack this one ultimately sits in — itself, unless containers hold
+    /// it. Where that stack rests is where the whole nest rests.
+    pub(crate) fn root_of(&self, item_id: EntityId) -> Option<&ItemStack> {
+        let chain = self.container_chain(item_id).ok()?;
+        self.items.get(chain.last()?)
+    }
+
     fn contained_subtree_depth(
         &self,
         item_id: EntityId,

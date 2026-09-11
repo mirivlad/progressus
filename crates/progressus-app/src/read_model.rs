@@ -1,8 +1,8 @@
 use progressus_sim::{
-    Character, ConstructionMaterialState, ConstructionSite, DoorState, ItemId, ItemStack, Job,
-    JobKind, JobState, MovementState, NaturalResource, NaturalResourceId, ProductionLogistics,
-    ProductionOrder, ProductionTarget, ProductionZoneKind, RecipeId, Stockpile, Structure,
-    StructureId, Workstation, WorkstationId, WorldPosition,
+    Character, ConstructionMaterialState, ConstructionSite, DoorState, ItemId, ItemLocation,
+    ItemStack, Job, JobKind, JobState, MovementState, NaturalResource, NaturalResourceId,
+    ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind, RecipeId,
+    Stockpile, Structure, StructureId, Workstation, WorkstationId, WorldPosition,
 };
 
 use crate::{
@@ -27,6 +27,7 @@ pub struct ClientSnapshot {
     pub chunks: Vec<ChunkSnapshot>,
     pub ground_items: Vec<GroundItemSnapshot>,
     pub carried_items: Vec<CarriedItemSnapshot>,
+    pub inventory_items: Vec<InventoryItemSnapshot>,
     pub natural_resources: Vec<NaturalResourceSnapshot>,
     pub jobs: Vec<JobSnapshot>,
     pub stockpiles: Vec<StockpileSnapshot>,
@@ -77,6 +78,43 @@ impl CarriedItemSnapshot {
             character_id: item
                 .carrier()
                 .expect("carried item snapshots are built only from carried items"),
+        }
+    }
+}
+
+/// One physical stack as the inventory screen needs to see it: where it is,
+/// whether a job has already claimed it, what it weighs in a pair of hands
+/// and, for a container, how much of its own capacity is spoken for. The
+/// client reads these rather than the simulation's stacks so that no screen
+/// can reach authoritative state to change it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InventoryItemSnapshot {
+    pub id: EntityId,
+    pub kind: ItemId,
+    pub quantity: u32,
+    pub location: ItemLocation,
+    /// A job holds this stack, so a player command must not take it.
+    pub reserved: bool,
+    /// What the stack itself costs to carry, contents excluded.
+    pub load: u64,
+    /// For a container, what its contents cost to carry — zero when empty.
+    /// `None` for anything that is not a container.
+    pub contained_load: Option<u64>,
+    /// How many hand loads this holds, if it is a container.
+    pub capacity: Option<u32>,
+}
+
+impl InventoryItemSnapshot {
+    pub(crate) fn new(item: &ItemStack, reserved: bool, contained_load: Option<u64>) -> Self {
+        Self {
+            id: item.id(),
+            kind: item.kind(),
+            quantity: item.quantity().get(),
+            location: item.location(),
+            reserved,
+            load: item.kind().load_cost(item.quantity().get()),
+            contained_load,
+            capacity: item.kind().capacity(),
         }
     }
 }
