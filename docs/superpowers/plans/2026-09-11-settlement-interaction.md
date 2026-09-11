@@ -41,6 +41,20 @@ localization and application boundary fixtures.
 - [x] Test selection/text/actions and run client checks plus executable client tests when feasible.
 - [ ] Review and publish the complete inventory/resource interaction stage.
 
+### Selection-priority regression
+
+- [ ] Extract the cell-level selectable choice into a pure helper in
+  `crates/progressus-client/src/runtime.rs` and first add a failing test proving
+  that a ground `Cart` on a stockpile cell resolves to the item inspector rather
+  than `SelectedStockpile`.
+- [ ] Make the helper choose workstation, character, inspectable ground object,
+  then stockpile in Select mode; keep the existing screen-body pawn hit first.
+- [ ] When a construction tool is active, skip selection dispatch and send the
+  click to `apply_point_tool`; retain Alt-click inspection for non-destructive
+  inspection while other designation tools are active.
+- [ ] Run the focused client library test and
+  `cargo check -p progressus-client --all-targets -j 1`, then commit and push.
+
 ## Status after the inventory and boundary pass
 
 Player-facing inventory is implemented end to end and covered by the gate,
@@ -69,6 +83,38 @@ world resource queries, app snapshots, client status text, ADR-0009/0022.
 - [ ] Test cancellation, unrelated jobs, full loads, renewable sources, blocked paths, and mid-job save/load conservation.
 - [ ] Cover workbench designation using the smallest compatible deferred placement path.
 - [ ] Review authority, integrate status UI and publish verified stage.
+
+### TDD execution order
+
+- [ ] Add focused simulation regressions proving a site can be designated on a
+  walkable cell containing a tree, a ground stack, or a character, while
+  structures, workstations, stockpiles and production zones remain forbidden.
+- [ ] Add `ConstructionPreparation` state owned by the site and explicit
+  preparation job kinds for harvesting a source and relocating a concrete stack;
+  expose the state through detached snapshots and the save DTO.
+- [ ] Reuse the existing deterministic harvest and capacity-aware physical item
+  transfer paths. Preparation output and pre-existing stacks must be dropped on
+  explored walkable cells outside all planned footprints, with stable IDs and
+  exact quantity conservation.
+- [ ] Add deterministic character-vacating behavior that waits for unrelated
+  reserved work, then moves an available occupant to the first reachable
+  E/N/S/W cell outside planned footprints. Construction material delivery and
+  work remain disabled until the target cell is actually clear.
+- [ ] Recheck the target cell immediately before completion. If a removable
+  occupant entered late, return the site to preparation rather than deleting,
+  burying or teleporting it.
+- [ ] On cancellation remove only preparation jobs whose `site_id` matches the
+  cancelled site, release their reservations, and drop any carried item at the
+  worker's exact position through the existing cancellation path.
+- [ ] Add round-trip tests during resource harvesting and item relocation, plus
+  cancellation, blocked-drop and late-occupancy regressions.
+- [ ] Route workbench placement through the same deferred preparation owner when
+  only removable occupancy blocks the cell; retain immediate rejection for
+  permanent claims and validate its port layout before accepting the project.
+- [ ] Add localized preparation/waiting status to the construction snapshot UI,
+  run focused sim/app/client tests, then the full Prototype 01 gate.
+- [ ] Update ADR-0009, ADR-0022, README, client guide and milestone status to the
+  behavior actually proven; review, commit and push the stage.
 
 ## Task 4: Documentation and acceptance
 

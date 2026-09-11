@@ -58,6 +58,13 @@ contents where applicable. Remain usable while a designation tool is active:
 hover inspection never steals a build/harvest action. Preserve character and
 workstation selection and UI input capture. Unknown objects remain hidden.
 
+In Select mode, a physical ground item or natural source wins over the stockpile
+zone underneath it, so a parked cart and the goods inside it remain selectable.
+Character screen-body hits and workstations keep their existing precise selection
+paths. While a construction tool is active, its click wins over characters and
+other removable occupants; permanent occupancy may reject the command but must
+not silently turn the click into selection.
+
 ## Verification
 
 Use focused failing regressions before changes, headless conservation/reservation
