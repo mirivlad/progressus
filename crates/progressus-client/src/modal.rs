@@ -2,7 +2,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use progressus_app::{
     ClientSnapshot, Command, EntityId, ItemCategory, ItemId, MAX_PRODUCTION_ORDER_RUNS,
-    ProductionOrderSnapshot, ProductionTarget, RecipeId, StockpileSnapshot, WorkstationId, recipe,
+    ProductionOrderSnapshot, ProductionTarget, RecipeId, StockpileSnapshot, WorkstationId,
 };
 
 use crate::i18n::{Locale, TextKey};
@@ -826,7 +826,7 @@ fn spawn_workstation_modal(
                         font,
                         &workbench_image,
                     );
-                    spawn_recipe_row(panel, workstation_id, locale, font);
+                    spawn_recipe_rows(panel, workstation_id, workstation_kind, locale, font);
                     spawn_orders(panel, &orders, locale, font);
                     spawn_footer(panel, workstation_id, locale, font);
                 });
@@ -1027,67 +1027,77 @@ fn spawn_logistics(
         });
 }
 
-fn spawn_recipe_row(
+/// Every recipe this workstation can run, in registry order. Reading it from
+/// the registry rather than naming recipes here is what makes a new recipe
+/// appear in the game by being declared, without touching the screen.
+fn workstation_recipes(kind: WorkstationId) -> Vec<RecipeId> {
+    RecipeId::for_workstation(kind).collect()
+}
+
+fn spawn_recipe_rows(
     panel: &mut ChildSpawnerCommands,
     workstation_id: EntityId,
+    workstation_kind: WorkstationId,
     locale: Locale,
     font: &UiFont,
 ) {
     panel.spawn(text_bundle(locale.tr(TextKey::Recipes), font, 16.0, MUTED));
-    panel
-        .spawn((
-            Node {
-                width: percent(100),
-                padding: UiRect::all(px(10)),
-                justify_content: JustifyContent::SpaceBetween,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(ROW),
-        ))
-        .with_children(|row| {
-            row.spawn(text_bundle(
-                locale.recipe_name(recipe::PRIMITIVE_TOOL),
-                font,
-                16.0,
-                TEXT,
-            ));
-            row.spawn(Node {
-                column_gap: px(7),
-                align_items: AlignItems::Center,
-                ..default()
-            })
-            .with_children(|actions| {
-                actions
-                    .spawn((
-                        Button,
-                        AddOrderButton {
-                            workstation_id,
-                            recipe_id: recipe::PRIMITIVE_TOOL,
-                        },
-                        UiCapture,
-                        button_node(),
-                        BackgroundColor(BUTTON),
-                    ))
-                    .with_children(|button| {
-                        button.spawn(text_bundle(locale.tr(TextKey::AddOrder), font, 14.0, TEXT));
-                    });
-                actions
-                    .spawn((
-                        Button,
-                        AddInfiniteOrderButton {
-                            workstation_id,
-                            recipe_id: recipe::PRIMITIVE_TOOL,
-                        },
-                        UiCapture,
-                        button_node(),
-                        BackgroundColor(BUTTON),
-                    ))
-                    .with_children(|button| {
-                        button.spawn(text_bundle("∞", font, 18.0, TEXT));
-                    });
+    for recipe_id in workstation_recipes(workstation_kind) {
+        panel
+            .spawn((
+                Node {
+                    width: percent(100),
+                    padding: UiRect::all(px(10)),
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(ROW),
+            ))
+            .with_children(|row| {
+                row.spawn(text_bundle(locale.recipe_name(recipe_id), font, 16.0, TEXT));
+                row.spawn(Node {
+                    column_gap: px(7),
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|actions| {
+                    actions
+                        .spawn((
+                            Button,
+                            AddOrderButton {
+                                workstation_id,
+                                recipe_id,
+                            },
+                            UiCapture,
+                            button_node(),
+                            BackgroundColor(BUTTON),
+                        ))
+                        .with_children(|button| {
+                            button.spawn(text_bundle(
+                                locale.tr(TextKey::AddOrder),
+                                font,
+                                14.0,
+                                TEXT,
+                            ));
+                        });
+                    actions
+                        .spawn((
+                            Button,
+                            AddInfiniteOrderButton {
+                                workstation_id,
+                                recipe_id,
+                            },
+                            UiCapture,
+                            button_node(),
+                            BackgroundColor(BUTTON),
+                        ))
+                        .with_children(|button| {
+                            button.spawn(text_bundle("∞", font, 18.0, TEXT));
+                        });
+                });
             });
-        });
+    }
 }
 
 fn spawn_orders(
@@ -1629,4 +1639,54 @@ fn spawn_sound_modal(
                 });
         })
         .id()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::world::CommandQueue;
+    use progressus_app::{recipe, workstation};
+
+    /// The workbench screen used to name one recipe outright, so a cart could
+    /// be built by the simulation and never ordered by a player. What the
+    /// screen offers has to come from the registry, or declaring a recipe is
+    /// not enough to put it in the game.
+    #[test]
+    fn the_workbench_offers_every_recipe_the_registry_gives_it() {
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        let workstation_id = EntityId::new(1).unwrap();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            commands.spawn(Node::default()).with_children(|panel| {
+                spawn_recipe_rows(
+                    panel,
+                    workstation_id,
+                    workstation::WORKBENCH,
+                    Locale::default(),
+                    &UiFont(Handle::default()),
+                );
+            });
+        }
+        queue.apply(&mut world);
+
+        let offered = world
+            .query::<&AddOrderButton>()
+            .iter(&world)
+            .map(|button| button.recipe_id)
+            .collect::<Vec<_>>();
+        let repeating = world
+            .query::<&AddInfiniteOrderButton>()
+            .iter(&world)
+            .map(|button| button.recipe_id)
+            .collect::<Vec<_>>();
+        let expected = RecipeId::for_workstation(workstation::WORKBENCH).collect::<Vec<_>>();
+
+        assert_eq!(offered, expected);
+        assert_eq!(repeating, expected);
+        assert!(
+            offered.contains(&recipe::CART),
+            "a cart can be built by the simulation but not ordered in the game"
+        );
+    }
 }

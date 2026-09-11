@@ -563,6 +563,83 @@ impl From<SaveError> for ApplicationError {
 mod tests {
     use super::*;
 
+    /// A cart needs a tool to build, so it is the first thing in the game that
+    /// cannot be made in one step. Ordering it has to work through the whole
+    /// chain — craft the tool, supply eight wood and that tool, build the cart —
+    /// or the recipe exists only on paper.
+    #[test]
+    fn a_cart_can_be_ordered_and_actually_built() {
+        let mut application = Application::new_game(NewGameOptions {
+            seed: WorldSeed::new(0),
+        })
+        .unwrap();
+        application
+            .execute(Command::CreateStockpile {
+                cell: WorldCell::new(-2, 1),
+            })
+            .unwrap();
+        let stockpile_id = application
+            .snapshot(SnapshotQuery::default())
+            .unwrap()
+            .stockpiles[0]
+            .id;
+        for x in -1..=3 {
+            application
+                .execute(Command::SetStockpileCell {
+                    stockpile_id,
+                    cell: WorldCell::new(x, 1),
+                    enabled: true,
+                })
+                .unwrap();
+        }
+        application
+            .execute(Command::AdvanceTicks { count: 400 })
+            .unwrap();
+        let workbench_cell = (2..=5)
+            .flat_map(|y| (-4..=4).map(move |x| WorldCell::new(x, y)))
+            .find(|cell| {
+                application
+                    .execute(Command::PlaceWorkstation {
+                        kind: workstation::WORKBENCH,
+                        cell: *cell,
+                    })
+                    .is_ok()
+            });
+        assert!(workbench_cell.is_some(), "nowhere to stand a workbench");
+        let workstation_id = application
+            .snapshot(SnapshotQuery::default())
+            .unwrap()
+            .workstations[0]
+            .id;
+
+        for recipe_id in [recipe::PRIMITIVE_TOOL, recipe::CART] {
+            application
+                .execute(Command::AddProductionOrder {
+                    workstation_id,
+                    recipe_id,
+                    target: ProductionTarget::Finite { remaining_runs: 1 },
+                })
+                .unwrap();
+            application
+                .execute(Command::AdvanceTicks { count: 1500 })
+                .unwrap();
+        }
+
+        let built = application
+            .snapshot(SnapshotQuery {
+                chunks: nearby_chunks(),
+                ..SnapshotQuery::default()
+            })
+            .unwrap();
+        assert!(
+            built
+                .inventory_items
+                .iter()
+                .any(|row| row.kind == item::CART),
+            "the settlement never finished a cart"
+        );
+    }
+
     fn nearby_chunks() -> Vec<ChunkCoord> {
         (-2..=2)
             .flat_map(|x| (-2..=2).map(move |y| ChunkCoord::new(x, y)))
