@@ -250,7 +250,10 @@ pub(crate) fn pointer_navigation(
         KeyCode::ShiftLeft,
         KeyCode::ShiftRight,
     ]);
-    if buttons.just_pressed(MouseButton::Left) && !modified_left {
+    if buttons.just_pressed(MouseButton::Left)
+        && !modified_left
+        && cell_selection_allowed(tool.mode)
+    {
         let nearest = pawns
             .iter()
             .filter_map(|(pawn, transform)| {
@@ -298,6 +301,8 @@ pub(crate) fn pointer_navigation(
             &mut stockpile_click,
             &mut modal,
             allow_stockpile_selection,
+            (!tool_active).then_some(inspection.hovered).flatten(),
+            &mut inspection,
         ) {
             tool.cancel_drag();
             if let Err(error) = authoritative.refresh_lightweight_snapshot(selected.0) {
@@ -368,6 +373,8 @@ pub(crate) fn pointer_navigation(
                     &mut stockpile_click,
                     &mut modal,
                     true,
+                    None,
+                    &mut inspection,
                 ) {
                     if let Err(error) = authoritative.refresh_lightweight_snapshot(selected.0) {
                         error!("authoritative snapshot failed after stockpile selection: {error}");
@@ -790,42 +797,84 @@ fn handle_selectable_click(
     stockpile_click: &mut StockpileClickState,
     modal: &mut ModalState,
     allow_stockpile_selection: bool,
+    inspectable: Option<crate::inventory::InspectedObject>,
+    inspection: &mut crate::inventory::InspectionState,
 ) -> bool {
-    if let Some(workstation_id) = workstation_at(snapshot, target.containing_cell()) {
-        selected.0 = None;
-        selected_stockpile.0 = None;
-        stockpile_click.last = None;
-        modal.open_workstation(workstation_id);
-        return true;
-    }
-    if let Some(character_id) = select_nearest(
+    let workstation_id = workstation_at(snapshot, target.containing_cell());
+    let character_id = select_nearest(
         snapshot
             .characters
             .iter()
             .map(|character| (character.id, character.position)),
         target,
         progressus_app::SUBUNITS_PER_CELL / 2,
-    ) {
-        selected.0 = Some(character_id);
-        selected_stockpile.0 = None;
-        stockpile_click.last = None;
-        return true;
-    }
-    if allow_stockpile_selection
-        && let Some(stockpile_id) = stockpile_at(snapshot, target.containing_cell())
-    {
-        selected.0 = None;
-        selected_stockpile.0 = Some(stockpile_id);
-        let double_click = stockpile_click
-            .last
-            .is_some_and(|(id, at)| id == stockpile_id && now - at <= 0.35);
-        stockpile_click.last = Some((stockpile_id, now));
-        if double_click {
-            modal.open_stockpile(stockpile_id);
+    );
+    let stockpile_id = allow_stockpile_selection
+        .then(|| stockpile_at(snapshot, target.containing_cell()))
+        .flatten();
+    match cell_selection_target(workstation_id, character_id, inspectable, stockpile_id) {
+        Some(CellSelectionTarget::Workstation(workstation_id)) => {
+            selected.0 = None;
+            selected_stockpile.0 = None;
+            stockpile_click.last = None;
+            modal.open_workstation(workstation_id);
         }
-        return true;
+        Some(CellSelectionTarget::Character(character_id)) => {
+            selected.0 = Some(character_id);
+            selected_stockpile.0 = None;
+            stockpile_click.last = None;
+        }
+        Some(CellSelectionTarget::Inspection(object)) => {
+            selected.0 = None;
+            selected_stockpile.0 = None;
+            stockpile_click.last = None;
+            inspection.pin(object);
+        }
+        Some(CellSelectionTarget::Stockpile(stockpile_id)) => {
+            selected.0 = None;
+            selected_stockpile.0 = Some(stockpile_id);
+            let double_click = stockpile_click
+                .last
+                .is_some_and(|(id, at)| id == stockpile_id && now - at <= 0.35);
+            stockpile_click.last = Some((stockpile_id, now));
+            if double_click {
+                modal.open_stockpile(stockpile_id);
+            }
+        }
+        None => return false,
     }
-    false
+    true
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CellSelectionTarget {
+    Workstation(EntityId),
+    Character(EntityId),
+    Inspection(crate::inventory::InspectedObject),
+    Stockpile(EntityId),
+}
+
+const fn cell_selection_target(
+    workstation: Option<EntityId>,
+    character: Option<EntityId>,
+    inspectable: Option<crate::inventory::InspectedObject>,
+    stockpile: Option<EntityId>,
+) -> Option<CellSelectionTarget> {
+    if let Some(id) = workstation {
+        Some(CellSelectionTarget::Workstation(id))
+    } else if let Some(id) = character {
+        Some(CellSelectionTarget::Character(id))
+    } else if let Some(object) = inspectable {
+        Some(CellSelectionTarget::Inspection(object))
+    } else if let Some(id) = stockpile {
+        Some(CellSelectionTarget::Stockpile(id))
+    } else {
+        None
+    }
+}
+
+const fn cell_selection_allowed(mode: ToolMode) -> bool {
+    !matches!(mode, ToolMode::Wall | ToolMode::Door | ToolMode::Workbench)
 }
 
 fn workstation_at(snapshot: &ClientSnapshot, cell: WorldCell) -> Option<EntityId> {
@@ -1101,6 +1150,7 @@ mod tests {
     use super::{AuthoritativeClient, advance_authority, rectangle_cells};
     use crate::interaction::TickScheduler;
     use crate::navigation::{SelectedCharacter, VisualMotion};
+    use crate::ui::ToolMode;
     use bevy::prelude::{App, ButtonInput, KeyCode, Time, Update};
     use progressus_app::{
         CHUNK_SIDE, ChunkCoord, Command, Direction, EntityId, MovementState, TerrainId, WorldCell,
@@ -1320,6 +1370,33 @@ mod tests {
             10.
         );
         assert!(super::screen_body_distance(bevy::prelude::Vec2::new(100., 80.), feet, head) > 14.);
+    }
+
+    #[test]
+    fn ground_item_wins_over_the_stockpile_zone_underneath_it() {
+        let cart = EntityId::new(40).unwrap();
+        let stockpile = EntityId::new(50).unwrap();
+
+        assert_eq!(
+            super::cell_selection_target(
+                None,
+                None,
+                Some(crate::inventory::InspectedObject::Item(cart)),
+                Some(stockpile),
+            ),
+            Some(super::CellSelectionTarget::Inspection(
+                crate::inventory::InspectedObject::Item(cart),
+            )),
+        );
+    }
+
+    #[test]
+    fn construction_tools_send_an_unmodified_click_to_the_tool() {
+        assert!(!super::cell_selection_allowed(ToolMode::Wall));
+        assert!(!super::cell_selection_allowed(ToolMode::Door));
+        assert!(!super::cell_selection_allowed(ToolMode::Workbench));
+        assert!(super::cell_selection_allowed(ToolMode::Select));
+        assert!(super::cell_selection_allowed(ToolMode::Harvest));
     }
 
     #[test]

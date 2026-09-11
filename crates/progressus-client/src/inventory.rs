@@ -161,7 +161,7 @@ pub(crate) fn update_world_hover(
     inspection.hovered = inspectable_at(&cache, position.containing_cell());
 }
 
-fn inspectable_at(
+pub(crate) fn inspectable_at(
     cache: &crate::low_poly::scene::SceneCache,
     cell: WorldCell,
 ) -> Option<InspectedObject> {
