@@ -9,7 +9,6 @@ mod audio_synthesis;
 mod client_diagnostics;
 mod i18n;
 mod interaction;
-mod inventory;
 mod modal;
 mod navigation;
 pub mod presentation;
