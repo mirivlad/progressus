@@ -95,6 +95,8 @@ Worldgen v3 adds deterministic `BerryBush` sources, including four guaranteed bu
 - one metal intermediate/product;
 - no teleporting inputs or outputs.
 
+Current implementation has a non-renewable copper-vein worldgen layer and physical CopperOre output, with mining gated by equipped tool capabilities. Furnace, fuel-consuming smelting and a metal product are still missing. The interaction completion pass will qualify the complete crafted-tool → extraction → delivery path before marking ore extraction accepted.
+
 ## 7. Stage E — Simple research/capability gating
 
 Research is a prerequisite, not a magic production currency.
