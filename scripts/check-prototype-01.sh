@@ -27,6 +27,13 @@ cargo test \
   -p progressus-app \
   -p progressus-headless
 
+printf '%s\n' '== authoritative tests in release =='
+# The rest of the suite runs in debug, where a debug assertion still evaluates
+# its expression. A side effect written inside one therefore disappears only in
+# the build players actually run, which is how a cart kept phantom cargo and a
+# freed stockpile cell stayed owned. Physical accounting is checked in both.
+cargo test --release -p progressus-sim --lib
+
 if [[ "${PROGRESSUS_RUN_CLIENT_TESTS:-0}" == "1" ]]; then
   printf '%s\n' '== client tests (explicit heavy link) =='
   cargo test -p progressus-client

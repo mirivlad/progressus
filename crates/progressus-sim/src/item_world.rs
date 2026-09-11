@@ -639,7 +639,7 @@ impl ItemWorld {
             .contents_by_container
             .get_mut(&container_id)
             .expect("contained item has a matching container index");
-        debug_assert!(
+        assert!(
             contents.remove(&item_id),
             "contained item is present in its container index"
         );
