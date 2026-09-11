@@ -514,6 +514,58 @@ mod tests {
         assert!(simulation.job_world.indexes_are_consistent());
     }
 
+    /// A worker pushing a cart loads the stack into it rather than into their
+    /// hands. The job has to keep recognising those goods as theirs, or the
+    /// stack counts as abandoned the moment it is loaded and never arrives.
+    #[test]
+    fn haul_delivers_a_load_borne_in_a_cart() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let destination = WorldCell::new(0, 0);
+        let stockpile_id = simulation.create_stockpile(destination).unwrap();
+        let item_id = EntityId::new(6).unwrap();
+        for character_id in simulation.characters.keys().copied().collect::<Vec<_>>() {
+            let position = simulation.characters[&character_id].position();
+            let cart = simulation.id_allocator.allocate().unwrap();
+            simulation
+                .item_world
+                .insert_ground(ItemStack::new_ground(
+                    cart,
+                    item::CART,
+                    ItemQuantity::new(1).unwrap(),
+                    position,
+                ))
+                .unwrap();
+            simulation.pick_up_item(character_id, cart).unwrap();
+            simulation.equip_item(character_id, cart).unwrap();
+        }
+        let mut saw_contained = false;
+
+        for _ in 0..256 {
+            simulation.advance_ticks(1).unwrap();
+            let item = simulation.item_world.get(item_id).unwrap();
+            saw_contained |= item.container().is_some();
+            if item
+                .ground_position()
+                .is_some_and(|position| position.containing_cell() == destination)
+            {
+                break;
+            }
+        }
+
+        assert!(saw_contained, "the load never travelled inside the cart");
+        assert_eq!(
+            simulation
+                .item_world
+                .get(item_id)
+                .unwrap()
+                .ground_position(),
+            Some(WorldPosition::from_cell_center(destination).unwrap()),
+            "a cartload never reached the stockpile"
+        );
+        assert_eq!(simulation.stockpile_at(destination), Some(stockpile_id));
+        assert!(simulation.item_world.indexes_are_consistent());
+    }
+
     #[test]
     fn items_already_inside_a_stockpile_do_not_generate_haul_jobs() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
