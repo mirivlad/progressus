@@ -43,7 +43,7 @@ impl Simulation {
                     .get(&worker_id)
                     .ok_or(SimulationError::UnknownCharacter(worker_id))?
                     .position();
-                self.drop_item(worker_id, item_id, position)?;
+                self.drop_item_for_job(worker_id, item_id, position)?;
                 if let JobKind::DeliverConstruction { site_id, .. } = job.kind() {
                     self.construction_world
                         .mark_material_reserved(site_id, item_id)
@@ -96,7 +96,7 @@ impl Simulation {
                     .get(&worker_id)
                     .ok_or(SimulationError::UnknownCharacter(worker_id))?
                     .position();
-                self.drop_item(worker_id, item_id, position)?;
+                self.drop_item_for_job(worker_id, item_id, position)?;
                 if let JobKind::DeliverConstruction { site_id, .. } = job.kind() {
                     self.construction_world
                         .mark_material_reserved(site_id, item_id)
@@ -175,10 +175,7 @@ impl Simulation {
                 character.is_available_for_work()
                     && !character.is_starving()
                     && self.job_world.job_for_worker(character.id()).is_none()
-                    && !self
-                        .item_world
-                        .iter()
-                        .any(|item| item.carrier() == Some(character.id()))
+                    && !self.character_has_held_payload(character.id())
             })
             .map(|character| {
                 (
@@ -369,7 +366,7 @@ impl Simulation {
                     // Take it and put it away in one step: a tool never
                     // travels in the hands, so it never occupies them.
                     self.pick_up_within_capacity(worker_id, item_id)?;
-                    self.equip_item(worker_id, item_id)?;
+                    self.equip_item_for_job(worker_id, item_id)?;
                     self.job_world
                         .remove(job_id)
                         .map_err(SimulationError::from_job_world)?;
@@ -770,7 +767,7 @@ impl Simulation {
                 let Some(character) = self.characters.get(&worker_id) else {
                     return Err(SimulationError::JobInvariantViolation);
                 };
-                if self.item_world.get(item_id).and_then(ItemStack::carrier) != Some(worker_id) {
+                if self.item_world.holder_of(item_id) != Some(worker_id) {
                     return Err(SimulationError::JobInvariantViolation);
                 }
                 let target = WorldPosition::from_cell_center(destination)?;
@@ -781,7 +778,7 @@ impl Simulation {
                     InteractionRadius::zero(),
                 ) {
                     let merge_target = self.stockpile_merge_target(item_id, destination);
-                    self.drop_item(worker_id, item_id, target)?;
+                    self.drop_item_for_job(worker_id, item_id, target)?;
                     if let Some(target_id) = merge_target {
                         self.item_world
                             .merge_ground_stacks(target_id, item_id)
@@ -796,7 +793,7 @@ impl Simulation {
                         .set_movement(MovementState::Idle);
                 } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
                     let position = character.position();
-                    self.drop_item(worker_id, item_id, position)?;
+                    self.drop_item_for_job(worker_id, item_id, position)?;
                     self.job_world
                         .release_worker(job_id)
                         .map_err(SimulationError::from_job_world)?;
@@ -816,7 +813,7 @@ impl Simulation {
                 let Some(character) = self.characters.get(&worker_id) else {
                     return Err(SimulationError::JobInvariantViolation);
                 };
-                if self.item_world.get(item_id).and_then(ItemStack::carrier) != Some(worker_id) {
+                if self.item_world.holder_of(item_id) != Some(worker_id) {
                     return Err(SimulationError::JobInvariantViolation);
                 }
                 let target = WorldPosition::from_cell_center(destination)?;
@@ -827,7 +824,7 @@ impl Simulation {
                     InteractionRadius::zero(),
                 ) {
                     let merge_target = self.stockpile_merge_target(item_id, destination);
-                    self.drop_item(worker_id, item_id, target)?;
+                    self.drop_item_for_job(worker_id, item_id, target)?;
                     if let Some(target_id) = merge_target {
                         self.item_world
                             .merge_ground_stacks(target_id, item_id)
@@ -842,7 +839,7 @@ impl Simulation {
                         .set_movement(MovementState::Idle);
                 } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
                     let position = character.position();
-                    self.drop_item(worker_id, item_id, position)?;
+                    self.drop_item_for_job(worker_id, item_id, position)?;
                     self.job_world
                         .release_worker(job_id)
                         .map_err(SimulationError::from_job_world)?;
@@ -853,7 +850,7 @@ impl Simulation {
                     self.cancel_job(job_id)?;
                     return Ok(());
                 };
-                if self.item_world.get(item_id).and_then(ItemStack::carrier) != Some(worker_id) {
+                if self.item_world.holder_of(item_id) != Some(worker_id) {
                     return Err(SimulationError::ConstructionInvariantViolation);
                 }
                 let Some(character) = self.characters.get(&worker_id) else {
@@ -861,7 +858,7 @@ impl Simulation {
                 };
                 let Some(access_cell) = self.construction_access_cell(site.cell())? else {
                     let position = character.position();
-                    self.drop_item(worker_id, item_id, position)?;
+                    self.drop_item_for_job(worker_id, item_id, position)?;
                     self.construction_world
                         .mark_material_reserved(site_id, item_id)
                         .map_err(SimulationError::from_construction_world)?;
@@ -877,7 +874,7 @@ impl Simulation {
                     target,
                     InteractionRadius::zero(),
                 ) {
-                    self.drop_item(worker_id, item_id, target)?;
+                    self.drop_item_for_job(worker_id, item_id, target)?;
                     self.construction_world
                         .mark_material_delivered(site_id, item_id)
                         .map_err(SimulationError::from_construction_world)?;
@@ -891,7 +888,7 @@ impl Simulation {
                     self.ensure_construction_job(site_id)?;
                 } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
                     let position = character.position();
-                    self.drop_item(worker_id, item_id, position)?;
+                    self.drop_item_for_job(worker_id, item_id, position)?;
                     self.construction_world
                         .mark_material_reserved(site_id, item_id)
                         .map_err(SimulationError::from_construction_world)?;

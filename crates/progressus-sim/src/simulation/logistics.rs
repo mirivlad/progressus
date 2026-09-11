@@ -306,10 +306,9 @@ impl Simulation {
                 && self.is_walkable(destination)?
                 && self.stockpile_destination_accepts_item(item_id, destination);
             let item_valid = match job.state() {
-                JobState::Transporting { worker_id } => self
-                    .item_world
-                    .get(item_id)
-                    .is_some_and(|item| item.carrier() == Some(worker_id)),
+                JobState::Transporting { worker_id } => {
+                    self.item_world.holder_of(item_id) == Some(worker_id)
+                }
                 _ => self.item_world.get(item_id).is_some_and(|item| {
                     item.ground_position().is_some_and(|position| {
                         self.is_explored(position.containing_cell())

@@ -411,10 +411,22 @@ impl Simulation {
         character_id: EntityId,
         item_id: EntityId,
     ) -> Result<(), SimulationError> {
+        self.ensure_item_tree_unreserved(item_id)?;
+        self.equip_item_for_job(character_id, item_id)
+    }
+
+    fn equip_item_for_job(
+        &mut self,
+        character_id: EntityId,
+        item_id: EntityId,
+    ) -> Result<(), SimulationError> {
         let item = self
             .item_world
             .get(item_id)
             .ok_or(SimulationError::UnknownItem(item_id))?;
+        if item.quantity().get() != 1 {
+            return Err(SimulationError::EquipmentStackMustBeSingle(item_id));
+        }
         let slot = item
             .kind()
             .definition()
@@ -441,6 +453,7 @@ impl Simulation {
         character_id: EntityId,
         item_id: EntityId,
     ) -> Result<(), SimulationError> {
+        self.ensure_item_tree_unreserved(item_id)?;
         let item = self
             .item_world
             .get(item_id)
@@ -467,9 +480,28 @@ impl Simulation {
     pub fn carried_load(&self, character_id: EntityId) -> u64 {
         self.item_world
             .iter()
-            .filter(|item| item.carrier() == Some(character_id))
-            .map(|item| item.kind().load_cost(item.quantity().get()))
+            .filter(|item| {
+                matches!(
+                    item.location(),
+                    ItemLocation::Carried {
+                        character_id: carrier
+                    } if carrier == character_id
+                )
+            })
+            .map(|item| self.item_subtree_load(item.id()))
             .sum()
+    }
+
+    fn character_has_held_payload(&self, character_id: EntityId) -> bool {
+        self.item_world.iter().any(|item| match item.location() {
+            ItemLocation::Carried {
+                character_id: carrier,
+            } => carrier == character_id,
+            ItemLocation::Contained { .. } => {
+                self.item_world.holder_of(item.id()) == Some(character_id)
+            }
+            ItemLocation::Ground { .. } | ItemLocation::Equipped { .. } => false,
+        })
     }
 
     /// The container this character is equipped with, and how much it holds.
@@ -489,8 +521,15 @@ impl Simulation {
     pub fn container_load(&self, container_id: EntityId) -> u64 {
         self.item_world
             .contents_of(container_id)
-            .map(|item| item.kind().load_cost(item.quantity().get()))
+            .map(|item| self.item_subtree_load(item.id()))
             .sum()
+    }
+
+    fn item_subtree_load(&self, item_id: EntityId) -> u64 {
+        let Some(item) = self.item_world.get(item_id) else {
+            return 0;
+        };
+        item.kind().load_cost(item.quantity().get()) + self.container_load(item_id)
     }
 
     /// How much of a stack this character could still take. Zero means their
@@ -540,8 +579,10 @@ impl Simulation {
                 .map_err(|_| SimulationError::JobInvariantViolation)?;
         }
         match self.equipped_container(worker_id) {
-            Some((container_id, _)) => self.load_into_container(worker_id, item_id, container_id),
-            None => self.pick_up_item(worker_id, item_id),
+            Some((container_id, _)) => {
+                self.load_into_container_for_job(worker_id, item_id, container_id)
+            }
+            None => self.pick_up_item_for_job(worker_id, item_id),
         }
     }
 
@@ -553,19 +594,29 @@ impl Simulation {
         item_id: EntityId,
         container_id: EntityId,
     ) -> Result<(), SimulationError> {
+        self.ensure_item_tree_unreserved(item_id)?;
+        self.ensure_item_unreserved(container_id)?;
+        self.load_into_container_for_job(character_id, item_id, container_id)
+    }
+
+    fn load_into_container_for_job(
+        &mut self,
+        character_id: EntityId,
+        item_id: EntityId,
+        container_id: EntityId,
+    ) -> Result<(), SimulationError> {
         let character = self
             .characters
             .get(&character_id)
             .ok_or(SimulationError::UnknownCharacter(character_id))?;
         let (position, radius) = (character.position(), character.interaction_radius());
-        let item = self
+        let source_item = self
             .item_world
             .get(item_id)
             .ok_or(SimulationError::UnknownItem(item_id))?;
-        let item_position = item
+        let item_position = source_item
             .ground_position()
             .ok_or(SimulationError::ItemNotOnGround(item_id))?;
-        let (kind, quantity) = (item.kind(), item.quantity().get());
         let container = self
             .item_world
             .get(container_id)
@@ -574,20 +625,34 @@ impl Simulation {
             .kind()
             .capacity()
             .ok_or(SimulationError::ItemNotAContainer(container_id))?;
+        if container.quantity().get() != 1 {
+            return Err(SimulationError::ContainerStackMustBeSingle(container_id));
+        }
+        if source_item.kind() == item::CART && container.kind() == item::CART {
+            return Err(SimulationError::ContainerNestingNotAllowed {
+                item_id,
+                container_id,
+            });
+        }
         // Reachable means borne by this character, or standing within reach.
         let reachable = match container.ground_position() {
-            Some(container_position) => {
-                within_interaction_range(position, radius, container_position, radius)
-            }
+            Some(container_position) => within_interaction_range(
+                position,
+                radius,
+                container_position,
+                InteractionRadius::zero(),
+            ),
             None => self.item_world.holder_of(container_id) == Some(character_id),
         };
-        if !reachable || !within_interaction_range(position, radius, item_position, radius) {
+        if !reachable
+            || !within_interaction_range(position, radius, item_position, InteractionRadius::zero())
+        {
             return Err(SimulationError::ItemOutOfReach {
                 character_id,
                 item_id,
             });
         }
-        if self.container_load(container_id) + kind.load_cost(quantity)
+        if self.container_load(container_id) + self.item_subtree_load(item_id)
             > u64::from(capacity) * HAND_LOAD_UNITS
         {
             return Err(SimulationError::CarryCapacityExceeded {
@@ -601,6 +666,35 @@ impl Simulation {
     }
 
     pub fn pick_up_item(
+        &mut self,
+        character_id: EntityId,
+        item_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        self.ensure_item_unreserved(item_id)?;
+        self.pick_up_item_for_job(character_id, item_id)
+    }
+
+    fn ensure_item_unreserved(&self, item_id: EntityId) -> Result<(), SimulationError> {
+        if self.job_world.item_job_for_item(item_id).is_some() {
+            Err(SimulationError::ItemReserved(item_id))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn ensure_item_tree_unreserved(&self, item_id: EntityId) -> Result<(), SimulationError> {
+        self.ensure_item_unreserved(item_id)?;
+        for child in self.item_world.contents_of(item_id) {
+            self.ensure_item_tree_unreserved(child.id())?;
+        }
+        Ok(())
+    }
+
+    pub fn item_is_reserved(&self, item_id: EntityId) -> bool {
+        self.job_world.item_job_for_item(item_id).is_some()
+    }
+
+    fn pick_up_item_for_job(
         &mut self,
         character_id: EntityId,
         item_id: EntityId,
@@ -654,15 +748,32 @@ impl Simulation {
         item_id: EntityId,
         destination: WorldPosition,
     ) -> Result<(), SimulationError> {
+        self.ensure_item_tree_unreserved(item_id)?;
+        self.drop_item_for_job(character_id, item_id, destination)
+    }
+
+    fn drop_item_for_job(
+        &mut self,
+        character_id: EntityId,
+        item_id: EntityId,
+        destination: WorldPosition,
+    ) -> Result<(), SimulationError> {
         let character = self
             .characters
             .get(&character_id)
             .ok_or(SimulationError::UnknownCharacter(character_id))?;
-        if self.item_world.get(item_id).is_none() {
-            return Err(SimulationError::UnknownItem(item_id));
-        }
+        let item = self
+            .item_world
+            .get(item_id)
+            .ok_or(SimulationError::UnknownItem(item_id))?;
         // Goods a character bears in a container count as theirs to put down.
-        if self.item_world.holder_of(item_id) != Some(character_id) {
+        if !matches!(
+            item.location(),
+            ItemLocation::Carried { .. }
+                | ItemLocation::Equipped { .. }
+                | ItemLocation::Contained { .. }
+        ) || self.item_world.holder_of(item_id) != Some(character_id)
+        {
             return Err(SimulationError::ItemNotCarriedByCharacter {
                 character_id,
                 item_id,
@@ -689,6 +800,56 @@ impl Simulation {
             .move_to_ground(item_id, character_id, destination)
             .expect("drop preconditions were validated against the canonical item world");
         Ok(())
+    }
+
+    pub fn unload_from_container(
+        &mut self,
+        character_id: EntityId,
+        item_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        self.ensure_item_tree_unreserved(item_id)?;
+        let character = self
+            .characters
+            .get(&character_id)
+            .ok_or(SimulationError::UnknownCharacter(character_id))?;
+        let position = character.position();
+        let radius = character.interaction_radius();
+        let container_id = match self
+            .item_world
+            .get(item_id)
+            .ok_or(SimulationError::UnknownItem(item_id))?
+            .location()
+        {
+            ItemLocation::Contained { container_id } => container_id,
+            _ => {
+                return Err(SimulationError::ItemNotCarriedByCharacter {
+                    character_id,
+                    item_id,
+                });
+            }
+        };
+        let container = self
+            .item_world
+            .get(container_id)
+            .ok_or(SimulationError::UnknownItem(container_id))?;
+        let reachable = match container.ground_position() {
+            Some(container_position) => within_interaction_range(
+                position,
+                radius,
+                container_position,
+                InteractionRadius::zero(),
+            ),
+            None => self.item_world.holder_of(container_id) == Some(character_id),
+        };
+        if !reachable {
+            return Err(SimulationError::ItemOutOfReach {
+                character_id,
+                item_id,
+            });
+        }
+        self.item_world
+            .move_contained_to_ground(item_id, container_id, position)
+            .map_err(|_| SimulationError::JobInvariantViolation)
     }
 
     pub fn jobs(&self) -> impl ExactSizeIterator<Item = &Job> {
@@ -1275,6 +1436,215 @@ mod tests {
         simulation.unequip_item(character, tool).unwrap();
         assert!(!simulation.can_perform(character, capability::MINE));
         assert!(simulation.item_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn dropping_equipment_atomically_parks_it_on_the_ground() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let character = cora();
+        let position = simulation.characters[&character].position();
+        let tool = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .item_world
+            .insert_ground(ItemStack::new_ground(
+                tool,
+                item::PRIMITIVE_TOOL,
+                ItemQuantity::new(1).unwrap(),
+                position,
+            ))
+            .unwrap();
+        simulation.pick_up_item(character, tool).unwrap();
+        simulation.equip_item(character, tool).unwrap();
+
+        simulation.drop_item(character, tool, position).unwrap();
+        assert_eq!(
+            simulation.item_world.get(tool).unwrap().ground_position(),
+            Some(position)
+        );
+        assert!(simulation.equipment(character).is_empty());
+        assert!(simulation.item_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn manual_pickup_cannot_steal_an_item_reserved_by_a_job() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let character = cora();
+        let position = simulation.characters[&character].position();
+        let item_id = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .item_world
+            .insert_ground(ItemStack::new_ground(
+                item_id,
+                item::WOOD,
+                ItemQuantity::new(1).unwrap(),
+                position,
+            ))
+            .unwrap();
+        let job_id = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .job_world
+            .insert(Job::new(
+                job_id,
+                JobKind::Haul {
+                    item_id,
+                    stockpile_id: EntityId::new(100).unwrap(),
+                    destination: position.containing_cell(),
+                },
+            ))
+            .unwrap();
+
+        assert_eq!(
+            simulation.pick_up_item(character, item_id),
+            Err(SimulationError::ItemReserved(item_id))
+        );
+        assert_eq!(
+            simulation
+                .item_world
+                .get(item_id)
+                .unwrap()
+                .ground_position(),
+            Some(position)
+        );
+        assert_eq!(
+            simulation.job_world.item_job_for_item(item_id),
+            Some(job_id)
+        );
+    }
+
+    #[test]
+    fn loading_uses_the_same_item_reach_as_pickup() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let character = cora();
+        let character_position = simulation.characters[&character].position();
+        let outside_reach = character_position
+            .checked_translate(
+                i128::from(
+                    simulation.characters[&character]
+                        .interaction_radius()
+                        .subunits(),
+                ) + 1,
+                0,
+            )
+            .unwrap();
+        let place = |simulation: &mut Simulation, kind, quantity, position| {
+            let id = simulation.id_allocator.allocate().unwrap();
+            simulation
+                .item_world
+                .insert_ground(ItemStack::new_ground(
+                    id,
+                    kind,
+                    ItemQuantity::new(quantity).unwrap(),
+                    position,
+                ))
+                .unwrap();
+            id
+        };
+        let cart = place(&mut simulation, item::CART, 1, character_position);
+        let goods = place(&mut simulation, item::WOOD, 1, outside_reach);
+
+        assert!(matches!(
+            simulation.pick_up_item(character, goods),
+            Err(SimulationError::ItemOutOfReach { .. })
+        ));
+        assert!(matches!(
+            simulation.load_into_container(character, goods, cart),
+            Err(SimulationError::ItemOutOfReach { .. })
+        ));
+        assert_eq!(
+            simulation.item_world.get(goods).unwrap().ground_position(),
+            Some(outside_reach)
+        );
+    }
+
+    #[test]
+    fn a_character_can_unload_a_reachable_parked_cart() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let character = cora();
+        let position = simulation.characters[&character].position();
+        let place = |simulation: &mut Simulation, kind, quantity| {
+            let id = simulation.id_allocator.allocate().unwrap();
+            simulation
+                .item_world
+                .insert_ground(ItemStack::new_ground(
+                    id,
+                    kind,
+                    ItemQuantity::new(quantity).unwrap(),
+                    position,
+                ))
+                .unwrap();
+            id
+        };
+        let cart = place(&mut simulation, item::CART, 1);
+        let goods = place(&mut simulation, item::STONE, 3);
+        simulation
+            .load_into_container(character, goods, cart)
+            .unwrap();
+
+        simulation.unload_from_container(character, goods).unwrap();
+
+        assert_eq!(
+            simulation.item_world.get(goods).unwrap().ground_position(),
+            Some(position)
+        );
+        assert_eq!(simulation.container_load(cart), 0);
+        assert!(simulation.item_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn carts_cannot_be_stacked_or_nested_to_bypass_capacity() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let character = cora();
+        let position = simulation.characters[&character].position();
+        let place = |simulation: &mut Simulation, kind, quantity| {
+            let id = simulation.id_allocator.allocate().unwrap();
+            simulation
+                .item_world
+                .insert_ground(ItemStack::new_ground(
+                    id,
+                    kind,
+                    ItemQuantity::new(quantity).unwrap(),
+                    position,
+                ))
+                .unwrap();
+            id
+        };
+        let outer = place(&mut simulation, item::CART, 1);
+        let nested = place(&mut simulation, item::CART, 1);
+        assert!(matches!(
+            simulation.load_into_container(character, nested, outer),
+            Err(SimulationError::ContainerNestingNotAllowed { .. })
+        ));
+
+        let stacked = place(&mut simulation, item::CART, 2);
+        let goods = place(&mut simulation, item::WOOD, 1);
+        assert_eq!(
+            simulation.load_into_container(character, goods, stacked),
+            Err(SimulationError::ContainerStackMustBeSingle(stacked))
+        );
+    }
+
+    #[test]
+    fn equipment_slots_hold_one_physical_item_not_a_stack() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let character = cora();
+        let position = simulation.characters[&character].position();
+        let tools = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .item_world
+            .insert_ground(ItemStack::new_ground(
+                tools,
+                item::PRIMITIVE_TOOL,
+                ItemQuantity::new(2).unwrap(),
+                position,
+            ))
+            .unwrap();
+        simulation.pick_up_item(character, tools).unwrap();
+
+        assert_eq!(
+            simulation.equip_item(character, tools),
+            Err(SimulationError::EquipmentStackMustBeSingle(tools))
+        );
+        assert!(simulation.equipment(character).is_empty());
     }
 
     /// A slot holds one item, and equipment survives a save without becoming a

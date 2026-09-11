@@ -356,10 +356,41 @@ impl ItemWorld {
             ItemLocation::Contained { container_id } => {
                 self.remove_contained_index(item_id, container_id);
             }
-            ItemLocation::Ground { .. } | ItemLocation::Equipped { .. } => {
+            ItemLocation::Equipped { character_id, slot } => {
+                self.remove_equipped_index(item_id, character_id, slot);
+            }
+            ItemLocation::Ground { .. } => {
                 return Err(ItemWorldError::ExpectedCarriedItem(item_id));
             }
         }
+        self.items
+            .get_mut(&item_id)
+            .expect("item was checked above")
+            .location = ItemLocation::Ground { position };
+        self.ground_by_chunk
+            .entry(position.containing_cell().split().0)
+            .or_default()
+            .insert(item_id);
+        self.bump_revision();
+        Ok(())
+    }
+
+    pub(crate) fn move_contained_to_ground(
+        &mut self,
+        item_id: EntityId,
+        expected_container: EntityId,
+        position: WorldPosition,
+    ) -> Result<(), ItemWorldError> {
+        let container_id = self
+            .items
+            .get(&item_id)
+            .ok_or(ItemWorldError::UnknownItem(item_id))?
+            .container()
+            .ok_or(ItemWorldError::ExpectedCarriedItem(item_id))?;
+        if container_id != expected_container {
+            return Err(ItemWorldError::IndexCorruption);
+        }
+        self.remove_contained_index(item_id, container_id);
         self.items
             .get_mut(&item_id)
             .expect("item was checked above")
@@ -557,7 +588,8 @@ impl ItemWorld {
                 container_id,
             });
         }
-        if chain.len() >= MAX_CONTAINER_DEPTH {
+        let subtree_depth = self.contained_subtree_depth(item_id, &mut BTreeSet::new())?;
+        if chain.len() + subtree_depth >= MAX_CONTAINER_DEPTH {
             return Err(ItemWorldError::ContainerTooDeep {
                 item_id,
                 container_id,
@@ -632,6 +664,27 @@ impl ItemWorld {
             }
             current = next;
         }
+    }
+
+    fn contained_subtree_depth(
+        &self,
+        item_id: EntityId,
+        visited: &mut BTreeSet<EntityId>,
+    ) -> Result<usize, ItemWorldError> {
+        if !visited.insert(item_id) {
+            return Err(ItemWorldError::IndexCorruption);
+        }
+        let mut depth = 0;
+        if let Some(contents) = self.contents_by_container.get(&item_id) {
+            for child_id in contents {
+                if !self.items.contains_key(child_id) {
+                    return Err(ItemWorldError::IndexCorruption);
+                }
+                depth = depth.max(1 + self.contained_subtree_depth(*child_id, visited)?);
+            }
+        }
+        visited.remove(&item_id);
+        Ok(depth)
     }
 
     fn remove_contained_index(&mut self, item_id: EntityId, container_id: EntityId) {
@@ -910,6 +963,24 @@ mod tests {
             Err(ItemWorldError::ContainerTooDeep { .. })
         ));
         world.move_to_container(goods, cart).unwrap();
+        assert!(world.indexes_are_consistent());
+    }
+
+    /// The limit is easy to respect one item at a time and easy to break by
+    /// moving a container that already holds something: its contents ride a
+    /// level deeper without ever being touched themselves.
+    #[test]
+    fn moving_a_loaded_container_cannot_smuggle_its_contents_too_deep() {
+        let (mut world, cart, bucket, goods) = container_fixture();
+        let position = WorldPosition::from_cell_center(WorldCell::new(0, 0)).unwrap();
+        world.move_to_container(goods, bucket).unwrap();
+
+        assert!(matches!(
+            world.move_to_container(bucket, cart),
+            Err(ItemWorldError::ContainerTooDeep { .. })
+        ));
+        assert_eq!(world.get(bucket).unwrap().ground_position(), Some(position));
+        assert_eq!(world.get(goods).unwrap().container(), Some(bucket));
         assert!(world.indexes_are_consistent());
     }
 

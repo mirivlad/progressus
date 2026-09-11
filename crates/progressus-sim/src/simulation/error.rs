@@ -76,8 +76,15 @@ pub enum SimulationError {
     ResourceRevisionOverflow,
     JobInvariantViolation,
     ItemNotOnGround(EntityId),
+    ItemReserved(EntityId),
     ItemNotEquippable(EntityId),
     ItemNotAContainer(EntityId),
+    EquipmentStackMustBeSingle(EntityId),
+    ContainerStackMustBeSingle(EntityId),
+    ContainerNestingNotAllowed {
+        item_id: EntityId,
+        container_id: EntityId,
+    },
     SlotAlreadyOccupied {
         character_id: EntityId,
         item_id: EntityId,
@@ -482,6 +489,25 @@ impl Display for SimulationError {
             Self::ItemNotAContainer(id) => {
                 write!(formatter, "item {} holds nothing", id.value())
             }
+            Self::EquipmentStackMustBeSingle(id) => write!(
+                formatter,
+                "item {} must be a single physical item to occupy an equipment slot",
+                id.value()
+            ),
+            Self::ContainerStackMustBeSingle(id) => write!(
+                formatter,
+                "container item {} must be a single physical item",
+                id.value()
+            ),
+            Self::ContainerNestingNotAllowed {
+                item_id,
+                container_id,
+            } => write!(
+                formatter,
+                "item {} cannot be placed inside container {}",
+                item_id.value(),
+                container_id.value()
+            ),
             Self::ItemNotEquippable(id) => write!(
                 formatter,
                 "item {} does not belong in any equipment slot",
@@ -498,6 +524,13 @@ impl Display for SimulationError {
             ),
             Self::ItemNotOnGround(id) => {
                 write!(formatter, "item ID {} is not on the ground", id.value())
+            }
+            Self::ItemReserved(id) => {
+                write!(
+                    formatter,
+                    "item ID {} is reserved by an active job",
+                    id.value()
+                )
             }
             Self::ItemNotCarriedByCharacter {
                 character_id,
