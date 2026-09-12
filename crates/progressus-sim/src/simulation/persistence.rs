@@ -2446,14 +2446,9 @@ fn validate_restored_job_state(simulation: &Simulation, job: &Job) -> Result<(),
                 ));
             }
         };
-        if simulation
-            .item_world
-            .get(item_id)
-            .and_then(ItemStack::carrier)
-            != Some(worker_id)
-        {
+        if simulation.item_world.holder_of(item_id) != Some(worker_id) {
             return invalid(format!(
-                "transporting job {} item is not carried by its worker",
+                "transporting job {} item is not borne by its worker",
                 job.id().value()
             ));
         }

@@ -25,7 +25,7 @@ app/lib.rs and read_model.rs, relevant simulation/application tests.
 - [ ] Reproduce cart logistics, release-index, equipment-drop and malformed-save failures with focused tests.
 - [ ] Enforce holder/access/capacity/slot semantics at runtime and save boundaries.
 - [x] Expose explicit commands and detached inventory/container snapshots; reject reserved mutation without side effects.
-- [ ] Prove ordinary cart transport, interruption and deterministic save/load.
+- [x] Prove ordinary cart transport, interruption and deterministic save/load.
 - [x] Strengthen mining test to assert actual ore production and physical delivery, including crafted tool prerequisites (remote-source exploration is staged in the headless fixture).
 - [x] Run `cargo test -p progressus-sim -p progressus-app -p progressus-content` and review diff.
 
@@ -44,30 +44,29 @@ localization and application boundary fixtures.
 
 ### Selection-priority regression
 
-- [ ] Extract the cell-level selectable choice into a pure helper in
+- [x] Extract the cell-level selectable choice into a pure helper in
   `crates/progressus-client/src/runtime.rs` and first add a failing test proving
   that a ground `Cart` on a stockpile cell resolves to the item inspector rather
   than `SelectedStockpile`.
-- [ ] Make the helper choose workstation, character, inspectable ground object,
+- [x] Make the helper choose workstation, character, inspectable ground object,
   then stockpile in Select mode; keep the existing screen-body pawn hit first.
-- [ ] When a construction tool is active, skip selection dispatch and send the
+- [x] When a construction tool is active, skip selection dispatch and send the
   click to `apply_point_tool`; retain Alt-click inspection for non-destructive
   inspection while other designation tools are active.
-- [ ] Run the focused client library test and
+- [x] Run the focused client library test and
   `cargo check -p progressus-client --all-targets -j 1`, then commit and push.
 
-## Status after the inventory and boundary pass
+## Remaining inventory and boundary risks
 
-Player-facing inventory is implemented end to end and covered by the gate,
-including the heavy client link. What the remaining Task 1/2 bullets still
-owe, and why they are not ticked:
+The current interactions and their focused tests have passed the full gate,
+including the heavy client link. Cart transport now has completion,
+interruption, and mid-haul save/load coverage: restoration accepts goods borne
+inside an equipped cart while rejecting a parked cart as active transport.
+The crafted-tool → copper extraction → physical ore delivery chain also has a
+headless test, with remote source exploration staged by its fixture. Open risks:
 
 - save boundaries do not yet re-validate location, slot and capacity rules,
   and no malformed-save regression exists;
-- cart transport is proven through completion but not through interruption
-  or a mid-haul save/load;
-- the mining test still does not assert actual ore production and physical
-  delivery behind a crafted tool;
 - equipped items are not drawn on the character in the 3D scene — a parked
   cart renders as an ordinary ground stack, and its contents appear only in
   the inspector;

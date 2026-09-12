@@ -426,7 +426,7 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::simulation::test_support::*;
-    use progressus_content::{item, terrain};
+    use progressus_content::{item, slot, terrain};
 
     #[test]
     fn stockpile_cells_are_unique_validated_and_remove_when_empty() {
@@ -565,6 +565,121 @@ mod tests {
         );
         assert_eq!(simulation.stockpile_at(destination), Some(stockpile_id));
         assert!(simulation.item_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn cart_haul_save_and_interruption_preserve_the_single_physical_load() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let destination = WorldCell::new(0, 0);
+        simulation.create_stockpile(destination).unwrap();
+        for worker_id in simulation.characters.keys().copied().collect::<Vec<_>>() {
+            let position = simulation.characters[&worker_id].position();
+            let cart = simulation.id_allocator.allocate().unwrap();
+            simulation
+                .item_world
+                .insert_ground(ItemStack::new_ground(
+                    cart,
+                    item::CART,
+                    ItemQuantity::new(1).unwrap(),
+                    position,
+                ))
+                .unwrap();
+            simulation.pick_up_item(worker_id, cart).unwrap();
+            simulation.equip_item(worker_id, cart).unwrap();
+        }
+        let (job_id, item_id, worker_id) = transporting_haul_fixture(&mut simulation);
+        let cart_id = simulation
+            .item_world
+            .get(item_id)
+            .unwrap()
+            .container()
+            .unwrap();
+        let load_before = simulation.item_world.get(item_id).unwrap().clone();
+        let total_before = total_item_quantity(&simulation, load_before.kind());
+        assert_eq!(simulation.item_world.holder_of(item_id), Some(worker_id));
+        assert_eq!(simulation.equipment(worker_id), vec![(slot::TOOL, cart_id)]);
+        let saved = simulation.save_json().unwrap();
+
+        let mut resumed = Simulation::load_json(&saved).unwrap();
+        assert_eq!(resumed.save_json().unwrap(), saved);
+        assert_eq!(
+            resumed.item_world.get(item_id).unwrap().container(),
+            Some(cart_id)
+        );
+        assert_eq!(resumed.item_world.holder_of(item_id), Some(worker_id));
+        for _ in 0..256 {
+            simulation.advance_ticks(1).unwrap();
+            resumed.advance_ticks(1).unwrap();
+            if resumed.job_world.get(job_id).is_none() {
+                break;
+            }
+        }
+        assert_eq!(
+            resumed.save_json().unwrap(),
+            simulation.save_json().unwrap()
+        );
+        assert!(resumed.job_world.get(job_id).is_none());
+        assert_eq!(
+            resumed.item_world.get(item_id).unwrap().ground_position(),
+            Some(WorldPosition::from_cell_center(destination).unwrap())
+        );
+        assert_eq!(
+            resumed.item_world.get(item_id).unwrap().quantity(),
+            load_before.quantity()
+        );
+        assert_eq!(
+            total_item_quantity(&resumed, load_before.kind()),
+            total_before
+        );
+
+        let mut interrupted = Simulation::load_json(&saved).unwrap();
+        let worker_position = interrupted.characters[&worker_id].position();
+        interrupted.stop_movement(worker_id).unwrap();
+        assert_eq!(
+            interrupted
+                .item_world
+                .get(item_id)
+                .unwrap()
+                .ground_position(),
+            Some(worker_position)
+        );
+        assert_eq!(
+            interrupted.item_world.get(item_id).unwrap().quantity(),
+            load_before.quantity()
+        );
+        assert_eq!(
+            total_item_quantity(&interrupted, load_before.kind()),
+            total_before
+        );
+        assert_eq!(interrupted.item_world.holder_of(item_id), None);
+        assert_eq!(
+            interrupted.equipment(worker_id),
+            vec![(slot::TOOL, cart_id)]
+        );
+        assert_eq!(
+            interrupted.job_world.get(job_id).unwrap().state(),
+            JobState::Available
+        );
+        assert!(interrupted.item_world.indexes_are_consistent());
+        assert!(interrupted.job_world.indexes_are_consistent());
+        let interrupted_save = interrupted.save_json().unwrap();
+        assert_eq!(
+            Simulation::load_json(&interrupted_save)
+                .unwrap()
+                .save_json()
+                .unwrap(),
+            interrupted_save
+        );
+
+        let mut parked = Simulation::load_json(&saved).unwrap();
+        parked
+            .item_world
+            .move_to_ground(cart_id, worker_id, worker_position)
+            .unwrap();
+        assert!(matches!(
+            Simulation::load_json(&parked.save_json().unwrap()),
+            Err(SaveError::InvalidData(_))
+        ));
     }
 
     #[test]
