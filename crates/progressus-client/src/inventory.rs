@@ -52,6 +52,20 @@ impl InspectionState {
         }
     }
 
+    pub(crate) fn report_rejection(&mut self, locale: Locale, error: impl std::fmt::Display) {
+        self.feedback = Some(ActionFeedback {
+            text: format!("{}: {error}", action_rejected_label(locale)),
+            rejected: true,
+        });
+        self.bump();
+    }
+
+    pub(crate) fn clear_feedback(&mut self) {
+        if self.feedback.take().is_some() {
+            self.bump();
+        }
+    }
+
     fn bump(&mut self) {
         self.revision = self.revision.wrapping_add(1);
     }
@@ -184,6 +198,7 @@ pub(crate) fn inspectable_at(
 pub(crate) fn sync_world_hover_tooltip(
     locale: Res<Locale>,
     tool: Res<ToolState>,
+    selected: Res<crate::navigation::SelectedCharacter>,
     inspection: Res<InspectionState>,
     cache: Res<crate::low_poly::scene::SceneCache>,
     authoritative: Res<AuthoritativeClient>,
@@ -199,11 +214,22 @@ pub(crate) fn sync_world_hover_tooltip(
         *visibility = Visibility::Hidden;
         return;
     };
-    let hint = match (locale.language, tool.mode == ToolMode::Select) {
-        (Language::Ru, true) => "Щёлкните, чтобы закрепить",
-        (Language::Ru, false) => "Alt+щелчок: закрепить, не применяя инструмент",
-        (Language::En, true) => "Click to pin",
-        (Language::En, false) => "Alt+click: pin without applying the tool",
+    let equippable_for_selected = selected.0.is_some()
+        && matches!(object, InspectedObject::Item(item_id) if cache
+            .items
+            .iter()
+            .any(|item| item.id == item_id && item.kind.definition().equip_slot.is_some()));
+    let hint = match (
+        locale.language,
+        tool.mode == ToolMode::Select,
+        equippable_for_selected,
+    ) {
+        (Language::Ru, true, true) => "ПКМ: подойти и экипировать · ЛКМ: сведения",
+        (Language::En, true, true) => "Right-click: fetch and equip · Left-click: inspect",
+        (Language::Ru, true, false) => "Щёлкните, чтобы закрепить",
+        (Language::En, true, false) => "Click to pin",
+        (Language::Ru, false, _) => "Alt+щелчок: закрепить, не применяя инструмент",
+        (Language::En, false, _) => "Alt+click: pin without applying the tool",
     };
     let body = match object {
         InspectedObject::Item(id) => inventory_rows(authoritative.snapshot(), &cache)

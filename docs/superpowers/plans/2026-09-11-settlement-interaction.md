@@ -36,6 +36,7 @@ localization and application boundary fixtures.
 
 - [x] Add localized inventory and source/item inspection text from snapshots.
 - [x] Add reachable item/container actions, visible rejection feedback, click selection and hover identification.
+- [x] Make selected-character right-click on a ground tool/cart create a persisted physical fetch-and-equip job, while ordinary ground right-click remains `MoveTo`.
 - [ ] Preserve active tool actions and existing selection priorities; clear stale selection on load.
 - [ ] Show equipped items in presentation, including parked/borne carts and their contents in the inspector.
 - [x] Test selection/text/actions and run client checks plus executable client tests when feasible.

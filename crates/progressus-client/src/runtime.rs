@@ -194,6 +194,7 @@ pub(crate) fn pointer_navigation(
         ResMut<ModalState>,
     ),
     time: Res<Time>,
+    locale: Res<Locale>,
     mut authoritative: ResMut<AuthoritativeClient>,
     view: Res<crate::low_poly::View>,
     pawns: Query<(&crate::low_poly::Pawn, &Transform)>,
@@ -454,16 +455,48 @@ pub(crate) fn pointer_navigation(
     let Some(character_id) = selected.0 else {
         return;
     };
-    match authoritative.application.execute(Command::MoveTo {
+    let command = right_click_command(
+        authoritative.snapshot(),
         character_id,
-        destination: target,
-    }) {
+        inspection.hovered,
+        target,
+    );
+    match authoritative.application.execute(command) {
         Ok(()) => {
+            inspection.clear_feedback();
             if let Err(error) = authoritative.refresh_lightweight_snapshot(Some(character_id)) {
-                error!("authoritative snapshot failed after move command: {error}");
+                error!("authoritative snapshot failed after right-click command: {error}");
             }
         }
-        Err(error) => warn!("move command rejected: {error}"),
+        Err(error) => {
+            inspection.report_rejection(*locale, &error);
+            warn!("right-click command rejected: {error}");
+        }
+    }
+}
+
+fn right_click_command(
+    snapshot: &ClientSnapshot,
+    character_id: EntityId,
+    hovered: Option<crate::inventory::InspectedObject>,
+    destination: WorldPosition,
+) -> Command {
+    if let Some(crate::inventory::InspectedObject::Item(item_id)) = hovered
+        && snapshot.ground_items.iter().any(|item| {
+            item.id == item_id
+                && item.position.containing_cell() == destination.containing_cell()
+                && item.kind.definition().equip_slot.is_some()
+        })
+    {
+        Command::FetchAndEquipItem {
+            character_id,
+            item_id,
+        }
+    } else {
+        Command::MoveTo {
+            character_id,
+            destination,
+        }
     }
 }
 
@@ -1164,8 +1197,8 @@ mod tests {
     use crate::ui::ToolMode;
     use bevy::prelude::{App, ButtonInput, KeyCode, Time, Update};
     use progressus_app::{
-        CHUNK_SIDE, ChunkCoord, Command, Direction, EntityId, MovementState, TerrainId, WorldCell,
-        WorldPosition, terrain,
+        CHUNK_SIDE, ChunkCoord, Command, Direction, EntityId, GroundItemSnapshot, MovementState,
+        TerrainId, WorldCell, WorldPosition, item, terrain,
     };
 
     fn test_app() -> App {
@@ -1381,6 +1414,49 @@ mod tests {
             10.
         );
         assert!(super::screen_body_distance(bevy::prelude::Vec2::new(100., 80.), feet, head) > 14.);
+    }
+
+    #[test]
+    fn right_click_on_hovered_equipment_orders_the_selected_character_to_fetch_it() {
+        let client = AuthoritativeClient::new().unwrap();
+        let mut snapshot = client.snapshot().clone();
+        let character_id = super::cora_id();
+        let item_id = EntityId::new(40).unwrap();
+        let destination = WorldPosition::from_cell_center(WorldCell::new(2, 3)).unwrap();
+        snapshot.ground_items.push(GroundItemSnapshot {
+            id: item_id,
+            kind: item::CART,
+            quantity: 1,
+            position: destination,
+        });
+
+        assert_eq!(
+            super::right_click_command(
+                &snapshot,
+                character_id,
+                Some(crate::inventory::InspectedObject::Item(item_id)),
+                destination,
+            ),
+            Command::FetchAndEquipItem {
+                character_id,
+                item_id,
+            }
+        );
+    }
+
+    #[test]
+    fn right_click_without_hovered_equipment_remains_a_move_order() {
+        let client = AuthoritativeClient::new().unwrap();
+        let character_id = super::cora_id();
+        let destination = WorldPosition::from_cell_center(WorldCell::new(2, 3)).unwrap();
+
+        assert_eq!(
+            super::right_click_command(client.snapshot(), character_id, None, destination),
+            Command::MoveTo {
+                character_id,
+                destination,
+            }
+        );
     }
 
     #[test]

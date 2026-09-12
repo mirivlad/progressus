@@ -113,6 +113,11 @@ pub enum Command {
         character_id: EntityId,
         item_id: EntityId,
     },
+    /// Walk to a ground tool or cart and equip it with the named character.
+    FetchAndEquipItem {
+        character_id: EntityId,
+        item_id: EntityId,
+    },
     /// Put a borne stack down where the character stands. This is also how a
     /// loaded cart is parked: it keeps what it holds.
     DropItem {
@@ -276,6 +281,13 @@ impl Application {
                 item_id,
             } => {
                 self.simulation.pick_up_item(character_id, item_id)?;
+            }
+            Command::FetchAndEquipItem {
+                character_id,
+                item_id,
+            } => {
+                self.simulation
+                    .designate_equipment_fetch(character_id, item_id)?;
             }
             Command::DropItem {
                 character_id,

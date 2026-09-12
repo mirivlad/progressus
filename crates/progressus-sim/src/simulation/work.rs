@@ -20,6 +20,58 @@ impl Simulation {
         Ok(id)
     }
 
+    /// Orders one named character to walk to a ground item and equip it.
+    /// Navigation, reservation, pickup and equipment all remain authoritative.
+    pub fn designate_equipment_fetch(
+        &mut self,
+        character_id: EntityId,
+        item_id: EntityId,
+    ) -> Result<EntityId, SimulationError> {
+        let item = self
+            .item_world
+            .get(item_id)
+            .ok_or(SimulationError::UnknownItem(item_id))?;
+        let position = item
+            .ground_position()
+            .ok_or(SimulationError::ItemNotOnGround(item_id))?;
+        if item.quantity().get() != 1 {
+            return Err(SimulationError::EquipmentStackMustBeSingle(item_id));
+        }
+        let slot = item
+            .kind()
+            .definition()
+            .equip_slot
+            .ok_or(SimulationError::ItemNotEquippable(item_id))?;
+        self.ensure_item_tree_unreserved(item_id)?;
+        if self
+            .item_world
+            .equipped_by(character_id)
+            .any(|(filled, _)| filled == slot)
+        {
+            return Err(SimulationError::SlotAlreadyOccupied {
+                character_id,
+                item_id,
+            });
+        }
+        let route = self.plan_navigation_route(character_id, position)?;
+        self.interrupt_worker_job(character_id)?;
+        let id = self.id_allocator.allocate()?;
+        self.job_world
+            .insert(Job::new(
+                id,
+                JobKind::EquipTool {
+                    item_id,
+                    requested_worker_id: Some(character_id),
+                },
+            ))
+            .map_err(SimulationError::from_job_world)?;
+        self.job_world
+            .reserve_worker(id, character_id)
+            .map_err(SimulationError::from_job_world)?;
+        self.apply_navigation_route(character_id, position, route);
+        Ok(id)
+    }
+
     pub fn cancel_job(&mut self, job_id: EntityId) -> Result<(), SimulationError> {
         let job = self
             .job_world
@@ -149,7 +201,10 @@ impl Simulation {
         kind: JobKind,
     ) -> Result<(), SimulationError> {
         match kind {
-            JobKind::EquipTool { item_id } => self.try_assign_equip(job_id, item_id),
+            JobKind::EquipTool {
+                item_id,
+                requested_worker_id,
+            } => self.try_assign_equip(job_id, item_id, requested_worker_id),
             JobKind::Harvest { source } => self.try_assign_harvest(job_id, source),
             JobKind::Eat {
                 character_id,
@@ -238,7 +293,7 @@ impl Simulation {
         for capability in wanted {
             // A tool already on its way is enough; do not send a second worker.
             if self.job_world.iter().any(|job| {
-                let JobKind::EquipTool { item_id } = job.kind() else {
+                let JobKind::EquipTool { item_id, .. } = job.kind() else {
                     return false;
                 };
                 self.item_world
@@ -262,7 +317,13 @@ impl Simulation {
             };
             let job_id = self.id_allocator.allocate()?;
             self.job_world
-                .insert(Job::new(job_id, JobKind::EquipTool { item_id }))
+                .insert(Job::new(
+                    job_id,
+                    JobKind::EquipTool {
+                        item_id,
+                        requested_worker_id: None,
+                    },
+                ))
                 .map_err(SimulationError::from_job_world)?;
         }
         Ok(())
@@ -273,6 +334,7 @@ impl Simulation {
         &mut self,
         job_id: EntityId,
         item_id: EntityId,
+        requested_worker_id: Option<EntityId>,
     ) -> Result<(), SimulationError> {
         let Some(item) = self.item_world.get(item_id) else {
             self.job_world
@@ -289,7 +351,22 @@ impl Simulation {
             return Ok(());
         };
         let cell = position.containing_cell();
-        for worker_id in self.available_workers_by_distance(cell) {
+        let workers = match requested_worker_id {
+            Some(worker_id) => vec![worker_id],
+            None => self.available_workers_by_distance(cell),
+        };
+        for worker_id in workers {
+            let Some(character) = self.characters.get(&worker_id) else {
+                self.cancel_job(job_id)?;
+                return Ok(());
+            };
+            if !character.is_available_for_work()
+                || character.is_starving()
+                || self.job_world.job_for_worker(worker_id).is_some()
+                || self.character_has_held_payload(worker_id)
+            {
+                continue;
+            }
             if self
                 .item_world
                 .equipped_by(worker_id)
@@ -362,7 +439,7 @@ impl Simulation {
         worker_id: EntityId,
     ) -> Result<(), SimulationError> {
         match kind {
-            JobKind::EquipTool { item_id } => {
+            JobKind::EquipTool { item_id, .. } => {
                 let Some(item_position) = self
                     .item_world
                     .get(item_id)
@@ -1419,6 +1496,61 @@ mod tests {
                 .count();
             assert!(equip_jobs <= 1, "{equip_jobs} workers chased one pick");
         }
+    }
+
+    #[test]
+    fn player_order_sends_the_named_character_to_fetch_and_equip_a_cart() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        clear_all_items(&mut simulation);
+        let character = cora();
+        let target = (-5..=5)
+            .flat_map(|y| (-7..=7).map(move |x| WorldCell::new(x, y)))
+            .filter(|cell| simulation.is_explored(*cell))
+            .filter(|cell| simulation.is_walkable(*cell).unwrap_or(false))
+            .find(|cell| {
+                simulation
+                    .plan_navigation_route(
+                        character,
+                        WorldPosition::from_cell_center(*cell).unwrap(),
+                    )
+                    .is_ok()
+            })
+            .expect("seed 0 must expose a reachable ground cell");
+        let cart = insert_ground_stack(&mut simulation, item::CART, 1, target);
+
+        let job_id = simulation
+            .designate_equipment_fetch(character, cart)
+            .unwrap();
+        assert_eq!(simulation.job_for_worker(character), Some(job_id));
+        assert_eq!(
+            simulation.job_world.get(job_id).unwrap().kind(),
+            JobKind::EquipTool {
+                item_id: cart,
+                requested_worker_id: Some(character),
+            }
+        );
+
+        let bytes = simulation.save_json().unwrap();
+        let mut simulation = Simulation::load_json(&bytes).unwrap();
+        for _ in 0..2048 {
+            simulation.advance_ticks(1).unwrap();
+            if simulation.equipment(character) == vec![(slot::TOOL, cart)] {
+                break;
+            }
+        }
+
+        assert_eq!(simulation.equipment(character), vec![(slot::TOOL, cart)]);
+        assert!(
+            simulation
+                .item_world
+                .get(cart)
+                .unwrap()
+                .ground_position()
+                .is_none()
+        );
+        assert_eq!(simulation.job_for_worker(character), None);
+        assert!(simulation.item_world.indexes_are_consistent());
+        assert!(simulation.job_world.indexes_are_consistent());
     }
     use super::*;
     use crate::simulation::test_support::*;

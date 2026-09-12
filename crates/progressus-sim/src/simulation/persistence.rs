@@ -1011,6 +1011,8 @@ enum JobKindSave {
     },
     EquipTool {
         item_id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        requested_worker_id: Option<u64>,
     },
 }
 
@@ -1081,8 +1083,12 @@ impl ConstructionPreparationTargetSave {
 impl From<JobKind> for JobKindSave {
     fn from(kind: JobKind) -> Self {
         match kind {
-            JobKind::EquipTool { item_id } => Self::EquipTool {
+            JobKind::EquipTool {
+                item_id,
+                requested_worker_id,
+            } => Self::EquipTool {
                 item_id: item_id.value(),
+                requested_worker_id: requested_worker_id.map(EntityId::value),
             },
             JobKind::Harvest { source } => Self::Harvest {
                 source: source.into(),
@@ -1139,8 +1145,14 @@ impl From<JobKind> for JobKindSave {
 impl JobKindSave {
     fn into_kind(self) -> Result<JobKind, SaveError> {
         Ok(match self {
-            Self::EquipTool { item_id } => JobKind::EquipTool {
+            Self::EquipTool {
+                item_id,
+                requested_worker_id,
+            } => JobKind::EquipTool {
                 item_id: entity_id(item_id, "equip item_id")?,
+                requested_worker_id: requested_worker_id
+                    .map(|id| entity_id(id, "equip requested_worker_id"))
+                    .transpose()?,
             },
             Self::Harvest { source } => JobKind::Harvest {
                 source: source.into_cell(),
@@ -1890,6 +1902,19 @@ fn restore_jobs(
                         character_id.value()
                     ));
                 }
+                if let JobKind::EquipTool {
+                    requested_worker_id: Some(character_id),
+                    ..
+                } = kind
+                    && worker != character_id
+                {
+                    return invalid(format!(
+                        "requested equip job {} is reserved by character {} instead of {}",
+                        id.value(),
+                        worker.value(),
+                        character_id.value()
+                    ));
+                }
                 world
                     .reserve_worker(id, worker)
                     .map_err(|error| invalid_world_error("job worker reservation", error))?;
@@ -2007,11 +2032,23 @@ fn validate_job_references(
 ) -> Result<(), SaveError> {
     match kind {
         JobKind::Harvest { .. } => {}
-        JobKind::EquipTool { item_id } => {
+        JobKind::EquipTool {
+            item_id,
+            requested_worker_id,
+        } => {
             if items.get(item_id).is_none() {
                 return invalid(format!(
                     "equip job references missing item {}",
                     item_id.value()
+                ));
+            }
+            if let Some(character_id) = requested_worker_id
+                && !characters.contains_key(&character_id)
+            {
+                return invalid(format!(
+                    "equip job {} references missing requested character {}",
+                    job_id.value(),
+                    character_id.value()
                 ));
             }
         }

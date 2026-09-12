@@ -56,9 +56,12 @@ pub enum JobKind {
         target: ConstructionPreparationTarget,
     },
     /// Fetch a tool and put it in its slot, so that work needing a capability
-    /// has someone equipped to do it. See ADR-0024.
+    /// has someone equipped to do it. A player order names the character who
+    /// must fetch it; an automatic capability job leaves that choice open.
+    /// See ADR-0024.
     EquipTool {
         item_id: EntityId,
+        requested_worker_id: Option<EntityId>,
     },
 }
 
@@ -351,7 +354,7 @@ impl JobWorld {
                 }
                 self.preparation_by_site.insert(site_id, id);
             }
-            JobKind::EquipTool { item_id } => {
+            JobKind::EquipTool { item_id, .. } => {
                 if self.item_job_for_item(item_id).is_some() {
                     return Err(JobWorldError::EquipItemAlreadyReserved(item_id));
                 }
@@ -568,7 +571,7 @@ impl JobWorld {
                     ConstructionPreparationTarget::Character { .. } => {}
                 }
             }
-            JobKind::EquipTool { item_id } => {
+            JobKind::EquipTool { item_id, .. } => {
                 if self.equip_by_item.remove(&item_id) != Some(job_id) {
                     return Err(JobWorldError::IndexCorruption);
                 }
@@ -685,7 +688,7 @@ impl JobWorld {
                         ConstructionPreparationTarget::Character { .. } => {}
                     }
                 }
-                JobKind::EquipTool { item_id } => {
+                JobKind::EquipTool { item_id, .. } => {
                     if self.equip_by_item.get(&item_id) != Some(id) {
                         return false;
                     }
