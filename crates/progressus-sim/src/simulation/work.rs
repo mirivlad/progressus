@@ -1407,7 +1407,7 @@ impl Simulation {
 
 #[cfg(test)]
 mod tests {
-    use progressus_content::{capability, item, natural_resource, slot};
+    use progressus_content::{capability, item, natural_resource, recipe, slot};
 
     /// Copper needs a pick. Nobody starts with one, so the settlement must
     /// fetch and equip the tool it crafted before it can mine at all — which
@@ -1485,6 +1485,136 @@ mod tests {
             "the pick was still weighing on its bearer's hands"
         );
         assert!(simulation.item_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn crafted_tool_enables_copper_extraction_and_physical_ore_delivery() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        clear_all_items(&mut simulation);
+        let workstation = place_clear_workbench(&mut simulation);
+        let (wood, stone) = seed_recipe_inputs(&mut simulation, workstation, 2, 1);
+        simulation
+            .add_production_order(
+                workstation,
+                recipe::PRIMITIVE_TOOL,
+                ProductionTarget::finite(1),
+            )
+            .unwrap();
+
+        let mut crafted_tool = None;
+        for _ in 0..512 {
+            simulation.advance_ticks(1).unwrap();
+            crafted_tool = simulation
+                .items()
+                .find(|item| item.kind() == item::PRIMITIVE_TOOL)
+                .map(ItemStack::id);
+            if crafted_tool.is_some() {
+                break;
+            }
+        }
+        let tool = crafted_tool.expect("the workbench did not turn physical inputs into a tool");
+        assert!(simulation.item_world.get(wood).is_none());
+        assert!(simulation.item_world.get(stone).is_none());
+
+        let miner = cora();
+        simulation.designate_equipment_fetch(miner, tool).unwrap();
+        for _ in 0..512 {
+            simulation.advance_ticks(1).unwrap();
+            if simulation.equipment(miner) == vec![(slot::TOOL, tool)] {
+                break;
+            }
+        }
+        assert_eq!(simulation.equipment(miner), vec![(slot::TOOL, tool)]);
+        assert!(simulation.can_perform(miner, capability::MINE));
+
+        let vein = (-40..40)
+            .flat_map(|y| (-40..40).map(move |x| WorldCell::new(x, y)))
+            .find(|cell| {
+                simulation
+                    .generator
+                    .natural_resource_at(*cell)
+                    .is_some_and(|resource| resource.kind() == natural_resource::COPPER_VEIN)
+                    && simulation.is_walkable(*cell).unwrap_or(false)
+            })
+            .expect("seed 0 has a copper vein near the starting region");
+        let approach = [
+            Direction::East,
+            Direction::West,
+            Direction::North,
+            Direction::South,
+        ]
+        .into_iter()
+        .filter_map(|direction| direction.adjacent(vein))
+        .find(|cell| simulation.is_walkable(*cell).unwrap_or(false))
+        .unwrap_or(vein);
+        // Stage the already equipped miner near this distant, unexplored
+        // source; ordinary navigation and physical work are exercised below.
+        place_on_grass(&mut simulation, miner, approach);
+        simulation.advance_ticks(1).unwrap();
+        let yield_quantity = simulation
+            .natural_resource_at(vein)
+            .unwrap()
+            .expect("the miner revealed the vein")
+            .yield_quantity();
+        let stock_cell = (-2..=2)
+            .flat_map(|y| (-2..=2).map(move |x| WorldCell::new(vein.x() + x, vein.y() + y)))
+            .find(|cell| {
+                simulation.validate_stockpile_cell(*cell).is_ok()
+                    && simulation
+                        .plan_navigation_route(
+                            miner,
+                            WorldPosition::from_cell_center(*cell).unwrap(),
+                        )
+                        .is_ok()
+            })
+            .expect("the vein has a reachable nearby stockpile cell");
+        let stockpile = simulation.create_stockpile(stock_cell).unwrap();
+        simulation.designate_harvest(vein).unwrap();
+
+        let mut saw_ore_carried = false;
+        for _ in 0..1024 {
+            simulation.advance_ticks(1).unwrap();
+            saw_ore_carried |= simulation
+                .items()
+                .any(|item| item.kind() == item::COPPER_ORE && item.carrier().is_some());
+            let delivered = simulation
+                .items()
+                .filter(|item| item.kind() == item::COPPER_ORE)
+                .filter(|item| {
+                    item.ground_position().is_some_and(|position| {
+                        simulation.stockpile_at(position.containing_cell()) == Some(stockpile)
+                    })
+                })
+                .map(|item| item.quantity().get())
+                .sum::<u32>();
+            if simulation.natural_resource_at(vein).unwrap().is_none()
+                && delivered == yield_quantity
+            {
+                break;
+            }
+        }
+
+        assert!(saw_ore_carried, "ore was never physically carried");
+        assert_eq!(simulation.natural_resource_at(vein).unwrap(), None);
+        assert_eq!(
+            total_item_quantity(&simulation, item::COPPER_ORE),
+            yield_quantity
+        );
+        assert_eq!(
+            simulation
+                .items()
+                .filter(|item| item.kind() == item::COPPER_ORE)
+                .filter(|item| {
+                    item.ground_position().is_some_and(|position| {
+                        simulation.stockpile_at(position.containing_cell()) == Some(stockpile)
+                    })
+                })
+                .map(|item| item.quantity().get())
+                .sum::<u32>(),
+            yield_quantity
+        );
+        assert!(simulation.item_world.indexes_are_consistent());
+        assert!(simulation.job_world.indexes_are_consistent());
     }
 
     /// One tool, one fetcher: a second worker must not be sent after a pick

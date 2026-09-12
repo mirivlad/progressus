@@ -26,7 +26,7 @@ app/lib.rs and read_model.rs, relevant simulation/application tests.
 - [ ] Enforce holder/access/capacity/slot semantics at runtime and save boundaries.
 - [x] Expose explicit commands and detached inventory/container snapshots; reject reserved mutation without side effects.
 - [ ] Prove ordinary cart transport, interruption and deterministic save/load.
-- [ ] Strengthen mining test to assert actual ore production and physical delivery, including crafted tool prerequisites.
+- [x] Strengthen mining test to assert actual ore production and physical delivery, including crafted tool prerequisites (remote-source exploration is staged in the headless fixture).
 - [x] Run `cargo test -p progressus-sim -p progressus-app -p progressus-content` and review diff.
 
 ## Task 2: Inventory client and resource information
