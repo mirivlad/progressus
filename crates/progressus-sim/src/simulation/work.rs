@@ -42,6 +42,12 @@ impl Simulation {
             .definition()
             .equip_slot
             .ok_or(SimulationError::ItemNotEquippable(item_id))?;
+        if self.carried_load(character_id) + item.kind().load_cost(1) > HAND_LOAD_UNITS {
+            return Err(SimulationError::CarryCapacityExceeded {
+                character_id,
+                item_id,
+            });
+        }
         self.ensure_item_tree_unreserved(item_id)?;
         if self
             .item_world
@@ -440,14 +446,26 @@ impl Simulation {
     ) -> Result<(), SimulationError> {
         match kind {
             JobKind::EquipTool { item_id, .. } => {
-                let Some(item_position) = self
-                    .item_world
-                    .get(item_id)
-                    .and_then(ItemStack::ground_position)
-                else {
+                let Some(item) = self.item_world.get(item_id) else {
                     self.cancel_job(job_id)?;
                     return Ok(());
                 };
+                let Some(item_position) = item.ground_position() else {
+                    self.cancel_job(job_id)?;
+                    return Ok(());
+                };
+                let Some(slot) = item.kind().definition().equip_slot else {
+                    self.cancel_job(job_id)?;
+                    return Ok(());
+                };
+                if self.carried_load(worker_id) + item.kind().load_cost(1) > HAND_LOAD_UNITS
+                    || self
+                        .item_world
+                        .equipped_by(worker_id)
+                        .any(|(filled, _)| filled == slot)
+                {
+                    return Ok(());
+                }
                 let Some(character) = self.characters.get(&worker_id) else {
                     self.job_world
                         .remove(job_id)
@@ -1550,6 +1568,71 @@ mod tests {
         );
         assert_eq!(simulation.job_for_worker(character), None);
         assert!(simulation.item_world.indexes_are_consistent());
+        assert!(simulation.job_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn equipment_order_rejects_full_hands_before_reserving_the_item() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        clear_all_items(&mut simulation);
+        let character = cora();
+        let cell = simulation.characters[&character]
+            .position()
+            .containing_cell();
+        let wood = insert_ground_stack(&mut simulation, item::WOOD, 10, cell);
+        simulation.pick_up_item(character, wood).unwrap();
+        let tool = insert_ground_stack(&mut simulation, item::PRIMITIVE_TOOL, 1, cell);
+        let position = simulation.item_world.get(tool).unwrap().ground_position();
+
+        assert_eq!(
+            simulation.designate_equipment_fetch(character, tool),
+            Err(SimulationError::CarryCapacityExceeded {
+                character_id: character,
+                item_id: tool,
+            })
+        );
+        assert_eq!(
+            simulation.item_world.get(tool).unwrap().ground_position(),
+            position
+        );
+        assert!(!simulation.item_is_reserved(tool));
+        assert!(simulation.job_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn hands_filled_after_an_equipment_order_do_not_fail_the_simulation_tick() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        clear_all_items(&mut simulation);
+        let character = cora();
+        let cell = simulation.characters[&character]
+            .position()
+            .containing_cell();
+        let tool = insert_ground_stack(&mut simulation, item::PRIMITIVE_TOOL, 1, cell);
+        let job = simulation
+            .designate_equipment_fetch(character, tool)
+            .unwrap();
+        let wood = insert_ground_stack(&mut simulation, item::WOOD, 10, cell);
+        simulation.pick_up_item(character, wood).unwrap();
+
+        simulation.advance_ticks(1).unwrap();
+        assert_eq!(simulation.job_for_worker(character), Some(job));
+        assert!(
+            simulation
+                .item_world
+                .get(tool)
+                .unwrap()
+                .ground_position()
+                .is_some()
+        );
+        simulation
+            .drop_item(
+                character,
+                wood,
+                simulation.characters[&character].position(),
+            )
+            .unwrap();
+        simulation.advance_ticks(1).unwrap();
+        assert_eq!(simulation.equipment(character), vec![(slot::TOOL, tool)]);
         assert!(simulation.job_world.indexes_are_consistent());
     }
     use super::*;
