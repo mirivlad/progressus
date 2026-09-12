@@ -2267,6 +2267,7 @@ fn validate_next_entity_id(next: Option<u64>, max_id: Option<u64>) -> Result<(),
 }
 
 fn validate_restored_simulation(simulation: &Simulation) -> Result<(), SaveError> {
+    validate_restored_inventory(simulation)?;
     for character in simulation.characters.values() {
         if !simulation
             .explored_world
@@ -2378,6 +2379,59 @@ fn validate_restored_simulation(simulation: &Simulation) -> Result<(), SaveError
                 item.id().value(),
                 carrier.value()
             ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_restored_inventory(simulation: &Simulation) -> Result<(), SaveError> {
+    for character_id in simulation.characters.keys().copied() {
+        if simulation.carried_load(character_id) > HAND_LOAD_UNITS {
+            return invalid(format!(
+                "character {} carries more than one hand load",
+                character_id.value()
+            ));
+        }
+    }
+
+    for item in simulation.item_world.iter() {
+        match item.location() {
+            ItemLocation::Equipped { slot, .. } => {
+                if item.quantity().get() != 1 || item.kind().definition().equip_slot != Some(slot) {
+                    return invalid(format!(
+                        "item {} does not fit its saved equipment slot",
+                        item.id().value()
+                    ));
+                }
+            }
+            ItemLocation::Contained { container_id } => {
+                let container = simulation.item_world.get(container_id).ok_or_else(|| {
+                    SaveError::InvalidData(format!(
+                        "item {} references missing container {}",
+                        item.id().value(),
+                        container_id.value()
+                    ))
+                })?;
+                let Some(capacity) = container.kind().capacity() else {
+                    return invalid(format!(
+                        "item {} is inside non-container {}",
+                        item.id().value(),
+                        container_id.value()
+                    ));
+                };
+                if container.quantity().get() != 1
+                    || (item.kind() == item::CART && container.kind() == item::CART)
+                    || simulation.container_load(container_id)
+                        > u64::from(capacity) * HAND_LOAD_UNITS
+                {
+                    return invalid(format!(
+                        "item {} violates container {} capacity or nesting",
+                        item.id().value(),
+                        container_id.value()
+                    ));
+                }
+            }
+            ItemLocation::Ground { .. } | ItemLocation::Carried { .. } => {}
         }
     }
     Ok(())
@@ -3076,6 +3130,87 @@ mod tests {
         });
         assert!(matches!(
             Simulation::load_json(&serde_json::to_vec(&broken).unwrap()),
+            Err(SaveError::InvalidData(_))
+        ));
+    }
+
+    #[test]
+    fn malformed_inventory_load_slot_and_container_capacity_are_rejected() {
+        let simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let encoded = simulation.save_json().unwrap();
+        let baseline: Value = serde_json::from_slice(&encoded).unwrap();
+        let character_id = baseline["characters"][0]["id"].clone();
+
+        let mut overloaded_hands = baseline.clone();
+        overloaded_hands["items"][0]["kind"] = Value::from("wood");
+        overloaded_hands["items"][0]["quantity"] = Value::from(11);
+        overloaded_hands["items"][0]["location"] = serde_json::json!({
+            "kind": "carried", "character_id": character_id
+        });
+        assert!(matches!(
+            Simulation::load_json(&serde_json::to_vec(&overloaded_hands).unwrap()),
+            Err(SaveError::InvalidData(_))
+        ));
+
+        let mut wrong_slot = baseline.clone();
+        wrong_slot["items"][0]["kind"] = Value::from("wood");
+        wrong_slot["items"][0]["quantity"] = Value::from(1);
+        wrong_slot["items"][0]["location"] = serde_json::json!({
+            "kind": "equipped", "character_id": character_id, "slot": "tool"
+        });
+        assert!(matches!(
+            Simulation::load_json(&serde_json::to_vec(&wrong_slot).unwrap()),
+            Err(SaveError::InvalidData(_))
+        ));
+
+        let mut stacked_equipment = baseline.clone();
+        stacked_equipment["items"][0]["kind"] = Value::from("primitive_tool");
+        stacked_equipment["items"][0]["quantity"] = Value::from(2);
+        stacked_equipment["items"][0]["location"] = serde_json::json!({
+            "kind": "equipped", "character_id": character_id, "slot": "tool"
+        });
+        assert!(matches!(
+            Simulation::load_json(&serde_json::to_vec(&stacked_equipment).unwrap()),
+            Err(SaveError::InvalidData(_))
+        ));
+
+        let mut non_container = baseline.clone();
+        let container_id = non_container["items"][0]["id"].clone();
+        non_container["items"][0]["kind"] = Value::from("wood");
+        non_container["items"][0]["quantity"] = Value::from(1);
+        non_container["items"][1]["location"] = serde_json::json!({
+            "kind": "contained", "container_id": container_id
+        });
+        assert!(matches!(
+            Simulation::load_json(&serde_json::to_vec(&non_container).unwrap()),
+            Err(SaveError::InvalidData(_))
+        ));
+
+        let mut overloaded_cart = baseline.clone();
+        let cart_id = overloaded_cart["items"][0]["id"].clone();
+        overloaded_cart["items"][0]["kind"] = Value::from("cart");
+        overloaded_cart["items"][0]["quantity"] = Value::from(1);
+        overloaded_cart["items"][1]["kind"] = Value::from("wood");
+        overloaded_cart["items"][1]["quantity"] = Value::from(41);
+        overloaded_cart["items"][1]["location"] = serde_json::json!({
+            "kind": "contained", "container_id": cart_id
+        });
+        assert!(matches!(
+            Simulation::load_json(&serde_json::to_vec(&overloaded_cart).unwrap()),
+            Err(SaveError::InvalidData(_))
+        ));
+
+        let mut nested_carts = baseline;
+        let cart_id = nested_carts["items"][0]["id"].clone();
+        nested_carts["items"][0]["kind"] = Value::from("cart");
+        nested_carts["items"][0]["quantity"] = Value::from(1);
+        nested_carts["items"][1]["kind"] = Value::from("cart");
+        nested_carts["items"][1]["quantity"] = Value::from(1);
+        nested_carts["items"][1]["location"] = serde_json::json!({
+            "kind": "contained", "container_id": cart_id
+        });
+        assert!(matches!(
+            Simulation::load_json(&serde_json::to_vec(&nested_carts).unwrap()),
             Err(SaveError::InvalidData(_))
         ));
     }

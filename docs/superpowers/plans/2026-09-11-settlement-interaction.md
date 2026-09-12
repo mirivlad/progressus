@@ -65,12 +65,13 @@ inside an equipped cart while rejecting a parked cart as active transport.
 The crafted-tool → copper extraction → physical ore delivery chain also has a
 headless test, with remote source exploration staged by its fixture. Open risks:
 
-- save boundaries do not yet re-validate location, slot and capacity rules,
-  and no malformed-save regression exists;
 - equipped items are not drawn on the character in the 3D scene — a parked
   cart renders as an ordinary ground stack, and its contents appear only in
   the inspector;
 - stale selection is not explicitly cleared on load.
+
+Save restoration now rejects overloaded hands/containers, invalid equipment
+slots or stack sizes, non-containers with contents, and nested carts.
 
 ## Task 3: Construction preparation
 
