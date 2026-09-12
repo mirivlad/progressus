@@ -197,6 +197,7 @@ pub(crate) fn pointer_navigation(
     locale: Res<Locale>,
     mut authoritative: ResMut<AuthoritativeClient>,
     view: Res<crate::low_poly::View>,
+    scene: Res<crate::low_poly::scene::SceneCache>,
     pawns: Query<(&crate::low_poly::Pawn, &Transform)>,
     mut inspection: ResMut<crate::inventory::InspectionState>,
 ) {
@@ -455,12 +456,8 @@ pub(crate) fn pointer_navigation(
     let Some(character_id) = selected.0 else {
         return;
     };
-    let command = right_click_command(
-        authoritative.snapshot(),
-        character_id,
-        inspection.hovered,
-        target,
-    );
+    // Hover uses the visible scene; the lightweight authority snapshot has no ground items.
+    let command = right_click_command(&scene.items, character_id, inspection.hovered, target);
     match authoritative.application.execute(command) {
         Ok(()) => {
             inspection.clear_feedback();
@@ -476,13 +473,13 @@ pub(crate) fn pointer_navigation(
 }
 
 fn right_click_command(
-    snapshot: &ClientSnapshot,
+    visible_items: &[progressus_app::GroundItemSnapshot],
     character_id: EntityId,
     hovered: Option<crate::inventory::InspectedObject>,
     destination: WorldPosition,
 ) -> Command {
     if let Some(crate::inventory::InspectedObject::Item(item_id)) = hovered
-        && snapshot.ground_items.iter().any(|item| {
+        && visible_items.iter().any(|item| {
             item.id == item_id
                 && item.position.containing_cell() == destination.containing_cell()
                 && item.kind.definition().equip_slot.is_some()
@@ -1418,21 +1415,49 @@ mod tests {
 
     #[test]
     fn right_click_on_hovered_equipment_orders_the_selected_character_to_fetch_it() {
-        let client = AuthoritativeClient::new().unwrap();
-        let mut snapshot = client.snapshot().clone();
         let character_id = super::cora_id();
         let item_id = EntityId::new(40).unwrap();
         let destination = WorldPosition::from_cell_center(WorldCell::new(2, 3)).unwrap();
-        snapshot.ground_items.push(GroundItemSnapshot {
+        for kind in [item::PRIMITIVE_TOOL, item::CART] {
+            let visible_items = [GroundItemSnapshot {
+                id: item_id,
+                kind,
+                quantity: 1,
+                position: destination,
+            }];
+
+            assert_eq!(
+                super::right_click_command(
+                    &visible_items,
+                    character_id,
+                    Some(crate::inventory::InspectedObject::Item(item_id)),
+                    destination,
+                ),
+                Command::FetchAndEquipItem {
+                    character_id,
+                    item_id,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn right_click_uses_visible_ground_items_when_lightweight_snapshot_has_none() {
+        let client = AuthoritativeClient::new().unwrap();
+        assert!(client.snapshot().ground_items.is_empty());
+        let character_id = super::cora_id();
+        let item_id = EntityId::new(40).unwrap();
+        let destination = WorldPosition::from_cell_center(WorldCell::new(2, 3)).unwrap();
+        let visible_items = [GroundItemSnapshot {
             id: item_id,
             kind: item::CART,
             quantity: 1,
             position: destination,
-        });
+        }];
 
         assert_eq!(
             super::right_click_command(
-                &snapshot,
+                &visible_items,
                 character_id,
                 Some(crate::inventory::InspectedObject::Item(item_id)),
                 destination,
@@ -1440,18 +1465,18 @@ mod tests {
             Command::FetchAndEquipItem {
                 character_id,
                 item_id,
-            }
+            },
+            "the visible cart must be actionable even though the lightweight snapshot omits chunks"
         );
     }
 
     #[test]
     fn right_click_without_hovered_equipment_remains_a_move_order() {
-        let client = AuthoritativeClient::new().unwrap();
         let character_id = super::cora_id();
         let destination = WorldPosition::from_cell_center(WorldCell::new(2, 3)).unwrap();
 
         assert_eq!(
-            super::right_click_command(client.snapshot(), character_id, None, destination),
+            super::right_click_command(&[], character_id, None, destination),
             Command::MoveTo {
                 character_id,
                 destination,
