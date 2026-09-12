@@ -286,7 +286,8 @@ impl Simulation {
                 | JobKind::SupplyProduction { .. }
                 | JobKind::EquipTool { .. }
                 | JobKind::DeliverConstruction { .. }
-                | JobKind::Construct { .. } => None,
+                | JobKind::Construct { .. }
+                | JobKind::PrepareConstruction { .. } => None,
             })
             .collect::<Vec<_>>();
         for job_id in existing_haul_jobs {
@@ -898,7 +899,8 @@ mod tests {
                 | JobKind::SupplyProduction { .. }
                 | JobKind::DeliverConstruction { .. }
                 | JobKind::Construct { .. }
-                | JobKind::EquipTool { .. } => None,
+                | JobKind::EquipTool { .. }
+                | JobKind::PrepareConstruction { .. } => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(hauls.len(), 2);

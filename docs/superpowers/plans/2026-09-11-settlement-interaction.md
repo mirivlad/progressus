@@ -77,43 +77,43 @@ owe, and why they are not ticked:
 Files: construction.rs, simulation/building.rs, work.rs, job.rs, persistence.rs,
 world resource queries, app snapshots, client status text, ADR-0009/0022.
 
-- [ ] Add failing tree/stack/pawn designation and completion regressions.
-- [ ] Implement explicit site-owned preparation, physical clearing jobs and late occupancy checks.
-- [ ] Preserve existing resources and layer-claim protection; wait visibly for tools/routes/destination.
-- [ ] Test cancellation, unrelated jobs, full loads, renewable sources, blocked paths, and mid-job save/load conservation.
-- [ ] Cover workbench designation using the smallest compatible deferred placement path.
-- [ ] Review authority, integrate status UI and publish verified stage.
+- [x] Add failing tree/stack/pawn designation and completion regressions.
+- [x] Implement explicit site-owned preparation, physical clearing jobs and late occupancy checks.
+- [x] Preserve existing resources and layer-claim protection; wait visibly for tools/routes/destination.
+- [x] Test cancellation, unrelated jobs, full loads, renewable sources, blocked paths, and mid-job save/load conservation.
+- [x] Cover workbench designation using the smallest compatible deferred placement path.
+- [x] Review authority, integrate status UI and publish verified stage.
 
 ### TDD execution order
 
-- [ ] Add focused simulation regressions proving a site can be designated on a
+- [x] Add focused simulation regressions proving a site can be designated on a
   walkable cell containing a tree, a ground stack, or a character, while
   structures, workstations, stockpiles and production zones remain forbidden.
-- [ ] Add `ConstructionPreparation` state owned by the site and explicit
+- [x] Add `ConstructionPreparation` state owned by the site and explicit
   preparation job kinds for harvesting a source and relocating a concrete stack;
   expose the state through detached snapshots and the save DTO.
-- [ ] Reuse the existing deterministic harvest and capacity-aware physical item
+- [x] Reuse the existing deterministic harvest and capacity-aware physical item
   transfer paths. Preparation output and pre-existing stacks must be dropped on
   explored walkable cells outside all planned footprints, with stable IDs and
   exact quantity conservation.
-- [ ] Add deterministic character-vacating behavior that waits for unrelated
+- [x] Add deterministic character-vacating behavior that waits for unrelated
   reserved work, then moves an available occupant to the first reachable
   E/N/S/W cell outside planned footprints. Construction material delivery and
   work remain disabled until the target cell is actually clear.
-- [ ] Recheck the target cell immediately before completion. If a removable
+- [x] Recheck the target cell immediately before completion. If a removable
   occupant entered late, return the site to preparation rather than deleting,
   burying or teleporting it.
-- [ ] On cancellation remove only preparation jobs whose `site_id` matches the
+- [x] On cancellation remove only preparation jobs whose `site_id` matches the
   cancelled site, release their reservations, and drop any carried item at the
   worker's exact position through the existing cancellation path.
-- [ ] Add round-trip tests during resource harvesting and item relocation, plus
+- [x] Add round-trip tests during resource harvesting and item relocation, plus
   cancellation, blocked-drop and late-occupancy regressions.
-- [ ] Route workbench placement through the same deferred preparation owner when
+- [x] Route workbench placement through the same deferred preparation owner when
   only removable occupancy blocks the cell; retain immediate rejection for
   permanent claims and validate its port layout before accepting the project.
-- [ ] Add localized preparation/waiting status to the construction snapshot UI,
+- [x] Add localized preparation/waiting status to the construction snapshot UI,
   run focused sim/app/client tests, then the full Prototype 01 gate.
-- [ ] Update ADR-0009, ADR-0022, README, client guide and milestone status to the
+- [x] Update ADR-0009, ADR-0022, README, client guide and milestone status to the
   behavior actually proven; review, commit and push the stage.
 
 ## Task 4: Documentation and acceptance
@@ -122,7 +122,7 @@ Files: README.md, architecture/overview.md, milestones/prototype-02.md, docs/cli
 accepted ADR amendments and this progress checklist.
 
 - [ ] Replace outdated flat inventory/2D/completion claims with current behavior and explicit remaining work.
-- [ ] Run `PROGRESSUS_RUN_CLIENT_TESTS=1 ./scripts/check-prototype-01.sh` if linking is feasible; otherwise run default gate and report limitation.
+- [x] Run `PROGRESSUS_RUN_CLIENT_TESTS=1 ./scripts/check-prototype-01.sh` if linking is feasible; otherwise run default gate and report limitation.
 - [ ] Review whole change, resolve material findings, perform native UI smoke if available.
 - [ ] Commit/push, integrate verified branch into main with fast-forward and verify remote head.
 

@@ -365,6 +365,9 @@ pub(crate) fn sync(
                 .bits(),
         );
     }
+    for s in &game.snapshot().workstation_construction_sites {
+        insert(ObjectKey::Site(s.id), ModelKind::Workbench, s.cell, 0);
+    }
     for item in &cache.items {
         objects.insert(
             ObjectKey::Item(item.id),

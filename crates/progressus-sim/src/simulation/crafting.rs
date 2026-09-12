@@ -649,9 +649,7 @@ mod tests {
     #[test]
     fn surplus_input_does_not_hold_a_port_against_a_missing_ingredient() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
-        let workstation_id = simulation
-            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 0))
-            .unwrap();
+        let workstation_id = place_clear_workbench(&mut simulation);
         let ports = production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Input);
         assert_eq!(ports.len(), 2, "the fixture depends on exactly two ports");
 
@@ -705,9 +703,7 @@ mod tests {
     #[test]
     fn craft_consumes_exact_quantities_from_input_zone_and_outputs_to_output_zone() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
-        let workstation_id = simulation
-            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 0))
-            .unwrap();
+        let workstation_id = place_clear_workbench(&mut simulation);
         let (wood_id, stone_id) = seed_recipe_inputs(&mut simulation, workstation_id, 5, 3);
         let output_cell =
             production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Output)[0];
@@ -863,9 +859,7 @@ mod tests {
     fn production_physically_supplies_exact_recipe_amounts_from_distant_stockpile_cells() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         clear_all_items(&mut simulation);
-        let workstation_id = simulation
-            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 0))
-            .unwrap();
+        let workstation_id = place_clear_workbench(&mut simulation);
         let input_cells =
             production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Input);
         let output_cell =
@@ -982,9 +976,7 @@ mod tests {
     fn production_order_repeats_craft_until_remaining_runs_reaches_zero() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         clear_all_items(&mut simulation);
-        let workstation_id = simulation
-            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 0))
-            .unwrap();
+        let workstation_id = place_clear_workbench(&mut simulation);
         seed_recipe_inputs(&mut simulation, workstation_id, 6, 3);
         let order_id = simulation
             .add_production_order(
@@ -1028,9 +1020,7 @@ mod tests {
     fn blocked_craft_output_preserves_completed_work_across_save_and_cancellation() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         clear_all_items(&mut simulation);
-        let workstation_id = simulation
-            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 0))
-            .unwrap();
+        let workstation_id = place_clear_workbench(&mut simulation);
         let (wood_id, stone_id) = seed_recipe_inputs(&mut simulation, workstation_id, 2, 1);
         let output_cells =
             production_zone_cells(&simulation, workstation_id, ProductionZoneKind::Output);
@@ -1152,9 +1142,7 @@ mod tests {
     fn manual_interruption_releases_craft_inputs_without_consuming_them() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         clear_all_items(&mut simulation);
-        let workstation_id = simulation
-            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 0))
-            .unwrap();
+        let workstation_id = place_clear_workbench(&mut simulation);
         seed_recipe_inputs(&mut simulation, workstation_id, 2, 1);
         let job_id = simulation
             .designate_craft(workstation_id, recipe::PRIMITIVE_TOOL)
@@ -1196,9 +1184,7 @@ mod tests {
     fn removing_workstation_cancels_craft_and_releases_input_reservations() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         clear_all_items(&mut simulation);
-        let workstation_id = simulation
-            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 0))
-            .unwrap();
+        let workstation_id = place_clear_workbench(&mut simulation);
         seed_recipe_inputs(&mut simulation, workstation_id, 2, 1);
         let job_id = simulation
             .designate_craft(workstation_id, recipe::PRIMITIVE_TOOL)
@@ -1229,9 +1215,7 @@ mod tests {
     fn crafted_output_leaves_output_zone_and_reaches_stockpile() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         clear_all_items(&mut simulation);
-        let workstation_id = simulation
-            .place_workstation(workstation::WORKBENCH, WorldCell::new(0, 0))
-            .unwrap();
+        let workstation_id = place_clear_workbench(&mut simulation);
         seed_recipe_inputs(&mut simulation, workstation_id, 2, 1);
         let stock_cells = distant_stockpile_cells(&simulation, WorldCell::new(0, 0), 1);
         let stockpile_id = simulation.create_stockpile(stock_cells[0]).unwrap();

@@ -6,14 +6,15 @@ mod read_model;
 use progressus_sim::{ItemStack, Simulation, SimulationError};
 
 pub use progressus_sim::{
-    CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, ConstructionMaterialState, ConstructionSite,
-    DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED, Direction, DoorState, EntityId,
-    InteractionRadius, ItemCategory, ItemId, ItemLocation, ItemQuantity, JobKind, JobState,
-    LocalCell, MAX_PRODUCTION_ORDER_RUNS, MAX_SATIETY, MovementSpeed, MovementState,
-    NaturalResource, NaturalResourceId, ProductionLogistics, ProductionOrder, ProductionTarget,
-    ProductionZoneKind, RESIDENT_CHUNK_RADIUS, RESIDENT_CHUNKS_PER_CENTER, RecipeId,
-    SAVE_FORMAT_VERSION, SUBUNITS_PER_CELL, SaveError, SaveMetadata, SimulationTick, SlotId,
-    Stockpile, Structure, StructureId, TerrainId, Workstation, WorkstationId, WorldCell,
+    CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, ConstructionMaterialState,
+    ConstructionPreparationTarget, ConstructionSite, DEFAULT_CHARACTER_INTERACTION_RADIUS,
+    DEFAULT_CHARACTER_SPEED, Direction, DoorState, EntityId, InteractionRadius, ItemCategory,
+    ItemId, ItemLocation, ItemQuantity, JobKind, JobState, LocalCell, MAX_PRODUCTION_ORDER_RUNS,
+    MAX_SATIETY, MovementSpeed, MovementState, NaturalResource, NaturalResourceId,
+    ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind,
+    RESIDENT_CHUNK_RADIUS, RESIDENT_CHUNKS_PER_CENTER, RecipeId, SAVE_FORMAT_VERSION,
+    SUBUNITS_PER_CELL, SaveError, SaveMetadata, SimulationTick, SlotId, Stockpile, Structure,
+    StructureId, TerrainId, Workstation, WorkstationConstructionSite, WorkstationId, WorldCell,
     WorldPosition, WorldSeed, WorldgenVersion, item, natural_resource, recipe, slot, structure,
     terrain, workstation,
 };
@@ -21,7 +22,8 @@ pub use read_model::{
     CarriedItemSnapshot, CharacterSnapshot, ChunkSnapshot, ClientSnapshot,
     ConstructionSiteSnapshot, GroundItemSnapshot, InventoryItemSnapshot, JobSnapshot, KnownTerrain,
     NaturalResourceSnapshot, NavigationSnapshot, ProductionLogisticsSnapshot,
-    ProductionOrderSnapshot, StockpileSnapshot, StructureSnapshot, WorkstationSnapshot,
+    ProductionOrderSnapshot, StockpileSnapshot, StructureSnapshot,
+    WorkstationConstructionSiteSnapshot, WorkstationSnapshot,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -473,6 +475,11 @@ impl Application {
             .construction_sites()
             .map(ConstructionSiteSnapshot::from)
             .collect();
+        let workstation_construction_sites = self
+            .simulation
+            .workstation_construction_sites()
+            .map(WorkstationConstructionSiteSnapshot::from)
+            .collect();
         let structures = self
             .simulation
             .structures()
@@ -504,6 +511,7 @@ impl Application {
             production_orders,
             production_logistics,
             construction_sites,
+            workstation_construction_sites,
             structures,
             characters,
             navigation: query.navigation_for.and_then(|id| {
@@ -563,6 +571,37 @@ impl From<SaveError> for ApplicationError {
 mod tests {
     use super::*;
 
+    fn place_clear_workbench(application: &mut Application) -> EntityId {
+        (2..=5)
+            .flat_map(|y| (-4..=4).map(move |x| WorldCell::new(x, y)))
+            .find_map(|cell| {
+                if application
+                    .execute(Command::PlaceWorkstation {
+                        kind: workstation::WORKBENCH,
+                        cell,
+                    })
+                    .is_err()
+                {
+                    return None;
+                }
+                let snapshot = application.snapshot(SnapshotQuery::default()).unwrap();
+                if let Some(workstation) = snapshot.workstations.iter().find(|w| w.cell == cell) {
+                    return Some(workstation.id);
+                }
+                let site_id = snapshot
+                    .workstation_construction_sites
+                    .iter()
+                    .find(|site| site.cell == cell)
+                    .map(|site| site.id)
+                    .expect("successful placement publishes a workstation or project");
+                application
+                    .execute(Command::CancelConstruction { site_id })
+                    .unwrap();
+                None
+            })
+            .expect("nowhere to stand a workbench")
+    }
+
     /// A cart needs a tool to build, so it is the first thing in the game that
     /// cannot be made in one step. Ordering it has to work through the whole
     /// chain — craft the tool, supply eight wood and that tool, build the cart —
@@ -595,22 +634,7 @@ mod tests {
         application
             .execute(Command::AdvanceTicks { count: 400 })
             .unwrap();
-        let workbench_cell = (2..=5)
-            .flat_map(|y| (-4..=4).map(move |x| WorldCell::new(x, y)))
-            .find(|cell| {
-                application
-                    .execute(Command::PlaceWorkstation {
-                        kind: workstation::WORKBENCH,
-                        cell: *cell,
-                    })
-                    .is_ok()
-            });
-        assert!(workbench_cell.is_some(), "nowhere to stand a workbench");
-        let workstation_id = application
-            .snapshot(SnapshotQuery::default())
-            .unwrap()
-            .workstations[0]
-            .id;
+        let workstation_id = place_clear_workbench(&mut application);
 
         for recipe_id in [recipe::PRIMITIVE_TOOL, recipe::CART] {
             application
@@ -747,22 +771,7 @@ mod tests {
         application
             .execute(Command::AdvanceTicks { count: 400 })
             .unwrap();
-        let workbench_cell = (2..=5)
-            .flat_map(|y| (-4..=4).map(move |x| WorldCell::new(x, y)))
-            .find(|cell| {
-                application
-                    .execute(Command::PlaceWorkstation {
-                        kind: workstation::WORKBENCH,
-                        cell: *cell,
-                    })
-                    .is_ok()
-            });
-        assert!(workbench_cell.is_some(), "nowhere to stand a workbench");
-        let workstation_id = application
-            .snapshot(SnapshotQuery::default())
-            .unwrap()
-            .workstations[0]
-            .id;
+        let workstation_id = place_clear_workbench(&mut application);
         application
             .execute(Command::AddProductionOrder {
                 workstation_id,

@@ -1,6 +1,6 @@
 //! Shared fixtures for the authoritative simulation's module tests.
 
-use progressus_content::{item, natural_resource, terrain};
+use progressus_content::{item, natural_resource, terrain, workstation};
 
 use super::*;
 pub(super) use crate::{Direction, HUNGRY_SATIETY, MAX_SATIETY, MovementSpeed, MovementState};
@@ -48,6 +48,24 @@ pub(super) fn production_zone_cells(
         .unwrap()
         .cells(kind)
         .collect()
+}
+
+pub(super) fn place_clear_workbench(simulation: &mut Simulation) -> EntityId {
+    let cell = (-5..=5)
+        .flat_map(|y| (-7..=7).map(move |x| WorldCell::new(x, y)))
+        .find(|cell| {
+            simulation.validate_workstation_cell(*cell).is_ok()
+                && simulation
+                    .construction_cell_has_removable_occupant(*cell)
+                    .is_ok_and(|occupied| !occupied)
+                && simulation.default_production_ports(*cell).is_ok()
+        })
+        .expect("seed 0 must expose a clear workbench fixture");
+    let id = simulation
+        .place_workstation(workstation::WORKBENCH, cell)
+        .unwrap();
+    assert_eq!(simulation.workstation_at(cell), Some(id));
+    id
 }
 
 pub(super) fn insert_ground_stack(
@@ -124,6 +142,14 @@ pub(super) fn shared_workbench_fixture_cells(
                 && simulation.validate_stockpile_cell(second_stone).is_ok()
                 && simulation.validate_workstation_cell(first_bench).is_ok()
                 && simulation.validate_workstation_cell(second_bench).is_ok()
+                && simulation
+                    .construction_cell_has_removable_occupant(first_bench)
+                    .is_ok_and(|occupied| !occupied)
+                && simulation
+                    .construction_cell_has_removable_occupant(second_bench)
+                    .is_ok_and(|occupied| !occupied)
+                && simulation.default_production_ports(first_bench).is_ok()
+                && simulation.default_production_ports(second_bench).is_ok()
             {
                 return (shared, first_bench, second_bench, first_stone, second_stone);
             }
@@ -144,6 +170,11 @@ pub(super) fn empty_stockpile_cells(simulation: &Simulation, count: usize) -> Ve
         .filter(|cell| simulation.effective_terrain_at(*cell).unwrap() == terrain::GRASS)
         .filter(|cell| simulation.natural_resource_at(*cell).unwrap().is_none())
         .filter(|cell| !occupied.contains(cell))
+        .filter(|cell| {
+            simulation
+                .characters()
+                .all(|character| character.position().containing_cell() != *cell)
+        })
         .take(count)
         .collect::<Vec<_>>();
     assert_eq!(

@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-09-03
+- Amended: 2026-09-12 (deferred preparation for removable workstation occupancy)
 
 ## Context
 
@@ -11,7 +12,7 @@ Progressus requires production to remain physical. A tempting craft bootstrap wo
 
 Prototype Craft jobs reserve a stable workbench, one worker, and the concrete input stack IDs. The first recipe is `2 Wood + 1 Stone -> 1 PrimitiveTool`. Craft itself consumes only ordinary ground stacks in designated stockpile cells within Manhattan distance 1 of the workbench. When a pending order lacks a local input, production supply may split exactly the missing recipe quantity from an unreserved stack elsewhere in a stockpile and create an ordinary physical Haul job into a compatible adjacent stockpile staging cell. The remainder stays in the source stack; Craft then reserves and consumes the delivered local stack. Completion decrements those exact stacks or removes a fully consumed stack and creates a new physical output stack beside the workbench.
 
-The workbench itself is currently placed instantly as a bootstrap workstation; this ADR does not treat placement as completed construction. Future Construct jobs must deliver physical materials and work before a building becomes complete.
+The workbench itself is placed instantly only when its center cell is already clear. Removable center-cell occupancy now creates a preparation project, but the workbench still has no material/work construction recipe; this ADR does not treat its placement as completed construction. Construct jobs for structures must deliver physical materials and work before a building becomes complete.
 
 ## Consequences
 

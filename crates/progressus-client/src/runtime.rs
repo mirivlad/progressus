@@ -484,7 +484,13 @@ fn apply_point_tool(
                 })?;
         }
         ToolMode::Workbench => {
-            if workstation_at(authoritative.snapshot(), cell).is_none() {
+            if workstation_at(authoritative.snapshot(), cell).is_none()
+                && !authoritative
+                    .snapshot()
+                    .workstation_construction_sites
+                    .iter()
+                    .any(|site| site.cell == cell)
+            {
                 authoritative
                     .application
                     .execute(Command::PlaceWorkstation {
@@ -616,20 +622,29 @@ fn apply_tool_area(
             }
         }
         ToolMode::Harvest => {
-            let existing = area_snapshot
-                .jobs
-                .iter()
-                .filter_map(|job| match job.kind {
-                    JobKind::Harvest { source } => Some(source),
-                    JobKind::Eat { .. }
-                    | JobKind::Haul { .. }
-                    | JobKind::SupplyProduction { .. }
-                    | JobKind::Craft { .. }
-                    | JobKind::DeliverConstruction { .. }
-                    | JobKind::Construct { .. }
-                    | JobKind::EquipTool { .. } => None,
-                })
-                .collect::<BTreeSet<_>>();
+            let existing =
+                area_snapshot
+                    .jobs
+                    .iter()
+                    .filter_map(|job| match job.kind {
+                        JobKind::Harvest { source }
+                        | JobKind::PrepareConstruction {
+                            target:
+                                progressus_app::ConstructionPreparationTarget::NaturalResource {
+                                    source,
+                                },
+                            ..
+                        } => Some(source),
+                        JobKind::Eat { .. }
+                        | JobKind::Haul { .. }
+                        | JobKind::SupplyProduction { .. }
+                        | JobKind::Craft { .. }
+                        | JobKind::DeliverConstruction { .. }
+                        | JobKind::Construct { .. }
+                        | JobKind::EquipTool { .. } => None,
+                        JobKind::PrepareConstruction { .. } => None,
+                    })
+                    .collect::<BTreeSet<_>>();
             let selected = cells.into_iter().collect::<BTreeSet<_>>();
             for resource in area_snapshot.natural_resources {
                 if selected.contains(&resource.cell) && !existing.contains(&resource.cell) {
@@ -642,11 +657,6 @@ fn apply_tool_area(
             }
         }
         ToolMode::Wall => {
-            let resource_cells = area_snapshot
-                .natural_resources
-                .iter()
-                .map(|resource| resource.cell)
-                .collect::<BTreeSet<_>>();
             let stockpile_cells = area_snapshot
                 .stockpiles
                 .iter()
@@ -656,11 +666,6 @@ fn apply_tool_area(
                 .workstations
                 .iter()
                 .map(|workstation| workstation.cell)
-                .collect::<BTreeSet<_>>();
-            let item_cells = area_snapshot
-                .ground_items
-                .iter()
-                .map(|item| item.position.containing_cell())
                 .collect::<BTreeSet<_>>();
             let production_zone_cells = area_snapshot
                 .production_logistics
@@ -679,25 +684,23 @@ fn apply_tool_area(
                 .map(|site| site.cell)
                 .chain(
                     area_snapshot
+                        .workstation_construction_sites
+                        .iter()
+                        .map(|site| site.cell),
+                )
+                .chain(
+                    area_snapshot
                         .structures
                         .iter()
                         .map(|structure| structure.cell),
                 )
                 .collect::<BTreeSet<_>>();
-            let character_cells = area_snapshot
-                .characters
-                .iter()
-                .map(|character| character.containing_cell)
-                .collect::<BTreeSet<_>>();
             for cell in cells {
                 if known_terrain_at(&area_snapshot, cell) != Some(progressus_app::terrain::GRASS)
-                    || resource_cells.contains(&cell)
                     || stockpile_cells.contains(&cell)
                     || workstation_cells.contains(&cell)
-                    || item_cells.contains(&cell)
                     || production_zone_cells.contains(&cell)
                     || construction_cells.contains(&cell)
-                    || character_cells.contains(&cell)
                 {
                     continue;
                 }
@@ -724,7 +727,8 @@ fn apply_tool_area(
                     | JobKind::Craft { .. }
                     | JobKind::DeliverConstruction { .. }
                     | JobKind::Construct { .. }
-                    | JobKind::EquipTool { .. } => None,
+                    | JobKind::EquipTool { .. }
+                    | JobKind::PrepareConstruction { .. } => None,
                 })
                 .collect::<Vec<_>>();
             for job_id in jobs {
@@ -737,6 +741,13 @@ fn apply_tool_area(
                 .iter()
                 .filter(|site| selected.contains(&site.cell))
                 .map(|site| site.id)
+                .chain(
+                    area_snapshot
+                        .workstation_construction_sites
+                        .iter()
+                        .filter(|site| selected.contains(&site.cell))
+                        .map(|site| site.id),
+                )
                 .collect::<Vec<_>>();
             for site_id in sites {
                 authoritative

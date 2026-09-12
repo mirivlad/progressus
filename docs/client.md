@@ -5,9 +5,9 @@ Run `./scripts/run-client.sh` from the repository. On Linux this checks and inst
 ## Controls and workflows
 
 - WASD or middle drag: pan. Wheel: zoom. Q/E: orbit. F: focus selected person.
-- Left click: select a person, inspect a stockpile, or open a workstation. Right click: exact movement order, or leave the active tool. Escape: close modal/leave tool. P: pause.
+- Left click in Select mode prioritizes a workstation or person, then an inspectable ground item/resource, then the stockpile beneath it. While a construction tool is active, the construction click wins instead. Right click gives an exact movement order or leaves the active tool. Escape closes a modal/leaves the tool. P pauses.
 - Arrows/Space retain direct move/stop control for Cora. F3 shows residency and authoritative-position diagnostics.
-- Orders, Zones and Build open grouped tool palettes. Harvest, stockpile editing, wall and cancellation tools support rectangular drag selection with cell grid feedback. Door and workbench use point placement.
+- Orders, Zones and Build open grouped tool palettes. Harvest, stockpile editing, wall and cancellation tools support rectangular drag selection with cell grid feedback. Door and workbench use point placement. A wall, door or workbench may be designated on passable ground occupied only by a source, loose stack, or person; the preparation job clears that occupancy physically before completion.
 - Character inspector shows identity, location, satiety, movement, carried goods and current job/state.
 - Stockpile inspector and configuration retain item/category filters and priority. Double-click a stockpile to configure it. Zones can be hidden.
 - Workstation modal manages finite/infinite production orders, order quantity/cancellation and independent input/output port rotation. Port cells are marked red/yellow in the world.

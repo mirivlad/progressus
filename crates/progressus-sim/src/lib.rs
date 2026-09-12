@@ -17,6 +17,7 @@ mod world_state;
 pub use clock::SimulationTick;
 pub use construction::{
     ConstructionMaterialState, ConstructionSite, DOOR_HOLD_OPEN_TICKS, DoorState, Structure,
+    WorkstationConstructionSite,
 };
 pub use entity::{
     Character, DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED, Direction, EntityId,
@@ -24,7 +25,9 @@ pub use entity::{
 };
 pub use exploration::CHARACTER_VISION_RADIUS_CELLS;
 pub use item_world::{ItemLocation, ItemQuantity, ItemStack, MAX_CONTAINER_DEPTH};
-pub use job::{EAT_WORK_TICKS, HARVEST_WORK_TICKS, Job, JobKind, JobState};
+pub use job::{
+    ConstructionPreparationTarget, EAT_WORK_TICKS, HARVEST_WORK_TICKS, Job, JobKind, JobState,
+};
 pub use position::{
     InteractionRadius, SUBUNITS_PER_CELL, WorldPosition, WorldPositionError,
     within_interaction_range,

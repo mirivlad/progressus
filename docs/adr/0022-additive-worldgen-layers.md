@@ -47,9 +47,9 @@ Layers are addressed at runtime by a bitmask over the registry, so a generator s
 
 ### A layer may not grow a resource under something already built
 
-Placement already refuses to build on a cell holding a resource, so today a resource and a structure cannot coexist. A layer added later could break that from the other side, by placing a resource under a wall, a stockpile, a workbench or a production port that has stood there for hours.
+Construction designation may now overlap a resource that already exists, but only as a temporary explicit preparation state: the source remains queryable and is physically harvested before completion. A layer added later must not create a different source under a wall, a stockpile, a workbench, a production port, or a construction project that has already claimed the cell.
 
-The simulation therefore reports no natural resource for a cell claimed by a structure, a construction site, a stockpile, a workstation or a production zone, through both the point query and the chunk query. For every world that exists today this changes nothing, because such a cell can never hold a resource; it is the guard that keeps the invariant true once layers carry content.
+The simulation therefore reports no newly generated natural resource for a claimed cell through either the point query or the chunk query. A construction or deferred-workbench project records whether its source predated the claim; only that recorded source stays visible until its preparation job harvests it. The flag is persisted, so save/load cannot either erase the source early or mistake a later layer for pre-existing occupancy.
 
 Cells the player merely walked over, explored, or dropped items on are not claims. A new deposit appearing in explored ground is intended: the fiction is that prospecting finds what was always there.
 

@@ -127,6 +127,8 @@ struct SaveV1 {
     production_orders: Vec<ProductionOrderSave>,
     production_logistics: Vec<ProductionLogisticsSave>,
     construction_sites: Vec<ConstructionSiteSave>,
+    #[serde(default)]
+    workstation_construction_sites: Vec<WorkstationConstructionSiteSave>,
     structures: Vec<StructureSave>,
     jobs: Vec<JobSave>,
 }
@@ -211,6 +213,11 @@ impl SaveV1 {
                 .sites()
                 .map(ConstructionSiteSave::from_site)
                 .collect(),
+            workstation_construction_sites: simulation
+                .construction_world
+                .workstation_sites()
+                .map(WorkstationConstructionSiteSave::from_site)
+                .collect(),
             structures: simulation
                 .construction_world
                 .structures()
@@ -255,7 +262,11 @@ impl SaveV1 {
             &stockpile_world,
             self.production_logistics,
         )?;
-        let construction_world = restore_construction(self.construction_sites, self.structures)?;
+        let construction_world = restore_construction(
+            self.construction_sites,
+            self.workstation_construction_sites,
+            self.structures,
+        )?;
         let job_world = restore_jobs(
             &characters,
             &item_world,
@@ -899,6 +910,28 @@ struct ConstructionSiteSave {
     kind: StructureKindSave,
     cell: CellSave,
     material: Option<ConstructionMaterialSave>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    preparation_resource_present: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct WorkstationConstructionSiteSave {
+    id: u64,
+    kind: WorkstationKindSave,
+    cell: CellSave,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    preparation_resource_present: bool,
+}
+
+impl WorkstationConstructionSiteSave {
+    fn from_site(site: &WorkstationConstructionSite) -> Self {
+        Self {
+            id: site.id().value(),
+            kind: site.kind().into(),
+            cell: site.cell().into(),
+            preparation_resource_present: site.preparation_resource_present(),
+        }
+    }
 }
 
 impl ConstructionSiteSave {
@@ -915,6 +948,7 @@ impl ConstructionSiteSave {
             kind: site.kind().into(),
             cell: site.cell().into(),
             material,
+            preparation_resource_present: site.preparation_resource_present(),
         }
     }
 }
@@ -971,9 +1005,77 @@ enum JobKindSave {
     Construct {
         site_id: u64,
     },
+    PrepareConstruction {
+        site_id: u64,
+        target: ConstructionPreparationTargetSave,
+    },
     EquipTool {
         item_id: u64,
     },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ConstructionPreparationTargetSave {
+    NaturalResource {
+        source: CellSave,
+    },
+    GroundItem {
+        item_id: u64,
+        destination: CellSave,
+    },
+    Character {
+        character_id: u64,
+        destination: CellSave,
+    },
+}
+
+impl From<ConstructionPreparationTarget> for ConstructionPreparationTargetSave {
+    fn from(target: ConstructionPreparationTarget) -> Self {
+        match target {
+            ConstructionPreparationTarget::NaturalResource { source } => Self::NaturalResource {
+                source: source.into(),
+            },
+            ConstructionPreparationTarget::GroundItem {
+                item_id,
+                destination,
+            } => Self::GroundItem {
+                item_id: item_id.value(),
+                destination: destination.into(),
+            },
+            ConstructionPreparationTarget::Character {
+                character_id,
+                destination,
+            } => Self::Character {
+                character_id: character_id.value(),
+                destination: destination.into(),
+            },
+        }
+    }
+}
+
+impl ConstructionPreparationTargetSave {
+    fn into_target(self) -> Result<ConstructionPreparationTarget, SaveError> {
+        Ok(match self {
+            Self::NaturalResource { source } => ConstructionPreparationTarget::NaturalResource {
+                source: source.into_cell(),
+            },
+            Self::GroundItem {
+                item_id,
+                destination,
+            } => ConstructionPreparationTarget::GroundItem {
+                item_id: entity_id(item_id, "construction preparation item_id")?,
+                destination: destination.into_cell(),
+            },
+            Self::Character {
+                character_id,
+                destination,
+            } => ConstructionPreparationTarget::Character {
+                character_id: entity_id(character_id, "construction preparation character_id")?,
+                destination: destination.into_cell(),
+            },
+        })
+    }
 }
 
 impl From<JobKind> for JobKindSave {
@@ -1025,6 +1127,10 @@ impl From<JobKind> for JobKindSave {
             },
             JobKind::Construct { site_id } => Self::Construct {
                 site_id: site_id.value(),
+            },
+            JobKind::PrepareConstruction { site_id, target } => Self::PrepareConstruction {
+                site_id: site_id.value(),
+                target: target.into(),
             },
         }
     }
@@ -1079,6 +1185,10 @@ impl JobKindSave {
             },
             Self::Construct { site_id } => JobKind::Construct {
                 site_id: entity_id(site_id, "construct site_id")?,
+            },
+            Self::PrepareConstruction { site_id, target } => JobKind::PrepareConstruction {
+                site_id: entity_id(site_id, "construction preparation site_id")?,
+                target: target.into_target()?,
             },
         })
     }
@@ -1173,6 +1283,9 @@ fn validate_collection_uniqueness(save: &SaveV1) -> Result<(), SaveError> {
     }
     for value in &save.construction_sites {
         add(value.id, "construction site")?;
+    }
+    for value in &save.workstation_construction_sites {
+        add(value.id, "workstation construction site")?;
     }
     for value in &save.structures {
         add(value.id, "structure")?;
@@ -1620,6 +1733,7 @@ fn is_saved_production_zone_neighbour(center: WorldCell, cell: WorldCell) -> boo
 
 fn restore_construction(
     sites: Vec<ConstructionSiteSave>,
+    workstation_sites: Vec<WorkstationConstructionSiteSave>,
     structures: Vec<StructureSave>,
 ) -> Result<ConstructionWorld, SaveError> {
     let mut world = ConstructionWorld::default();
@@ -1627,7 +1741,10 @@ fn restore_construction(
         let id = entity_id(value.id, "construction site id")?;
         let kind = value.kind.id()?;
         world
-            .insert_site(ConstructionSite::new(id, kind, value.cell.into_cell()))
+            .insert_site(
+                ConstructionSite::new(id, kind, value.cell.into_cell())
+                    .with_preparation_resource(value.preparation_resource_present),
+            )
             .map_err(|error| invalid_world_error("construction site", error))?;
         if let Some(material) = value.material {
             let item_id = entity_id(material.item_id, "construction material item_id")?;
@@ -1642,6 +1759,15 @@ fn restore_construction(
                     .map_err(|error| invalid_world_error("construction material", error))?;
             }
         }
+    }
+    for value in workstation_sites {
+        let id = entity_id(value.id, "workstation construction site id")?;
+        world
+            .insert_workstation_site(
+                WorkstationConstructionSite::new(id, value.kind.id()?, value.cell.into_cell())
+                    .with_preparation_resource(value.preparation_resource_present),
+            )
+            .map_err(|error| invalid_world_error("workstation construction site", error))?;
     }
     for value in structures {
         let id = entity_id(value.id, "structure id")?;
@@ -1751,6 +1877,19 @@ fn restore_jobs(
                         character_id.value()
                     ));
                 }
+                if let JobKind::PrepareConstruction {
+                    target: ConstructionPreparationTarget::Character { character_id, .. },
+                    ..
+                } = kind
+                    && worker != character_id
+                {
+                    return invalid(format!(
+                        "construction preparation job {} is reserved by character {} instead of {}",
+                        id.value(),
+                        worker.value(),
+                        character_id.value()
+                    ));
+                }
                 world
                     .reserve_worker(id, worker)
                     .map_err(|error| invalid_world_error("job worker reservation", error))?;
@@ -1761,6 +1900,10 @@ fn restore_jobs(
                     JobKind::Haul { .. }
                         | JobKind::SupplyProduction { .. }
                         | JobKind::DeliverConstruction { .. }
+                        | JobKind::PrepareConstruction {
+                            target: ConstructionPreparationTarget::GroundItem { .. },
+                            ..
+                        }
                 ) {
                     return invalid(format!(
                         "job {} has transporting state for a non-transport job",
@@ -1801,6 +1944,10 @@ fn restore_jobs(
                         | JobKind::Eat { .. }
                         | JobKind::Craft { .. }
                         | JobKind::Construct { .. }
+                        | JobKind::PrepareConstruction {
+                            target: ConstructionPreparationTarget::NaturalResource { .. },
+                            ..
+                        }
                 ) {
                     return invalid(format!(
                         "job {} has working state for a non-work job",
@@ -1982,6 +2129,45 @@ fn validate_job_references(
                 ));
             }
         }
+        JobKind::PrepareConstruction { site_id, target } => {
+            let site_cell = construction
+                .site(site_id)
+                .map(ConstructionSite::cell)
+                .or_else(|| {
+                    construction
+                        .workstation_site(site_id)
+                        .map(WorkstationConstructionSite::cell)
+                })
+                .ok_or_else(|| {
+                    SaveError::InvalidData(format!(
+                        "construction preparation job {} references missing site {}",
+                        job_id.value(),
+                        site_id.value()
+                    ))
+                })?;
+            match target {
+                ConstructionPreparationTarget::NaturalResource { source } => {
+                    if source != site_cell {
+                        return invalid(format!(
+                            "construction preparation job {} targets a different source cell",
+                            job_id.value()
+                        ));
+                    }
+                }
+                ConstructionPreparationTarget::GroundItem { item_id, .. } => {
+                    require_item(items, item_id, job_id)?;
+                }
+                ConstructionPreparationTarget::Character { character_id, .. } => {
+                    if !characters.contains_key(&character_id) {
+                        return invalid(format!(
+                            "construction preparation job {} references missing character {}",
+                            job_id.value(),
+                            character_id.value()
+                        ));
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -2016,6 +2202,11 @@ fn max_owned_entity_id(
         .chain(workstations.iter().map(Workstation::id))
         .chain(production.iter().map(ProductionOrder::id))
         .chain(construction.sites().map(ConstructionSite::id))
+        .chain(
+            construction
+                .workstation_sites()
+                .map(WorkstationConstructionSite::id),
+        )
         .chain(construction.structures().map(Structure::id))
         .map(EntityId::value)
         .max()
@@ -2107,6 +2298,36 @@ fn validate_restored_simulation(simulation: &Simulation) -> Result<(), SaveError
         }
     }
 
+    for site in simulation.construction_world.workstation_sites() {
+        if simulation
+            .workstation_world
+            .workstation_at(site.cell())
+            .is_some()
+            || simulation
+                .stockpile_world
+                .stockpile_at(site.cell())
+                .is_some()
+            || simulation
+                .production_logistics_world
+                .zone_at(site.cell())
+                .is_some()
+        {
+            return invalid(format!(
+                "workstation construction site {} overlaps a permanent claim",
+                site.id().value()
+            ));
+        }
+        let walkable = simulation
+            .is_walkable(site.cell())
+            .map_err(|error| invalid_world_error("workstation construction site", error))?;
+        if !simulation.is_explored(site.cell()) || !walkable {
+            return invalid(format!(
+                "workstation construction site {} occupies an unavailable cell",
+                site.id().value()
+            ));
+        }
+    }
+
     for job in simulation.job_world.iter() {
         validate_restored_job_state(simulation, job)?;
     }
@@ -2177,6 +2398,10 @@ fn validate_restored_job_state(simulation: &Simulation, job: &Job) -> Result<(),
             JobKind::Haul { item_id, .. }
             | JobKind::SupplyProduction { item_id, .. }
             | JobKind::DeliverConstruction { item_id, .. } => item_id,
+            JobKind::PrepareConstruction {
+                target: ConstructionPreparationTarget::GroundItem { item_id, .. },
+                ..
+            } => item_id,
             _ => {
                 return invalid(format!(
                     "non-logistics job {} cannot be transporting",
@@ -2410,11 +2635,16 @@ mod tests {
             .flat_map(|y| (-8..8).map(move |x| WorldCell::new(x, y)))
             .find(|cell| {
                 *cell != stockpile_cell
+                    && simulation.validate_workstation_cell(*cell).is_ok()
                     && simulation
-                        .place_workstation(workstation::WORKBENCH, *cell)
-                        .is_ok()
+                        .construction_cell_has_removable_occupant(*cell)
+                        .is_ok_and(|occupied| !occupied)
+                    && simulation.default_production_ports(*cell).is_ok()
             })
             .expect("the starting clearing fits one workbench");
+        simulation
+            .place_workstation(workstation::WORKBENCH, workstation_cell)
+            .unwrap();
         assert!(simulation.cell_is_claimed(workstation_cell));
 
         let site_cell = free(&simulation, &[stockpile_cell, workstation_cell]);

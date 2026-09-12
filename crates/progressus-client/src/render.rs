@@ -205,6 +205,18 @@ pub(crate) fn draw_job_designations(
                     .find(|s| s.id == site_id)
                     .map(|s| s.cell)
             }
+            JobKind::PrepareConstruction { site_id, .. } => snapshot
+                .construction_sites
+                .iter()
+                .find(|site| site.id == site_id)
+                .map(|site| site.cell)
+                .or_else(|| {
+                    snapshot
+                        .workstation_construction_sites
+                        .iter()
+                        .find(|site| site.id == site_id)
+                        .map(|site| site.cell)
+                }),
             JobKind::Haul { .. } | JobKind::SupplyProduction { .. } => None,
         };
         let Some(cell) = cell else {

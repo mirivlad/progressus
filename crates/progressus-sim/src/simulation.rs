@@ -51,13 +51,14 @@ use crate::workstation_world::{WorkstationWorld, WorkstationWorldError};
 use crate::world_state::ModifiedWorld;
 use crate::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, CapabilityId, Character, ChunkCoord,
-    ConstructionMaterialState, ConstructionSite, Direction, EAT_WORK_TICKS, EffectiveChunk,
-    EntityId, GeneratedChunk, HAND_LOAD_UNITS, HARVEST_WORK_TICKS, InteractionRadius, ItemId,
-    ItemLocation, ItemQuantity, ItemStack, Job, JobKind, JobState, LocalCell, MAX_STACK_QUANTITY,
-    MovementState, NaturalResource, ProductionLogistics, ProductionOrder, ProductionTarget,
-    ProductionZoneKind, RecipeId, SATIETY_DECAY_INTERVAL_TICKS, SimulationTick, SlotId, Stockpile,
-    Structure, StructureId, TerrainId, Workstation, WorkstationId, WorldCell, WorldPosition,
-    WorldPositionError, WorldSeed, WorldgenVersion, within_interaction_range,
+    ConstructionMaterialState, ConstructionPreparationTarget, ConstructionSite, Direction,
+    EAT_WORK_TICKS, EffectiveChunk, EntityId, GeneratedChunk, HAND_LOAD_UNITS, HARVEST_WORK_TICKS,
+    InteractionRadius, ItemId, ItemLocation, ItemQuantity, ItemStack, Job, JobKind, JobState,
+    LocalCell, MAX_STACK_QUANTITY, MovementState, NaturalResource, ProductionLogistics,
+    ProductionOrder, ProductionTarget, ProductionZoneKind, RecipeId, SATIETY_DECAY_INTERVAL_TICKS,
+    SimulationTick, SlotId, Stockpile, Structure, StructureId, TerrainId, Workstation,
+    WorkstationConstructionSite, WorkstationId, WorldCell, WorldPosition, WorldPositionError,
+    WorldSeed, WorldgenVersion, within_interaction_range,
 };
 
 const BOOTSTRAP_BERRIES: u32 = 10;
@@ -323,10 +324,10 @@ impl Simulation {
         self.resource_revision
     }
 
-    /// A cell the player has claimed by building or zoning on it. Placement
-    /// already refuses to build over a resource, so this only matters in the
-    /// other direction: an added worldgen layer must not grow a resource under
-    /// something that already stands there. See ADR-0022.
+    /// A cell the player has claimed by building or zoning on it. A resource
+    /// that existed when a construction project was designated remains visible
+    /// until its explicit preparation job harvests it; later worldgen layers
+    /// still cannot grow new resources under claims. See ADR-0022.
     fn cell_is_claimed(&self, cell: WorldCell) -> bool {
         self.construction_world.structure_at(cell).is_some()
             || self.construction_world.site_at(cell).is_some()
@@ -335,14 +336,36 @@ impl Simulation {
             || self.production_logistics_world.zone_at(cell).is_some()
     }
 
+    fn claimed_cell_preserves_resource(&self, cell: WorldCell) -> bool {
+        self.construction_world.site_at(cell).is_some_and(|id| {
+            self.construction_world
+                .site(id)
+                .is_some_and(ConstructionSite::preparation_resource_present)
+                || self
+                    .construction_world
+                    .workstation_site(id)
+                    .is_some_and(WorkstationConstructionSite::preparation_resource_present)
+        })
+    }
+
     pub fn natural_resource_at(
         &self,
         position: WorldCell,
     ) -> Result<Option<NaturalResource>, SimulationError> {
         if self.depleted_resources.contains(&position)
             || self.renewable_resource_regrowth.contains_key(&position)
-            || self.cell_is_claimed(position)
         {
+            return Ok(None);
+        }
+        if self.claimed_cell_preserves_resource(position) {
+            let (coordinate, local) = position.split();
+            return Ok(self
+                .chunk_residency
+                .get(coordinate)
+                .and_then(|chunk| chunk.natural_resource_at(local))
+                .or_else(|| self.generator.natural_resource_at(position)));
+        }
+        if self.cell_is_claimed(position) {
             return Ok(None);
         }
         let (coordinate, local) = position.split();
@@ -369,9 +392,10 @@ impl Simulation {
                     .ok_or(SimulationError::Worldgen(
                         WorldgenError::CoordinateOutOfRange(coordinate),
                     ))?;
+                let preparing_existing_resource = self.claimed_cell_preserves_resource(cell);
                 if !self.depleted_resources.contains(&cell)
                     && !self.renewable_resource_regrowth.contains_key(&cell)
-                    && !self.cell_is_claimed(cell)
+                    && (!self.cell_is_claimed(cell) || preparing_existing_resource)
                 {
                     resources.push((cell, resource));
                 }
@@ -918,6 +942,12 @@ impl Simulation {
 
     pub fn construction_sites(&self) -> impl ExactSizeIterator<Item = &ConstructionSite> {
         self.construction_world.sites()
+    }
+
+    pub fn workstation_construction_sites(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &WorkstationConstructionSite> {
+        self.construction_world.workstation_sites()
     }
 
     pub fn structures(&self) -> impl ExactSizeIterator<Item = &Structure> {

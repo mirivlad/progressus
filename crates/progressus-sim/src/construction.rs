@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use progressus_content::{StructureId, structure};
+use progressus_content::{StructureId, WorkstationId, structure};
 
 use crate::{EntityId, SimulationTick, WorldCell};
 
@@ -24,6 +24,7 @@ pub struct ConstructionSite {
     cell: WorldCell,
     material_item_id: Option<EntityId>,
     material_state: Option<ConstructionMaterialState>,
+    preparation_resource_present: bool,
 }
 
 impl ConstructionSite {
@@ -34,7 +35,13 @@ impl ConstructionSite {
             cell,
             material_item_id: None,
             material_state: None,
+            preparation_resource_present: false,
         }
+    }
+
+    pub(crate) const fn with_preparation_resource(mut self, present: bool) -> Self {
+        self.preparation_resource_present = present;
+        self
     }
 
     pub const fn id(&self) -> EntityId {
@@ -54,6 +61,50 @@ impl ConstructionSite {
 
     pub const fn material_state(&self) -> Option<ConstructionMaterialState> {
         self.material_state
+    }
+
+    pub const fn preparation_resource_present(&self) -> bool {
+        self.preparation_resource_present
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkstationConstructionSite {
+    id: EntityId,
+    kind: WorkstationId,
+    cell: WorldCell,
+    preparation_resource_present: bool,
+}
+
+impl WorkstationConstructionSite {
+    pub(crate) const fn new(id: EntityId, kind: WorkstationId, cell: WorldCell) -> Self {
+        Self {
+            id,
+            kind,
+            cell,
+            preparation_resource_present: false,
+        }
+    }
+
+    pub(crate) const fn with_preparation_resource(mut self, present: bool) -> Self {
+        self.preparation_resource_present = present;
+        self
+    }
+
+    pub const fn id(&self) -> EntityId {
+        self.id
+    }
+
+    pub const fn kind(&self) -> WorkstationId {
+        self.kind
+    }
+
+    pub const fn cell(&self) -> WorldCell {
+        self.cell
+    }
+
+    pub const fn preparation_resource_present(&self) -> bool {
+        self.preparation_resource_present
     }
 }
 
@@ -106,6 +157,7 @@ impl Structure {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ConstructionWorld {
     sites: BTreeMap<EntityId, ConstructionSite>,
+    workstation_sites: BTreeMap<EntityId, WorkstationConstructionSite>,
     structures: BTreeMap<EntityId, Structure>,
     site_by_cell: BTreeMap<WorldCell, EntityId>,
     structure_by_cell: BTreeMap<WorldCell, EntityId>,
@@ -123,6 +175,16 @@ impl ConstructionWorld {
 
     pub(crate) fn structures(&self) -> impl ExactSizeIterator<Item = &Structure> {
         self.structures.values()
+    }
+
+    pub(crate) fn workstation_sites(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &WorkstationConstructionSite> {
+        self.workstation_sites.values()
+    }
+
+    pub(crate) fn workstation_site(&self, id: EntityId) -> Option<&WorkstationConstructionSite> {
+        self.workstation_sites.get(&id)
     }
 
     pub(crate) fn site(&self, id: EntityId) -> Option<&ConstructionSite> {
@@ -166,6 +228,41 @@ impl ConstructionWorld {
         self.site_by_cell.insert(cell, id);
         self.sites.insert(id, site);
         self.bump_revision()
+    }
+
+    pub(crate) fn insert_workstation_site(
+        &mut self,
+        site: WorkstationConstructionSite,
+    ) -> Result<(), ConstructionWorldError> {
+        let id = site.id();
+        let cell = site.cell();
+        if self.sites.contains_key(&id)
+            || self.workstation_sites.contains_key(&id)
+            || self.structures.contains_key(&id)
+        {
+            return Err(ConstructionWorldError::DuplicateConstructionId(id));
+        }
+        if self.site_by_cell.contains_key(&cell) || self.structure_by_cell.contains_key(&cell) {
+            return Err(ConstructionWorldError::CellAlreadyOccupied(cell));
+        }
+        self.site_by_cell.insert(cell, id);
+        self.workstation_sites.insert(id, site);
+        self.bump_revision()
+    }
+
+    pub(crate) fn remove_workstation_site(
+        &mut self,
+        site_id: EntityId,
+    ) -> Result<WorkstationConstructionSite, ConstructionWorldError> {
+        let site = self
+            .workstation_sites
+            .remove(&site_id)
+            .ok_or(ConstructionWorldError::UnknownSite(site_id))?;
+        if self.site_by_cell.remove(&site.cell()) != Some(site_id) {
+            return Err(ConstructionWorldError::IndexCorruption);
+        }
+        self.bump_revision()?;
+        Ok(site)
     }
     pub(crate) fn reserve_material(
         &mut self,
@@ -375,13 +472,24 @@ impl ConstructionWorld {
                     .material_item_id
                     .is_none_or(|item_id| self.site_by_material.get(&item_id) == Some(id))
         }) && self
-            .structures
+            .workstation_sites
             .iter()
-            .all(|(id, structure)| self.structure_by_cell.get(&structure.cell()) == Some(id))
+            .all(|(id, site)| self.site_by_cell.get(&site.cell()) == Some(id))
+            && self
+                .structures
+                .iter()
+                .all(|(id, structure)| self.structure_by_cell.get(&structure.cell()) == Some(id))
             && self.site_by_material.iter().all(|(item_id, site_id)| {
                 self.sites
                     .get(site_id)
                     .is_some_and(|site| site.material_item_id == Some(*item_id))
+            })
+            && self.site_by_cell.iter().all(|(cell, id)| {
+                self.sites.get(id).is_some_and(|site| site.cell() == *cell)
+                    || self
+                        .workstation_sites
+                        .get(id)
+                        .is_some_and(|site| site.cell() == *cell)
             })
     }
 }

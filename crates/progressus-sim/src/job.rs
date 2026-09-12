@@ -6,6 +6,21 @@ pub const HARVEST_WORK_TICKS: u32 = 4;
 pub const EAT_WORK_TICKS: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum ConstructionPreparationTarget {
+    NaturalResource {
+        source: WorldCell,
+    },
+    GroundItem {
+        item_id: EntityId,
+        destination: WorldCell,
+    },
+    Character {
+        character_id: EntityId,
+        destination: WorldCell,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum JobKind {
     Harvest {
         source: WorldCell,
@@ -35,6 +50,10 @@ pub enum JobKind {
     },
     Construct {
         site_id: EntityId,
+    },
+    PrepareConstruction {
+        site_id: EntityId,
+        target: ConstructionPreparationTarget,
     },
     /// Fetch a tool and put it in its slot, so that work needing a capability
     /// has someone equipped to do it. See ADR-0024.
@@ -114,6 +133,8 @@ pub(crate) struct JobWorld {
     craft_items_by_job: BTreeMap<EntityId, BTreeSet<EntityId>>,
     construction_delivery_by_site: BTreeMap<EntityId, EntityId>,
     construct_by_site: BTreeMap<EntityId, EntityId>,
+    preparation_by_site: BTreeMap<EntityId, EntityId>,
+    preparation_by_item: BTreeMap<EntityId, EntityId>,
     equip_by_item: BTreeMap<EntityId, EntityId>,
     worker_jobs: BTreeMap<EntityId, EntityId>,
     revision: u64,
@@ -179,6 +200,7 @@ impl JobWorld {
             .or_else(|| self.eat_job_for_item(item_id))
             .or_else(|| self.craft_job_for_item(item_id))
             .or_else(|| self.equip_job_for_item(item_id))
+            .or_else(|| self.preparation_by_item.get(&item_id).copied())
     }
 
     pub(crate) fn equip_job_for_item(&self, item_id: EntityId) -> Option<EntityId> {
@@ -212,6 +234,10 @@ impl JobWorld {
 
     pub(crate) fn construct_job_for_site(&self, site_id: EntityId) -> Option<EntityId> {
         self.construct_by_site.get(&site_id).copied()
+    }
+
+    pub(crate) fn preparation_job_for_site(&self, site_id: EntityId) -> Option<EntityId> {
+        self.preparation_by_site.get(&site_id).copied()
     }
 
     pub(crate) fn insert(&mut self, job: Job) -> Result<(), JobWorldError> {
@@ -299,6 +325,31 @@ impl JobWorld {
                     return Err(JobWorldError::ConstructionAlreadyDesignated(site_id));
                 }
                 self.construct_by_site.insert(site_id, id);
+            }
+            JobKind::PrepareConstruction { site_id, target } => {
+                if self.preparation_by_site.contains_key(&site_id) {
+                    return Err(JobWorldError::ConstructionPreparationAlreadyDesignated(
+                        site_id,
+                    ));
+                }
+                match target {
+                    ConstructionPreparationTarget::NaturalResource { source } => {
+                        if self.harvest_by_source.contains_key(&source) {
+                            return Err(JobWorldError::HarvestSourceAlreadyDesignated(source));
+                        }
+                        self.harvest_by_source.insert(source, id);
+                    }
+                    ConstructionPreparationTarget::GroundItem { item_id, .. } => {
+                        if self.item_job_for_item(item_id).is_some() {
+                            return Err(JobWorldError::ConstructionPreparationItemAlreadyReserved(
+                                item_id,
+                            ));
+                        }
+                        self.preparation_by_item.insert(item_id, id);
+                    }
+                    ConstructionPreparationTarget::Character { .. } => {}
+                }
+                self.preparation_by_site.insert(site_id, id);
             }
             JobKind::EquipTool { item_id } => {
                 if self.item_job_for_item(item_id).is_some() {
@@ -499,6 +550,24 @@ impl JobWorld {
                     return Err(JobWorldError::IndexCorruption);
                 }
             }
+            JobKind::PrepareConstruction { site_id, target } => {
+                if self.preparation_by_site.remove(&site_id) != Some(job_id) {
+                    return Err(JobWorldError::IndexCorruption);
+                }
+                match target {
+                    ConstructionPreparationTarget::NaturalResource { source } => {
+                        if self.harvest_by_source.remove(&source) != Some(job_id) {
+                            return Err(JobWorldError::IndexCorruption);
+                        }
+                    }
+                    ConstructionPreparationTarget::GroundItem { item_id, .. } => {
+                        if self.preparation_by_item.remove(&item_id) != Some(job_id) {
+                            return Err(JobWorldError::IndexCorruption);
+                        }
+                    }
+                    ConstructionPreparationTarget::Character { .. } => {}
+                }
+            }
             JobKind::EquipTool { item_id } => {
                 if self.equip_by_item.remove(&item_id) != Some(job_id) {
                     return Err(JobWorldError::IndexCorruption);
@@ -598,6 +667,24 @@ impl JobWorld {
                         return false;
                     }
                 }
+                JobKind::PrepareConstruction { site_id, target } => {
+                    if self.preparation_by_site.get(&site_id) != Some(id) {
+                        return false;
+                    }
+                    match target {
+                        ConstructionPreparationTarget::NaturalResource { source } => {
+                            if self.harvest_by_source.get(&source) != Some(id) {
+                                return false;
+                            }
+                        }
+                        ConstructionPreparationTarget::GroundItem { item_id, .. } => {
+                            if self.preparation_by_item.get(&item_id) != Some(id) {
+                                return false;
+                            }
+                        }
+                        ConstructionPreparationTarget::Character { .. } => {}
+                    }
+                }
                 JobKind::EquipTool { item_id } => {
                     if self.equip_by_item.get(&item_id) != Some(id) {
                         return false;
@@ -618,7 +705,16 @@ impl JobWorld {
             == self
                 .jobs
                 .values()
-                .filter(|job| matches!(job.kind(), JobKind::Harvest { .. }))
+                .filter(|job| {
+                    matches!(job.kind(), JobKind::Harvest { .. })
+                        || matches!(
+                            job.kind(),
+                            JobKind::PrepareConstruction {
+                                target: ConstructionPreparationTarget::NaturalResource { .. },
+                                ..
+                            }
+                        )
+                })
                 .count()
             && self.eat_by_character.len()
                 == self
@@ -675,6 +771,26 @@ impl JobWorld {
                     .values()
                     .filter(|job| matches!(job.kind(), JobKind::Construct { .. }))
                     .count()
+            && self.preparation_by_site.len()
+                == self
+                    .jobs
+                    .values()
+                    .filter(|job| matches!(job.kind(), JobKind::PrepareConstruction { .. }))
+                    .count()
+            && self.preparation_by_item.len()
+                == self
+                    .jobs
+                    .values()
+                    .filter(|job| {
+                        matches!(
+                            job.kind(),
+                            JobKind::PrepareConstruction {
+                                target: ConstructionPreparationTarget::GroundItem { .. },
+                                ..
+                            }
+                        )
+                    })
+                    .count()
     }
 }
 
@@ -695,6 +811,8 @@ pub(crate) enum JobWorldError {
     CraftInputsAlreadyReserved(EntityId),
     ConstructionDeliveryAlreadyDesignated(EntityId),
     ConstructionAlreadyDesignated(EntityId),
+    ConstructionPreparationAlreadyDesignated(EntityId),
+    ConstructionPreparationItemAlreadyReserved(EntityId),
     EquipItemAlreadyReserved(EntityId),
     JobNotCraft(EntityId),
     WorkerAlreadyReserved(EntityId),

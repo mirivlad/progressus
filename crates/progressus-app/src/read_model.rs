@@ -2,7 +2,8 @@ use progressus_sim::{
     Character, ConstructionMaterialState, ConstructionSite, DoorState, ItemId, ItemLocation,
     ItemStack, Job, JobKind, JobState, MovementState, NaturalResource, NaturalResourceId,
     ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind, RecipeId,
-    Stockpile, Structure, StructureId, Workstation, WorkstationId, WorldPosition,
+    Stockpile, Structure, StructureId, Workstation, WorkstationConstructionSite, WorkstationId,
+    WorldPosition,
 };
 
 use crate::{
@@ -35,6 +36,7 @@ pub struct ClientSnapshot {
     pub production_orders: Vec<ProductionOrderSnapshot>,
     pub production_logistics: Vec<ProductionLogisticsSnapshot>,
     pub construction_sites: Vec<ConstructionSiteSnapshot>,
+    pub workstation_construction_sites: Vec<WorkstationConstructionSiteSnapshot>,
     pub structures: Vec<StructureSnapshot>,
     pub characters: Vec<CharacterSnapshot>,
     pub navigation: Option<NavigationSnapshot>,
@@ -230,6 +232,23 @@ pub struct ConstructionSiteSnapshot {
     pub cell: WorldCell,
     pub material_item_id: Option<EntityId>,
     pub material_state: Option<ConstructionMaterialState>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WorkstationConstructionSiteSnapshot {
+    pub id: EntityId,
+    pub kind: WorkstationId,
+    pub cell: WorldCell,
+}
+
+impl From<&WorkstationConstructionSite> for WorkstationConstructionSiteSnapshot {
+    fn from(site: &WorkstationConstructionSite) -> Self {
+        Self {
+            id: site.id(),
+            kind: site.kind(),
+            cell: site.cell(),
+        }
+    }
 }
 
 impl From<&ConstructionSite> for ConstructionSiteSnapshot {

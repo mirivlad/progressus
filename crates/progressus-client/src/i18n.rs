@@ -301,6 +301,7 @@ impl Locale {
             (Language::Ru, JobKind::SupplyProduction { .. }) => "подача сырья",
             (Language::Ru, JobKind::DeliverConstruction { .. }) => "доставка на стройку",
             (Language::Ru, JobKind::Construct { .. }) => "строительство",
+            (Language::Ru, JobKind::PrepareConstruction { .. }) => "подготовка стройплощадки",
             (Language::En, JobKind::EquipTool { .. }) => "fetching a tool",
             (Language::En, JobKind::Harvest { .. }) => "harvest",
             (Language::En, JobKind::Eat { .. }) => "eat",
@@ -309,6 +310,7 @@ impl Locale {
             (Language::En, JobKind::SupplyProduction { .. }) => "production supply",
             (Language::En, JobKind::DeliverConstruction { .. }) => "construction delivery",
             (Language::En, JobKind::Construct { .. }) => "construction",
+            (Language::En, JobKind::PrepareConstruction { .. }) => "site preparation",
         }
     }
 
