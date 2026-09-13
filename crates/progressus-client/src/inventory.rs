@@ -226,6 +226,8 @@ pub(crate) fn sync_world_hover_tooltip(
     ) {
         (Language::Ru, true, true) => "ПКМ: подойти и экипировать · ЛКМ: сведения",
         (Language::En, true, true) => "Right-click: fetch and equip · Left-click: inspect",
+        (Language::Ru, false, true) => "ПКМ: подойти и экипировать · Alt+ЛКМ: сведения",
+        (Language::En, false, true) => "Right-click: fetch and equip · Alt+click: inspect",
         (Language::Ru, true, false) => "Щёлкните, чтобы закрепить",
         (Language::En, true, false) => "Click to pin",
         (Language::Ru, false, _) => "Alt+щелчок: закрепить, не применяя инструмент",

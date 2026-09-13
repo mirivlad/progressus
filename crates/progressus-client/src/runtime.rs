@@ -212,12 +212,17 @@ pub(crate) fn pointer_navigation(
     }
     let tool_active = tool.mode != ToolMode::Select;
     let area_tool = tool.mode.uses_area_drag();
-
-    if tool_active && buttons.just_pressed(MouseButton::Right) {
+    let hovered_equipment = selected.0.is_some()
+        && matches!(inspection.hovered, Some(crate::inventory::InspectedObject::Item(id)) if scene
+            .items
+            .iter()
+            .any(|item| item.id == id && item.kind.definition().equip_slot.is_some()));
+    if tool_active && buttons.just_pressed(MouseButton::Right) && !hovered_equipment {
         tool.mode = ToolMode::Select;
         tool.cancel_drag();
         return;
     }
+
     if tool.pointer_over_ui && tool.drag_start.is_none() {
         return;
     }
@@ -245,6 +250,20 @@ pub(crate) fn pointer_navigation(
     let Some(target) = crate::low_poly::space::position(point, view.origin) else {
         return;
     };
+    let equipment_order = selected
+        .0
+        .filter(|_| buttons.just_pressed(MouseButton::Right))
+        .and_then(|character_id| {
+            let command =
+                right_click_command(&scene.items, character_id, inspection.hovered, target);
+            matches!(command, Command::FetchAndEquipItem { .. }).then_some(command)
+        });
+    let tool_handles_pointer = tool_handles_pointer(tool_active, equipment_order.is_some());
+    if tool_handles_pointer && buttons.just_pressed(MouseButton::Right) {
+        tool.mode = ToolMode::Select;
+        tool.cancel_drag();
+        return;
+    }
 
     let modified_left = keys.any_pressed([
         KeyCode::ControlLeft,
@@ -332,7 +351,7 @@ pub(crate) fn pointer_navigation(
         }
     }
 
-    if tool_active {
+    if tool_handles_pointer {
         let cell = target.containing_cell();
         if !area_tool {
             if buttons.just_pressed(MouseButton::Left) {
@@ -457,7 +476,9 @@ pub(crate) fn pointer_navigation(
         return;
     };
     // Hover uses the visible scene; the lightweight authority snapshot has no ground items.
-    let command = right_click_command(&scene.items, character_id, inspection.hovered, target);
+    let command = equipment_order.unwrap_or_else(|| {
+        right_click_command(&scene.items, character_id, inspection.hovered, target)
+    });
     match authoritative.application.execute(command) {
         Ok(()) => {
             inspection.clear_feedback();
@@ -470,6 +491,10 @@ pub(crate) fn pointer_navigation(
             warn!("right-click command rejected: {error}");
         }
     }
+}
+
+const fn tool_handles_pointer(tool_active: bool, equipment_order: bool) -> bool {
+    tool_active && !equipment_order
 }
 
 fn right_click_command(
@@ -1482,6 +1507,13 @@ mod tests {
                 destination,
             }
         );
+    }
+
+    #[test]
+    fn active_tool_does_not_consume_equipment_right_click() {
+        assert!(!super::tool_handles_pointer(true, true));
+        assert!(super::tool_handles_pointer(true, false));
+        assert!(!super::tool_handles_pointer(false, false));
     }
 
     #[test]
