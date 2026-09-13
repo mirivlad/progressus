@@ -174,6 +174,10 @@ impl Character {
         self.rest = self.rest.saturating_sub(1);
     }
 
+    pub(crate) fn restore_rest(&mut self, amount: u8) {
+        self.rest = self.rest.saturating_add(amount).min(MAX_REST);
+    }
+
     pub const fn is_hungry(&self) -> bool {
         self.satiety <= HUNGRY_SATIETY
     }

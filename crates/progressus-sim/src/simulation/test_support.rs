@@ -19,6 +19,16 @@ pub(super) fn set_satiety(simulation: &mut Simulation, character_id: EntityId, t
     }
 }
 
+pub(super) fn set_rest(simulation: &mut Simulation, character_id: EntityId, target: u8) {
+    let character = simulation.characters.get_mut(&character_id).unwrap();
+    while character.rest() > target {
+        character.decay_rest();
+    }
+    if character.rest() < target {
+        character.restore_rest(target - character.rest());
+    }
+}
+
 pub(super) fn total_berries(simulation: &Simulation) -> u32 {
     simulation
         .items()

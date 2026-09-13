@@ -21,13 +21,14 @@ pub use construction::{
 };
 pub use entity::{
     Character, DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED, Direction, EntityId,
-    HUNGRY_SATIETY, MAX_REST, MAX_SATIETY, MovementSpeed, MovementState,
-    REST_DECAY_INTERVAL_TICKS, SATIETY_DECAY_INTERVAL_TICKS, TIRED_REST,
+    HUNGRY_SATIETY, MAX_REST, MAX_SATIETY, MovementSpeed, MovementState, REST_DECAY_INTERVAL_TICKS,
+    SATIETY_DECAY_INTERVAL_TICKS, TIRED_REST,
 };
 pub use exploration::CHARACTER_VISION_RADIUS_CELLS;
 pub use item_world::{ItemLocation, ItemQuantity, ItemStack, MAX_CONTAINER_DEPTH};
 pub use job::{
     ConstructionPreparationTarget, EAT_WORK_TICKS, HARVEST_WORK_TICKS, Job, JobKind, JobState,
+    SLEEP_WORK_TICKS,
 };
 pub use position::{
     InteractionRadius, SUBUNITS_PER_CELL, WorldPosition, WorldPositionError,

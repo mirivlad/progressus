@@ -44,11 +44,11 @@
 
 **Interfaces:** `JobKind::Sleep { character_id, bed_id: Option<EntityId> }`; one reservation index per character and per occupied bed; `is_enclosed(WorldCell) -> bool` is derived and read-only.
 
-- [ ] Write red enclosure tests: closed wall ring true, one-wall gap false, open/closed door as boundary, furniture ignored, rock pocket true, `>256` cells false, no exploration/residency changes. Run `cargo test -p progressus-sim enclosure_`.
-- [ ] Implement a cardinal BFS with at most `256` visited passable cells, reading effective terrain by point lookup and completed wall-network structures; never store room IDs or generate resident chunks. Run enclosure tests green.
-- [ ] Write red Sleep tests: tired character takes reachable free bed; second character cannot reserve it; no bed yields ground sleep; Eat interrupts Sleep; cancellation, manual order, and route failure release reservations; completion restores the ADR's exact tiers. Run `cargo test -p progressus-sim sleep_`.
-- [ ] Add indexed Sleep job creation, assignment, navigation/work completion and cleanup through the existing job lifecycle. Ground sleep has no bed reservation. Keep starvation's existing work block, but not a tiredness work block. Run focused tests green.
-- [ ] Add red then green save/load tests for active bed and ground Sleep jobs, canonical continuation and invalid/orphan reservation rejection. Run `cargo test -p progressus-sim --lib`; commit and push.
+- [x] Write red enclosure test for a closed wall ring and one-wall gap, then add door, furniture, rock pocket, budget and no exploration/residency mutation cases.
+- [x] Implement cardinal BFS with a `256`-cell budget against point terrain and completed wall-network structures; no room state is stored.
+- [x] Write red Sleep reservation-index test, then test reachable exclusive bed, ground fallback, Eat preemption, cancellation/manual order/path failure, and all three restoration tiers.
+- [x] Add indexed Sleep jobs, navigation/work completion and cleanup through the existing job lifecycle. Ground sleep has no bed reservation; tiredness does not block other work.
+- [x] Test active bed and ground Sleep save/load continuation, invalid bed/worker rejection, full simulation tests and client compilation; commit and push.
 
 ### Task 4: Client bed and rest UX
 

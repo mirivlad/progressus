@@ -1,15 +1,198 @@
-//! Authoritative hunger: deterministic satiety decay and the physical Eat job.
+//! Authoritative food and rest needs with physical Eat and Sleep jobs.
 
 use super::*;
+use progressus_content::structure;
 
 impl Simulation {
     pub(super) fn decay_rest_if_due(&mut self) {
-        if !self.clock.tick().value().is_multiple_of(REST_DECAY_INTERVAL_TICKS) {
+        if !self
+            .clock
+            .tick()
+            .value()
+            .is_multiple_of(REST_DECAY_INTERVAL_TICKS)
+        {
             return;
         }
         for character in self.characters.values_mut() {
             character.decay_rest();
         }
+    }
+
+    pub(super) fn maintain_sleep_jobs(&mut self) -> Result<(), SimulationError> {
+        let ids = self.characters.keys().copied().collect::<Vec<_>>();
+        for character_id in ids {
+            let character = self.characters.get(&character_id).expect("known character");
+            if !character.is_tired()
+                || character.is_hungry()
+                || self
+                    .job_world
+                    .sleep_job_for_character(character_id)
+                    .is_some()
+            {
+                continue;
+            }
+            let current_job = self.job_world.job_for_worker(character_id);
+            if current_job.is_none() && !character.is_available_for_work() {
+                continue;
+            }
+            let character_cell = character.position().containing_cell();
+            let mut beds = self
+                .construction_world
+                .structures()
+                .filter(|bed| bed.kind() == structure::BED)
+                .filter(|bed| self.job_world.sleep_job_for_bed(bed.id()).is_none())
+                .map(|bed| {
+                    (
+                        cell_manhattan_distance(character_cell, bed.cell()),
+                        bed.id(),
+                        bed.cell(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            beds.sort_unstable();
+            let mut selected = None;
+            for (_, bed_id, cell) in beds {
+                let destination = WorldPosition::from_cell_center(cell)?;
+                match self.plan_navigation_route(character_id, destination) {
+                    Ok(route) => {
+                        selected = Some((bed_id, destination, route));
+                        break;
+                    }
+                    Err(
+                        SimulationError::MoveToDestinationBlocked(_)
+                        | SimulationError::MoveToDestinationUndiscovered(_)
+                        | SimulationError::MoveToPathNotFound
+                        | SimulationError::MoveToSearchBudgetExceeded,
+                    ) => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+            if current_job.is_some() {
+                self.interrupt_worker_job(character_id)?;
+            }
+            let bed_id = selected.as_ref().map(|(id, _, _)| *id);
+            let job_id = self.id_allocator.allocate()?;
+            self.job_world
+                .insert(Job::new(
+                    job_id,
+                    JobKind::Sleep {
+                        character_id,
+                        bed_id,
+                    },
+                ))
+                .map_err(SimulationError::from_job_world)?;
+            self.job_world
+                .reserve_worker(job_id, character_id)
+                .map_err(SimulationError::from_job_world)?;
+            if let Some((_, destination, route)) = selected {
+                self.apply_navigation_route(character_id, destination, route);
+            } else {
+                self.characters
+                    .get_mut(&character_id)
+                    .expect("known character")
+                    .set_movement(MovementState::Idle);
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn try_assign_sleep(&mut self, job_id: EntityId) -> Result<(), SimulationError> {
+        // A Sleep job becomes available only after an interruption. It is
+        // cancelled, not reassigned, so its bed reservation cannot linger.
+        self.cancel_job(job_id)
+    }
+
+    pub(super) fn advance_reserved_sleep(
+        &mut self,
+        job_id: EntityId,
+        character_id: EntityId,
+        bed_id: Option<EntityId>,
+        worker_id: EntityId,
+    ) -> Result<(), SimulationError> {
+        if worker_id != character_id {
+            return Err(SimulationError::JobInvariantViolation);
+        }
+        let Some(character) = self.characters.get(&character_id) else {
+            self.cancel_job(job_id)?;
+            return Ok(());
+        };
+        if let Some(bed_id) = bed_id {
+            let Some(bed) = self
+                .construction_world
+                .structure(bed_id)
+                .filter(|structure| structure.kind() == structure::BED)
+            else {
+                self.cancel_job(job_id)?;
+                return Ok(());
+            };
+            if character.position() != WorldPosition::from_cell_center(bed.cell())? {
+                if !matches!(character.movement(), MovementState::Navigating { .. }) {
+                    self.cancel_job(job_id)?;
+                }
+                return Ok(());
+            }
+        }
+        self.characters
+            .get_mut(&character_id)
+            .expect("sleep worker is present")
+            .set_movement(MovementState::Idle);
+        self.job_world
+            .start_working(job_id, SLEEP_WORK_TICKS)
+            .map_err(SimulationError::from_job_world)
+    }
+
+    pub(super) fn advance_working_sleep(
+        &mut self,
+        job_id: EntityId,
+        character_id: EntityId,
+        bed_id: Option<EntityId>,
+        worker_id: EntityId,
+        remaining_ticks: u32,
+    ) -> Result<(), SimulationError> {
+        if worker_id != character_id {
+            return Err(SimulationError::JobInvariantViolation);
+        }
+        let Some(character) = self.characters.get(&character_id) else {
+            self.cancel_job(job_id)?;
+            return Ok(());
+        };
+        if let Some(bed_id) = bed_id {
+            let Some(bed) = self
+                .construction_world
+                .structure(bed_id)
+                .filter(|structure| structure.kind() == structure::BED)
+            else {
+                self.cancel_job(job_id)?;
+                return Ok(());
+            };
+            if character.position() != WorldPosition::from_cell_center(bed.cell())? {
+                self.cancel_job(job_id)?;
+                return Ok(());
+            }
+        }
+        if remaining_ticks > 1 {
+            return self
+                .job_world
+                .set_remaining_work(job_id, remaining_ticks - 1)
+                .map_err(SimulationError::from_job_world);
+        }
+        let restoration = if bed_id.is_some() {
+            if self.is_enclosed(character.position().containing_cell())? {
+                crate::MAX_REST
+            } else {
+                50
+            }
+        } else {
+            25
+        };
+        self.characters
+            .get_mut(&character_id)
+            .expect("sleep worker is present")
+            .restore_rest(restoration);
+        self.job_world
+            .remove(job_id)
+            .map_err(SimulationError::from_job_world)?;
+        Ok(())
     }
 
     pub(super) fn decay_satiety_if_due(&mut self) {
@@ -279,6 +462,281 @@ mod tests {
 
         simulation.advance_ticks(1).unwrap();
         assert_eq!(character(&simulation, cora).satiety(), MAX_SATIETY - 1);
+    }
+
+    #[test]
+    fn sleep_on_ground_is_an_explicit_job_that_restores_without_a_bed() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let sleeper = cora();
+        set_rest(&mut simulation, sleeper, crate::TIRED_REST);
+        simulation.advance_ticks(1).unwrap();
+        let job_id = simulation
+            .job_world
+            .sleep_job_for_character(sleeper)
+            .unwrap();
+        assert_eq!(
+            simulation.job_world.get(job_id).unwrap().kind(),
+            JobKind::Sleep {
+                character_id: sleeper,
+                bed_id: None,
+            }
+        );
+        let saved = simulation.save_json().unwrap();
+        let mut restored = Simulation::load_json(&saved).unwrap();
+        simulation
+            .advance_ticks(u64::from(SLEEP_WORK_TICKS))
+            .unwrap();
+        restored.advance_ticks(u64::from(SLEEP_WORK_TICKS)).unwrap();
+        assert_eq!(
+            restored.save_json().unwrap(),
+            simulation.save_json().unwrap()
+        );
+        assert!(
+            simulation
+                .job_world
+                .sleep_job_for_character(sleeper)
+                .is_none()
+        );
+        assert!(character(&simulation, sleeper).rest() > crate::TIRED_REST);
+        assert!(simulation.job_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn one_finished_bed_is_exclusive_and_other_tired_character_sleeps_on_ground() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let bed_cell = WorldCell::new(0, 1);
+        simulation
+            .set_terrain_override(bed_cell, terrain::GRASS)
+            .unwrap();
+        let bed_id = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .construction_world
+            .insert_site(ConstructionSite::new(bed_id, structure::BED, bed_cell))
+            .unwrap();
+        simulation.construction_world.complete_site(bed_id).unwrap();
+        let ada = EntityId::new(1).unwrap();
+        let borin = EntityId::new(2).unwrap();
+        set_rest(&mut simulation, ada, crate::TIRED_REST);
+        set_rest(&mut simulation, borin, crate::TIRED_REST);
+        simulation.advance_ticks(1).unwrap();
+        let bed_job = simulation.job_world.sleep_job_for_bed(bed_id).unwrap();
+        assert!(matches!(simulation.job_world.get(bed_job).unwrap().kind(),
+            JobKind::Sleep { bed_id: Some(id), .. } if id == bed_id));
+        let other = if simulation.job_world.get(bed_job).unwrap().kind()
+            == (JobKind::Sleep {
+                character_id: ada,
+                bed_id: Some(bed_id),
+            }) {
+            borin
+        } else {
+            ada
+        };
+        assert!(matches!(
+            simulation
+                .job_world
+                .get(simulation.job_world.sleep_job_for_character(other).unwrap())
+                .unwrap()
+                .kind(),
+            JobKind::Sleep { bed_id: None, .. }
+        ));
+        assert!(simulation.job_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn sleep_job_survives_save_load_and_interrupt_releases_bed() {
+        let mut original = Simulation::new(WorldSeed::new(0)).unwrap();
+        let cell = WorldCell::new(0, 1);
+        original.set_terrain_override(cell, terrain::GRASS).unwrap();
+        let bed_id = original.id_allocator.allocate().unwrap();
+        original
+            .construction_world
+            .insert_site(ConstructionSite::new(bed_id, structure::BED, cell))
+            .unwrap();
+        original.construction_world.complete_site(bed_id).unwrap();
+        let sleeper = cora();
+        set_rest(&mut original, sleeper, crate::TIRED_REST);
+        original.advance_ticks(1).unwrap();
+        let job_id = original.job_world.sleep_job_for_bed(bed_id).unwrap();
+        let saved = original.save_json().unwrap();
+        let mut restored = Simulation::load_json(&saved).unwrap();
+        assert_eq!(restored.save_json().unwrap(), saved);
+        original.advance_ticks(80).unwrap();
+        restored.advance_ticks(80).unwrap();
+        assert_eq!(restored.save_json().unwrap(), original.save_json().unwrap());
+
+        let mut interrupted = Simulation::load_json(&saved).unwrap();
+        interrupted.cancel_job(job_id).unwrap();
+        assert_eq!(interrupted.job_world.sleep_job_for_bed(bed_id), None);
+        assert_eq!(interrupted.job_world.sleep_job_for_character(sleeper), None);
+        assert!(interrupted.job_world.indexes_are_consistent());
+
+        let mut invalid_bed: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        let job = invalid_bed["jobs"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|job| job["id"] == job_id.value())
+            .unwrap();
+        job["job"]["bed_id"] = serde_json::Value::from(999_999_u64);
+        assert!(Simulation::load_json(&serde_json::to_vec(&invalid_bed).unwrap()).is_err());
+
+        let mut wrong_worker: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+        let job = wrong_worker["jobs"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|job| job["id"] == job_id.value())
+            .unwrap();
+        job["state"]["worker_id"] = serde_json::Value::from(1_u64);
+        assert!(Simulation::load_json(&serde_json::to_vec(&wrong_worker).unwrap()).is_err());
+    }
+
+    #[test]
+    fn hungry_character_preempts_sleep_and_eats_first() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let sleeper = cora();
+        set_rest(&mut simulation, sleeper, crate::TIRED_REST);
+        simulation.advance_ticks(1).unwrap();
+        assert!(
+            simulation
+                .job_world
+                .sleep_job_for_character(sleeper)
+                .is_some()
+        );
+        set_satiety(&mut simulation, sleeper, HUNGRY_SATIETY);
+        simulation.advance_ticks(1).unwrap();
+        assert!(
+            simulation
+                .job_world
+                .sleep_job_for_character(sleeper)
+                .is_none()
+        );
+        assert!(
+            simulation
+                .job_world
+                .eat_job_for_character(sleeper)
+                .is_some()
+        );
+        assert!(simulation.job_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn sheltered_bed_restores_full_rest_while_open_bed_restores_fifty() {
+        for enclosed in [false, true] {
+            let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+            let center = WorldCell::new(0, 0);
+            simulation
+                .set_terrain_override(center, terrain::GRASS)
+                .unwrap();
+            let bed_id = simulation.id_allocator.allocate().unwrap();
+            simulation
+                .construction_world
+                .insert_site(ConstructionSite::new(bed_id, structure::BED, center))
+                .unwrap();
+            simulation.construction_world.complete_site(bed_id).unwrap();
+            if enclosed {
+                for y in -1_i64..=1 {
+                    for x in -1_i64..=1 {
+                        if x.abs() != 1 && y.abs() != 1 {
+                            continue;
+                        }
+                        let cell = WorldCell::new(x, y);
+                        simulation
+                            .set_terrain_override(cell, terrain::GRASS)
+                            .unwrap();
+                        let wall_id = simulation.id_allocator.allocate().unwrap();
+                        simulation
+                            .construction_world
+                            .insert_site(ConstructionSite::new(
+                                wall_id,
+                                structure::STONE_WALL,
+                                cell,
+                            ))
+                            .unwrap();
+                        simulation
+                            .construction_world
+                            .complete_site(wall_id)
+                            .unwrap();
+                    }
+                }
+            } else {
+                for y in -20..=20 {
+                    for x in -20..=20 {
+                        simulation
+                            .set_terrain_override(WorldCell::new(x, y), terrain::GRASS)
+                            .unwrap();
+                    }
+                }
+            }
+            let sleeper = cora();
+            set_rest(&mut simulation, sleeper, crate::TIRED_REST);
+            simulation.advance_ticks(1).unwrap();
+            assert!(simulation.job_world.sleep_job_for_bed(bed_id).is_some());
+            simulation
+                .advance_ticks(u64::from(SLEEP_WORK_TICKS))
+                .unwrap();
+            assert_eq!(
+                character(&simulation, sleeper).rest(),
+                if enclosed { 100 } else { 79 }
+            );
+        }
+    }
+
+    #[test]
+    fn manual_move_cancels_sleep_and_releases_bed_immediately() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let center = WorldCell::new(0, 0);
+        simulation
+            .set_terrain_override(center, terrain::GRASS)
+            .unwrap();
+        let bed_id = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .construction_world
+            .insert_site(ConstructionSite::new(bed_id, structure::BED, center))
+            .unwrap();
+        simulation.construction_world.complete_site(bed_id).unwrap();
+        let sleeper = cora();
+        set_rest(&mut simulation, sleeper, crate::TIRED_REST);
+        simulation.advance_ticks(1).unwrap();
+        assert!(simulation.job_world.sleep_job_for_bed(bed_id).is_some());
+        simulation
+            .set_movement_direction(sleeper, Direction::East)
+            .unwrap();
+        assert_eq!(simulation.job_world.sleep_job_for_bed(bed_id), None);
+        assert_eq!(simulation.job_world.job_for_worker(sleeper), None);
+        assert!(simulation.job_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn blocked_sleep_route_releases_bed_reservation() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let bed_cell = WorldCell::new(0, 2);
+        for cell in [WorldCell::new(0, 0), WorldCell::new(0, 1), bed_cell] {
+            simulation
+                .set_terrain_override(cell, terrain::GRASS)
+                .unwrap();
+        }
+        let bed_id = simulation.id_allocator.allocate().unwrap();
+        simulation
+            .construction_world
+            .insert_site(ConstructionSite::new(bed_id, structure::BED, bed_cell))
+            .unwrap();
+        simulation.construction_world.complete_site(bed_id).unwrap();
+        let sleeper = cora();
+        set_rest(&mut simulation, sleeper, crate::TIRED_REST);
+        simulation.advance_ticks(1).unwrap();
+        assert!(simulation.job_world.sleep_job_for_bed(bed_id).is_some());
+        simulation
+            .set_terrain_override(WorldCell::new(0, 1), terrain::ROCK)
+            .unwrap();
+        for _ in 0..8 {
+            simulation.advance_ticks(1).unwrap();
+            if simulation.job_world.sleep_job_for_bed(bed_id).is_none() {
+                break;
+            }
+        }
+        assert_eq!(simulation.job_world.sleep_job_for_bed(bed_id), None);
+        assert!(simulation.job_world.indexes_are_consistent());
     }
 
     #[test]

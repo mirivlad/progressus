@@ -126,6 +126,8 @@ impl SimulationError {
             JobWorldError::DuplicateJob(_)
             | JobWorldError::EatCharacterAlreadyDesignated(_)
             | JobWorldError::EatItemAlreadyReserved(_)
+            | JobWorldError::SleepCharacterAlreadyDesignated(_)
+            | JobWorldError::SleepBedAlreadyReserved(_)
             | JobWorldError::HaulItemAlreadyReserved(_)
             | JobWorldError::HaulDestinationAlreadyReserved(_)
             | JobWorldError::ProductionSupplyItemAlreadyReserved(_)

@@ -1260,7 +1260,9 @@ mod tests {
             .filter(|item| item.kind() == item::WOOD)
             .map(|item| item.quantity().get())
             .sum::<u32>();
-        let site_id = simulation.designate_construction(structure::BED, cell).unwrap();
+        let site_id = simulation
+            .designate_construction(structure::BED, cell)
+            .unwrap();
         let mut delivered = false;
         for _ in 0..768 {
             simulation.advance_ticks(1).unwrap();

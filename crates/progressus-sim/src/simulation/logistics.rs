@@ -282,6 +282,7 @@ impl Simulation {
                 JobKind::Haul { .. } => Some(job.id()),
                 JobKind::Harvest { .. }
                 | JobKind::Eat { .. }
+                | JobKind::Sleep { .. }
                 | JobKind::Craft { .. }
                 | JobKind::SupplyProduction { .. }
                 | JobKind::EquipTool { .. }
@@ -1010,6 +1011,7 @@ mod tests {
                 } => Some((item_id, destination)),
                 JobKind::Harvest { .. }
                 | JobKind::Eat { .. }
+                | JobKind::Sleep { .. }
                 | JobKind::Craft { .. }
                 | JobKind::SupplyProduction { .. }
                 | JobKind::DeliverConstruction { .. }

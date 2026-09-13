@@ -217,7 +217,7 @@ pub(crate) fn draw_job_designations(
                         .find(|site| site.id == site_id)
                         .map(|site| site.cell)
                 }),
-            JobKind::Haul { .. } | JobKind::SupplyProduction { .. } => None,
+            JobKind::Haul { .. } | JobKind::SupplyProduction { .. } | JobKind::Sleep { .. } => None,
         };
         let Some(cell) = cell else {
             continue;

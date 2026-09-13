@@ -663,7 +663,9 @@ impl CharacterSave {
         if self.rest > MAX_REST {
             return invalid(format!(
                 "character {} has rest {} above maximum {}",
-                id.value(), self.rest, MAX_REST
+                id.value(),
+                self.rest,
+                MAX_REST
             ));
         }
         let idle_anchor = self
@@ -997,6 +999,10 @@ enum JobKindSave {
         character_id: u64,
         item_id: u64,
     },
+    Sleep {
+        character_id: u64,
+        bed_id: Option<u64>,
+    },
     Haul {
         item_id: u64,
         stockpile_id: u64,
@@ -1114,6 +1120,13 @@ impl From<JobKind> for JobKindSave {
                 character_id: character_id.value(),
                 item_id: item_id.value(),
             },
+            JobKind::Sleep {
+                character_id,
+                bed_id,
+            } => Self::Sleep {
+                character_id: character_id.value(),
+                bed_id: bed_id.map(EntityId::value),
+            },
             JobKind::Haul {
                 item_id,
                 stockpile_id,
@@ -1177,6 +1190,13 @@ impl JobKindSave {
             } => JobKind::Eat {
                 character_id: entity_id(character_id, "eat character_id")?,
                 item_id: entity_id(item_id, "eat item_id")?,
+            },
+            Self::Sleep {
+                character_id,
+                bed_id,
+            } => JobKind::Sleep {
+                character_id: entity_id(character_id, "sleep character_id")?,
+                bed_id: bed_id.map(|id| entity_id(id, "sleep bed_id")).transpose()?,
             },
             Self::Haul {
                 item_id,
@@ -1903,6 +1923,16 @@ fn restore_jobs(
                         character_id.value()
                     ));
                 }
+                if let JobKind::Sleep { character_id, .. } = kind
+                    && worker != character_id
+                {
+                    return invalid(format!(
+                        "sleep job {} is reserved by character {} instead of {}",
+                        id.value(),
+                        worker.value(),
+                        character_id.value()
+                    ));
+                }
                 if let JobKind::PrepareConstruction {
                     target: ConstructionPreparationTarget::Character { character_id, .. },
                     ..
@@ -1981,6 +2011,7 @@ fn restore_jobs(
                     kind,
                     JobKind::Harvest { .. }
                         | JobKind::Eat { .. }
+                        | JobKind::Sleep { .. }
                         | JobKind::Craft { .. }
                         | JobKind::Construct { .. }
                         | JobKind::PrepareConstruction {
@@ -1999,6 +2030,16 @@ fn restore_jobs(
                 {
                     return invalid(format!(
                         "eat job {} is reserved by character {} instead of {}",
+                        id.value(),
+                        worker.value(),
+                        character_id.value()
+                    ));
+                }
+                if let JobKind::Sleep { character_id, .. } = kind
+                    && worker != character_id
+                {
+                    return invalid(format!(
+                        "sleep job {} is worked by character {} instead of {}",
                         id.value(),
                         worker.value(),
                         character_id.value()
@@ -2086,6 +2127,29 @@ fn validate_job_references(
                     "eat job {} references non-food item {}",
                     job_id.value(),
                     item_id.value()
+                ));
+            }
+        }
+        JobKind::Sleep {
+            character_id,
+            bed_id,
+        } => {
+            if !characters.contains_key(&character_id) {
+                return invalid(format!(
+                    "sleep job {} references missing character {}",
+                    job_id.value(),
+                    character_id.value()
+                ));
+            }
+            if let Some(bed_id) = bed_id
+                && construction
+                    .structure(bed_id)
+                    .is_none_or(|bed| bed.kind() != progressus_content::structure::BED)
+            {
+                return invalid(format!(
+                    "sleep job {} references missing bed {}",
+                    job_id.value(),
+                    bed_id.value()
                 ));
             }
         }
@@ -2945,21 +3009,28 @@ mod tests {
         let mut simulation = Simulation::new(WorldSeed::new(42)).unwrap();
         simulation.advance_ticks(47).unwrap();
         let before: Value = serde_json::from_slice(&simulation.save_json().unwrap()).unwrap();
-        assert!(before["characters"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|character| character["rest"] == 100));
+        assert!(
+            before["characters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|character| character["rest"] == 100)
+        );
 
         simulation.advance_ticks(1).unwrap();
         let saved = simulation.save_json().unwrap();
         let after: Value = serde_json::from_slice(&saved).unwrap();
-        assert!(after["characters"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|character| character["rest"] == 99));
-        assert_eq!(Simulation::load_json(&saved).unwrap().save_json().unwrap(), saved);
+        assert!(
+            after["characters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|character| character["rest"] == 99)
+        );
+        assert_eq!(
+            Simulation::load_json(&saved).unwrap().save_json().unwrap(),
+            saved
+        );
     }
 
     #[test]
@@ -2970,7 +3041,11 @@ mod tests {
             character.as_object_mut().unwrap().remove("rest");
         }
         let restored = Simulation::load_json(&serde_json::to_vec(&json).unwrap()).unwrap();
-        assert!(restored.characters().all(|character| character.rest() == MAX_REST));
+        assert!(
+            restored
+                .characters()
+                .all(|character| character.rest() == MAX_REST)
+        );
     }
 
     #[test]
@@ -2980,7 +3055,6 @@ mod tests {
         json["characters"][0]["rest"] = Value::from(101);
         assert!(Simulation::load_json(&serde_json::to_vec(&json).unwrap()).is_err());
     }
-
 
     #[test]
     fn active_production_and_navigation_continue_deterministically_after_load() {

@@ -96,6 +96,7 @@ impl Simulation {
                 JobKind::Harvest { .. }
                 | JobKind::PrepareConstruction { .. }
                 | JobKind::Eat { .. }
+                | JobKind::Sleep { .. }
                 | JobKind::Craft { .. }
                 | JobKind::Construct { .. }
                 | JobKind::EquipTool { .. } => None,
@@ -138,7 +139,7 @@ impl Simulation {
             .get(job_id)
             .cloned()
             .ok_or(SimulationError::UnknownJob(job_id))?;
-        if matches!(job.kind(), JobKind::Eat { .. }) {
+        if matches!(job.kind(), JobKind::Eat { .. } | JobKind::Sleep { .. }) {
             self.cancel_job(job_id)?;
             return Ok(());
         }
@@ -154,6 +155,7 @@ impl Simulation {
                 JobKind::Harvest { .. }
                 | JobKind::PrepareConstruction { .. }
                 | JobKind::Eat { .. }
+                | JobKind::Sleep { .. }
                 | JobKind::Craft { .. }
                 | JobKind::Construct { .. }
                 | JobKind::EquipTool { .. } => None,
@@ -216,6 +218,7 @@ impl Simulation {
                 character_id,
                 item_id,
             } => self.try_assign_eat(job_id, character_id, item_id),
+            JobKind::Sleep { .. } => self.try_assign_sleep(job_id),
             JobKind::Haul {
                 item_id,
                 stockpile_id,
@@ -576,6 +579,12 @@ impl Simulation {
                         .release_worker(job_id)
                         .map_err(SimulationError::from_job_world)?;
                 }
+            }
+            JobKind::Sleep {
+                character_id,
+                bed_id,
+            } => {
+                self.advance_reserved_sleep(job_id, character_id, bed_id, worker_id)?;
             }
             JobKind::Haul {
                 item_id,
@@ -1161,6 +1170,7 @@ impl Simulation {
             }
             JobKind::Harvest { .. }
             | JobKind::Eat { .. }
+            | JobKind::Sleep { .. }
             | JobKind::Craft { .. }
             | JobKind::Construct { .. }
             | JobKind::PrepareConstruction { .. } => {
@@ -1281,6 +1291,18 @@ impl Simulation {
                     .get_mut(&character_id)
                     .expect("eat worker is still present")
                     .set_movement(MovementState::Idle);
+            }
+            JobKind::Sleep {
+                character_id,
+                bed_id,
+            } => {
+                self.advance_working_sleep(
+                    job_id,
+                    character_id,
+                    bed_id,
+                    worker_id,
+                    remaining_ticks,
+                )?;
             }
             JobKind::Haul { .. } | JobKind::SupplyProduction { .. } => {
                 return Err(SimulationError::JobInvariantViolation);

@@ -4,6 +4,7 @@ use crate::{EntityId, RecipeId, WorldCell};
 
 pub const HARVEST_WORK_TICKS: u32 = 4;
 pub const EAT_WORK_TICKS: u32 = 2;
+pub const SLEEP_WORK_TICKS: u32 = 64;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ConstructionPreparationTarget {
@@ -28,6 +29,10 @@ pub enum JobKind {
     Eat {
         character_id: EntityId,
         item_id: EntityId,
+    },
+    Sleep {
+        character_id: EntityId,
+        bed_id: Option<EntityId>,
     },
     Haul {
         item_id: EntityId,
@@ -126,6 +131,8 @@ pub(crate) struct JobWorld {
     harvest_by_source: BTreeMap<WorldCell, EntityId>,
     eat_by_character: BTreeMap<EntityId, EntityId>,
     eat_by_item: BTreeMap<EntityId, EntityId>,
+    sleep_by_character: BTreeMap<EntityId, EntityId>,
+    sleep_by_bed: BTreeMap<EntityId, EntityId>,
     haul_by_item: BTreeMap<EntityId, EntityId>,
     haul_by_destination: BTreeMap<WorldCell, EntityId>,
     production_supply_by_item: BTreeMap<EntityId, EntityId>,
@@ -170,6 +177,14 @@ impl JobWorld {
 
     pub(crate) fn eat_job_for_item(&self, item_id: EntityId) -> Option<EntityId> {
         self.eat_by_item.get(&item_id).copied()
+    }
+
+    pub(crate) fn sleep_job_for_character(&self, character_id: EntityId) -> Option<EntityId> {
+        self.sleep_by_character.get(&character_id).copied()
+    }
+
+    pub(crate) fn sleep_job_for_bed(&self, bed_id: EntityId) -> Option<EntityId> {
+        self.sleep_by_bed.get(&bed_id).copied()
     }
 
     pub(crate) fn haul_job_for_item(&self, item_id: EntityId) -> Option<EntityId> {
@@ -267,6 +282,21 @@ impl JobWorld {
                 }
                 self.eat_by_character.insert(character_id, id);
                 self.eat_by_item.insert(item_id, id);
+            }
+            JobKind::Sleep {
+                character_id,
+                bed_id,
+            } => {
+                if self.sleep_by_character.contains_key(&character_id) {
+                    return Err(JobWorldError::SleepCharacterAlreadyDesignated(character_id));
+                }
+                if let Some(bed_id) = bed_id {
+                    if self.sleep_by_bed.contains_key(&bed_id) {
+                        return Err(JobWorldError::SleepBedAlreadyReserved(bed_id));
+                    }
+                    self.sleep_by_bed.insert(bed_id, id);
+                }
+                self.sleep_by_character.insert(character_id, id);
             }
             JobKind::Haul {
                 item_id,
@@ -509,6 +539,19 @@ impl JobWorld {
                     return Err(JobWorldError::IndexCorruption);
                 }
             }
+            JobKind::Sleep {
+                character_id,
+                bed_id,
+            } => {
+                if self.sleep_by_character.remove(&character_id) != Some(job_id) {
+                    return Err(JobWorldError::IndexCorruption);
+                }
+                if let Some(bed_id) = bed_id
+                    && self.sleep_by_bed.remove(&bed_id) != Some(job_id)
+                {
+                    return Err(JobWorldError::IndexCorruption);
+                }
+            }
             JobKind::Haul {
                 item_id,
                 destination,
@@ -620,6 +663,16 @@ impl JobWorld {
                         return false;
                     }
                 }
+                JobKind::Sleep {
+                    character_id,
+                    bed_id,
+                } => {
+                    if self.sleep_by_character.get(&character_id) != Some(id)
+                        || bed_id.is_some_and(|bed_id| self.sleep_by_bed.get(&bed_id) != Some(id))
+                    {
+                        return false;
+                    }
+                }
                 JobKind::Haul {
                     item_id,
                     destination,
@@ -726,6 +779,26 @@ impl JobWorld {
                     .filter(|job| matches!(job.kind(), JobKind::Eat { .. }))
                     .count()
             && self.eat_by_character.len() == self.eat_by_item.len()
+            && self.sleep_by_character.len()
+                == self
+                    .jobs
+                    .values()
+                    .filter(|job| matches!(job.kind(), JobKind::Sleep { .. }))
+                    .count()
+            && self.sleep_by_bed.len()
+                == self
+                    .jobs
+                    .values()
+                    .filter(|job| {
+                        matches!(
+                            job.kind(),
+                            JobKind::Sleep {
+                                bed_id: Some(_),
+                                ..
+                            }
+                        )
+                    })
+                    .count()
             && self.haul_by_item.len()
                 == self
                     .jobs
@@ -804,6 +877,8 @@ pub(crate) enum JobWorldError {
     HarvestSourceAlreadyDesignated(WorldCell),
     EatCharacterAlreadyDesignated(EntityId),
     EatItemAlreadyReserved(EntityId),
+    SleepCharacterAlreadyDesignated(EntityId),
+    SleepBedAlreadyReserved(EntityId),
     HaulItemAlreadyReserved(EntityId),
     HaulDestinationAlreadyReserved(WorldCell),
     ProductionSupplyItemAlreadyReserved(EntityId),
@@ -901,6 +976,37 @@ mod tests {
         jobs.remove(id(20)).unwrap();
         assert_eq!(jobs.eat_job_for_character(id(3)), None);
         assert_eq!(jobs.eat_job_for_item(id(6)), None);
+        assert!(jobs.indexes_are_consistent());
+    }
+
+    #[test]
+    fn sleep_reserves_one_character_and_one_bed_until_cancelled() {
+        let mut jobs = JobWorld::default();
+        jobs.insert(Job::new(
+            id(20),
+            JobKind::Sleep {
+                character_id: id(3),
+                bed_id: Some(id(10)),
+            },
+        ))
+        .unwrap();
+        assert_eq!(jobs.sleep_job_for_character(id(3)), Some(id(20)));
+        assert_eq!(jobs.sleep_job_for_bed(id(10)), Some(id(20)));
+        assert!(
+            jobs.insert(Job::new(
+                id(21),
+                JobKind::Sleep {
+                    character_id: id(4),
+                    bed_id: Some(id(10)),
+                }
+            ))
+            .is_err()
+        );
+        jobs.reserve_worker(id(20), id(3)).unwrap();
+        jobs.remove(id(20)).unwrap();
+        assert_eq!(jobs.sleep_job_for_character(id(3)), None);
+        assert_eq!(jobs.sleep_job_for_bed(id(10)), None);
+        assert_eq!(jobs.job_for_worker(id(3)), None);
         assert!(jobs.indexes_are_consistent());
     }
 

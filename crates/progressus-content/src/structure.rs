@@ -133,7 +133,10 @@ mod tests {
         let bed = StructureId::from_name("bed").expect("bed is registered");
         assert_eq!(bed.definition().material, item::WOOD);
         assert_eq!(bed.definition().material_quantity, 2);
-        assert_eq!(bed.definition().navigation_cost, DOOR.definition().navigation_cost);
+        assert_eq!(
+            bed.definition().navigation_cost,
+            DOOR.definition().navigation_cost
+        );
         assert!(!bed.definition().connects_to_wall_network);
         assert!(!bed.definition().has_open_state);
     }
