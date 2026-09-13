@@ -1,6 +1,6 @@
 # ADR-0020 — Rest, sleep, and enclosure as shelter
 
-Status: **Proposed**
+Status: **Accepted**
 
 Date: 2026-09-10
 
