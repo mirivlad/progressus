@@ -81,7 +81,7 @@
 
   Shape the recipes for a legible clothed silhouette and clean neck/shoulder/hip joints at the existing orthographic scale; retain four deterministic appearance variants keyed by stable character ID. Keep the old `Character` recipe until scene migration passes.
 - [x] **Step 4: Cache and rig.** Add `Palette.character_parts: BTreeMap<(CharacterPart, u8), Handle<Mesh>>` and `Palette::character_part` with the same `entry(...).or_insert_with(|| meshes.add(...))` pattern as `Palette::get`. In `character.rs`, spawn one root with `Pawn(id)` and `MotionTarget(id, Vec3::ZERO)`, then torso/head/two arms/two legs as children, storing child `Entity` handles on `CharacterRig`. Replace only the character root spawn in `scene::sync`; leave terrain, items, workstation, and resource reconciliation untouched. Update the scene test's `Palette` fixture with the new cache field.
-- [ ] **Step 5: Green and commit.** Run the two focused tests, `cargo check -p progressus-client --all-targets -j 1`, and `cargo fmt --all -- --check`. Review only these files, commit `client: build articulated procedural character rig`, push `main`, and verify `HEAD == origin/main`.
+- [x] **Step 5: Green and commit.** Run the two focused tests, `cargo check -p progressus-client --all-targets -j 1`, and `cargo fmt --all -- --check`. Review only these files, commit `client: build articulated procedural character rig`, push `main`, and verify `HEAD == origin/main`.
 
 ## Task 2: Client-only idle, walk, and work poses
 
@@ -89,9 +89,9 @@
 
 **Interfaces:** `character::pose_kind(&CharacterSnapshot, &[JobSnapshot], &[WorldPosition]) -> PoseKind` yields `Walk`, `Work`, or `Idle`. `character::pose(PoseKind, phase_seconds: f32) -> CharacterPose` is pure and bounded; `character::animate_rigs(...)` applies its angles to the child transforms after authoritative root interpolation.
 
-- [ ] **Step 1: Red test.** Test `pose_kind`: a nonzero interpolated movement trace wins over a simultaneous `JobState::Working`; an idle character with `Working` Harvest/Craft/Construct chooses Work; other jobs choose Idle. Test `pose`: the two legs swing in opposite directions during Walk, feet/limb angles remain finite and bounded, Work moves arms without changing root position, and Idle does not resemble Walk.
-- [ ] **Step 2: Confirm red.** Run `cargo test -p progressus-client pose_kind -j 1 -- --nocapture` and `cargo test -p progressus-client character_pose -j 1 -- --nocapture`; expect the new assertions to fail before the implementation.
-- [ ] **Step 3: Pure pose rules.** Define exact state and finite transforms in `character.rs`, with all angles in radians and phase wrapped to a fixed period:
+- [x] **Step 1: Red test.** Test `pose_kind`: a nonzero interpolated movement trace wins over a simultaneous `JobState::Working`; an idle character with `Working` Harvest/Craft/Construct chooses Work; other jobs choose Idle. Test `pose`: the two legs swing in opposite directions during Walk, feet/limb angles remain finite and bounded, Work moves arms without changing root position, and Idle does not resemble Walk.
+- [x] **Step 2: Confirm red.** Run `cargo test -p progressus-client pose_kind -j 1 -- --nocapture` and `cargo test -p progressus-client character_pose -j 1 -- --nocapture`; expect the new assertions to fail before the implementation.
+- [x] **Step 3: Pure pose rules.** Define exact state and finite transforms in `character.rs`, with all angles in radians and phase wrapped to a fixed period:
 
   ```rust
   #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,7 +114,7 @@
   ```
 
   Adjust amplitudes only after in-game review; never use a swing as an authoritative completion callback.
-- [ ] **Step 4: Apply pose.** Run root interpolation as today, then rotate the rig's limb child `Transform`s around their pivots. Keep an animation phase per visible character across the four-per-second authoritative snapshot refreshes; advance it using `Time::delta_secs()` only while `TickScheduler` is unpaused, and clear it with the disposable scene on load/eviction. Derive Work only from the detached `jobs` read model. Do not allocate mesh or make a per-frame snapshot copy.
+- [x] **Step 4: Apply pose.** Run root interpolation as today, then rotate the rig's limb child `Transform`s around their pivots. Keep an animation phase per visible character across the four-per-second authoritative snapshot refreshes; advance it using `Time::delta_secs()` only while `TickScheduler` is unpaused, and clear it with the disposable scene on load/eviction. Derive Work only from the detached `jobs` read model. Do not allocate mesh or make a per-frame snapshot copy.
 - [ ] **Step 5: Green and commit.** Run focused pose/scene tests, all client tests, `cargo check -p progressus-client --all-targets -j 1`, and format. Check a native walk/work frame if display is available; report if not. Commit `client: animate articulated idle walk and work poses`, push, and verify remote equality.
 
 ## Task 3: Physical tool and cart attachments

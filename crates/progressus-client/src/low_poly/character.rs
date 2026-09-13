@@ -1,8 +1,9 @@
 //! Disposable render hierarchy for a character. Simulation identity stays on the root.
 
 use super::{MotionTarget, Palette, Pawn, models::CharacterPart, space};
+use crate::{navigation::VisualMotion, runtime::AuthoritativeClient};
 use bevy::prelude::*;
-use progressus_app::{EntityId, WorldCell, WorldPosition};
+use progressus_app::{EntityId, JobKind, JobSnapshot, JobState, WorldCell, WorldPosition};
 
 #[derive(Component)]
 pub(crate) struct CharacterRig {
@@ -12,6 +13,106 @@ pub(crate) struct CharacterRig {
     pub(crate) right_arm: Entity,
     pub(crate) left_leg: Entity,
     pub(crate) right_leg: Entity,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PoseKind {
+    Idle,
+    Walk,
+    Work,
+}
+
+pub(crate) struct CharacterPose {
+    pub(crate) left_leg: f32,
+    pub(crate) right_leg: f32,
+    pub(crate) left_arm: f32,
+    pub(crate) right_arm: f32,
+    pub(crate) torso_bob: f32,
+}
+
+pub(crate) fn pose_kind(
+    id: EntityId,
+    trace: &[WorldPosition],
+    elapsed_seconds: f32,
+    jobs: &[JobSnapshot],
+) -> PoseKind {
+    if elapsed_seconds < 0.25 && trace.first() != trace.last() {
+        return PoseKind::Walk;
+    }
+    if jobs.iter().any(|job| {
+        matches!(job.state, JobState::Working { worker_id, .. } if worker_id == id)
+            && matches!(
+                job.kind,
+                JobKind::Harvest { .. }
+                    | JobKind::Craft { .. }
+                    | JobKind::Construct { .. }
+                    | JobKind::PrepareConstruction { .. }
+            )
+    }) {
+        PoseKind::Work
+    } else {
+        PoseKind::Idle
+    }
+}
+
+pub(crate) fn pose(kind: PoseKind, phase_seconds: f32) -> CharacterPose {
+    // Five seconds contains exactly eight cycles at 1.6 Hz, so wrapping is seamless.
+    let phase = phase_seconds.rem_euclid(5.0);
+    let wave = (phase * std::f32::consts::TAU * 1.6).sin();
+    match kind {
+        PoseKind::Idle => CharacterPose {
+            left_leg: 0.,
+            right_leg: 0.,
+            left_arm: 0.,
+            right_arm: 0.,
+            torso_bob: wave * 0.008,
+        },
+        PoseKind::Walk => CharacterPose {
+            left_leg: wave * 0.38,
+            right_leg: -wave * 0.38,
+            left_arm: -wave * 0.25,
+            right_arm: wave * 0.25,
+            torso_bob: wave.abs() * 0.025,
+        },
+        PoseKind::Work => CharacterPose {
+            left_leg: 0.,
+            right_leg: 0.,
+            left_arm: -0.25 + wave * 0.3,
+            right_arm: -0.25 + wave * 0.3,
+            torso_bob: wave * 0.012,
+        },
+    }
+}
+
+pub(crate) fn animate_rigs(
+    game: Res<AuthoritativeClient>,
+    motion: Res<VisualMotion>,
+    rigs: Query<(&Pawn, &CharacterRig)>,
+    mut parts: Query<&mut Transform>,
+) {
+    for (pawn, rig) in &rigs {
+        let Some(m) = motion.characters.get(&pawn.0) else {
+            continue;
+        };
+        let kind = pose_kind(pawn.0, &m.trace, m.elapsed_seconds, &game.snapshot().jobs);
+        let pose = pose(kind, m.phase_seconds);
+        if let Ok(mut torso) = parts.get_mut(rig.torso) {
+            torso.translation.y = 0.34 + pose.torso_bob;
+        }
+        if let Ok(mut head) = parts.get_mut(rig.head) {
+            head.translation.y = 0.72 + pose.torso_bob;
+        }
+        for (entity, angle) in [
+            (rig.left_arm, pose.left_arm),
+            (rig.right_arm, pose.right_arm),
+            (rig.left_leg, pose.left_leg),
+            (rig.right_leg, pose.right_leg),
+        ] {
+            if let Ok(mut part) = parts.get_mut(entity) {
+                part.rotation = Quat::from_rotation_x(angle);
+            }
+        }
+    }
 }
 
 pub(crate) fn spawn(
@@ -66,4 +167,73 @@ pub(crate) fn spawn(
         right_leg: parts[5],
     });
     root
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use progressus_app::{JobKind, JobSnapshot, JobState};
+
+    #[test]
+    fn pose_kind_prioritizes_movement_then_active_work() {
+        let id = EntityId::new(3).unwrap();
+        let first = WorldPosition::from_subunits(0, 0).unwrap();
+        let last = WorldPosition::from_subunits(100, 0).unwrap();
+        let mut work = [JobSnapshot {
+            id: EntityId::new(9).unwrap(),
+            kind: JobKind::Harvest {
+                source: WorldCell::new(0, 0),
+            },
+            state: JobState::Working {
+                worker_id: id,
+                remaining_ticks: 2,
+            },
+        }];
+        assert_eq!(pose_kind(id, &[first, last], 0.1, &work), PoseKind::Walk);
+        assert_eq!(pose_kind(id, &[first, last], 0.3, &work), PoseKind::Work);
+        assert_eq!(pose_kind(id, &[last], 0., &work), PoseKind::Work);
+        work[0].kind = JobKind::Construct {
+            site_id: EntityId::new(12).unwrap(),
+        };
+        assert_eq!(pose_kind(id, &[last], 0., &work), PoseKind::Work);
+        work[0].kind = JobKind::EquipTool {
+            item_id: EntityId::new(15).unwrap(),
+            requested_worker_id: Some(id),
+        };
+        assert_eq!(pose_kind(id, &[last], 0., &work), PoseKind::Idle);
+        work[0].kind = JobKind::Harvest {
+            source: WorldCell::new(0, 0),
+        };
+        work[0].state = JobState::Available;
+        assert_eq!(pose_kind(id, &[last], 0., &work), PoseKind::Idle);
+        assert_eq!(pose_kind(id, &[last], 0., &[]), PoseKind::Idle);
+    }
+
+    #[test]
+    fn character_pose_moves_opposing_limbs_with_bounded_angles() {
+        let walk = pose(PoseKind::Walk, 0.15625);
+        assert!(walk.left_leg * walk.right_leg < 0.);
+        assert!(walk.left_arm * walk.right_arm < 0.);
+        assert!(walk.left_leg.abs() <= 0.5);
+        let work = pose(PoseKind::Work, 0.15625);
+        assert_eq!(work.left_leg, 0.);
+        assert_eq!(work.right_leg, 0.);
+        assert_ne!(work.right_arm, 0.);
+        let idle = pose(PoseKind::Idle, 0.15625);
+        assert_eq!(idle.left_leg, 0.);
+        assert_eq!(idle.right_leg, 0.);
+        assert!((pose(PoseKind::Walk, 5.15625).left_leg - walk.left_leg).abs() < 0.0001);
+        for value in [
+            walk.left_leg,
+            walk.right_leg,
+            walk.left_arm,
+            walk.right_arm,
+            work.left_arm,
+            work.right_arm,
+            idle.torso_bob,
+        ] {
+            assert!(value.is_finite());
+            assert!(value.abs() <= 0.5);
+        }
+    }
 }

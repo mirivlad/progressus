@@ -1188,6 +1188,7 @@ pub fn run_with_options(seed: u64, diagnostics_enabled: bool) -> Result<(), Clie
                 sync_stockpile_inspector,
                 crate::inventory::sync_inventory_panel,
                 crate::render::interpolate_character_visuals,
+                crate::low_poly::character::animate_rigs,
                 draw_selected_character,
                 draw_selected_navigation,
                 crate::render::draw_navigation_debug,

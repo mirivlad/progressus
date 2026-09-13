@@ -11,6 +11,7 @@ pub(crate) struct CharacterVisualMotion {
     pub(crate) source_tick: SimulationTick,
     pub(crate) trace: Vec<WorldPosition>,
     pub(crate) elapsed_seconds: f32,
+    pub(crate) phase_seconds: f32,
 }
 
 #[derive(Resource, Default)]
@@ -32,12 +33,17 @@ impl VisualMotion {
         {
             return;
         }
+        let phase_seconds = self
+            .characters
+            .get(&character_id)
+            .map_or(0.0, |motion| motion.phase_seconds);
         self.characters.insert(
             character_id,
             CharacterVisualMotion {
                 source_tick,
                 trace,
                 elapsed_seconds: 0.0,
+                phase_seconds,
             },
         );
     }
@@ -145,12 +151,29 @@ mod tests {
         let mut motion = VisualMotion::default();
         motion.replace(id, SimulationTick::new(8), trace.clone());
         motion.characters.get_mut(&id).unwrap().elapsed_seconds = 0.125;
+        motion.characters.get_mut(&id).unwrap().phase_seconds = 0.42;
 
         motion.replace(id, SimulationTick::new(8), trace);
 
         let character = &motion.characters[&id];
         assert_eq!(character.elapsed_seconds, 0.125);
+        assert_eq!(character.phase_seconds, 0.42);
         assert_eq!(character.source_tick, SimulationTick::new(8));
+    }
+
+    #[test]
+    fn new_tick_keeps_pose_phase_but_resets_interpolation() {
+        let id = EntityId::new(3).unwrap();
+        let point = WorldPosition::from_subunits(0, 0).unwrap();
+        let mut motion = VisualMotion::default();
+        motion.replace(id, SimulationTick::new(8), vec![point]);
+        motion.characters.get_mut(&id).unwrap().phase_seconds = 0.42;
+        motion.characters.get_mut(&id).unwrap().elapsed_seconds = 0.2;
+        motion.replace(id, SimulationTick::new(9), vec![point]);
+        assert_eq!(motion.characters[&id].phase_seconds, 0.42);
+        assert_eq!(motion.characters[&id].elapsed_seconds, 0.);
+        motion.clear();
+        assert!(motion.characters.is_empty());
     }
 
     #[test]

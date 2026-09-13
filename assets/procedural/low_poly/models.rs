@@ -12,6 +12,8 @@ pub enum ModelKind {
     Tree,
     StoneOutcrop,
     BerryBush,
+    /// Retained for legacy mesh-contract tests while the articulated rig is the live pawn.
+    #[allow(dead_code)]
     Character,
     Workbench,
     Wall,

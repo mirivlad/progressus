@@ -689,6 +689,57 @@ mod tests {
         assert_eq!(mesh_count, app.world().resource::<Assets<Mesh>>().len());
     }
     #[test]
+    fn articulated_character_walk_rotates_opposing_legs() {
+        use crate::interaction::TickScheduler;
+        use std::time::Duration;
+
+        let mut app = app();
+        app.insert_resource(Time::<()>::default());
+        app.insert_resource(TickScheduler::default());
+        app.add_systems(
+            PostUpdate,
+            (super::super::animate, super::super::character::animate_rigs).chain(),
+        );
+        app.update();
+        let (id, pawn) = app
+            .world()
+            .resource::<SceneCache>()
+            .pawns
+            .iter()
+            .next()
+            .map(|(id, entity)| (*id, *entity))
+            .unwrap();
+        let rig = app
+            .world()
+            .get::<super::super::character::CharacterRig>(pawn)
+            .unwrap();
+        let (left, right) = (rig.left_leg, rig.right_leg);
+        let first = app
+            .world()
+            .resource::<AuthoritativeClient>()
+            .snapshot()
+            .characters
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap()
+            .position;
+        let last = first.checked_translate(100, 0).unwrap();
+        app.world_mut()
+            .resource_mut::<VisualMotion>()
+            .characters
+            .get_mut(&id)
+            .unwrap()
+            .trace = vec![first, last];
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_millis(150));
+        app.update();
+        let left_rotation = app.world().get::<Transform>(left).unwrap().rotation;
+        let right_rotation = app.world().get::<Transform>(right).unwrap().rotation;
+        assert!(left_rotation.x.abs() > 0.01);
+        assert!(left_rotation.x * right_rotation.x < 0.);
+    }
+    #[test]
     fn idle_and_item_updates_retain_terrain_and_pawns() {
         let mut app = app();
         app.update();

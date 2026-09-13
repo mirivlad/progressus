@@ -7,6 +7,7 @@ pub(crate) mod scene;
 pub(crate) mod space;
 #[path = "../../../../assets/procedural/low_poly/terrain.rs"]
 mod terrain;
+use crate::interaction::TickScheduler;
 use crate::navigation::{VisualMotion, interpolate_trace};
 use bevy::{camera::ScalingMode, prelude::*};
 use models::{CharacterPart, ModelKind};
@@ -144,13 +145,20 @@ pub(crate) fn setup(
 pub(crate) fn animate(
     time: Res<Time>,
     view: Res<View>,
+    scheduler: Res<TickScheduler>,
     mut motion: ResMut<VisualMotion>,
-    mut pawns: Query<(&MotionTarget, &mut Transform)>,
+    mut transforms: Query<(&MotionTarget, &mut Transform)>,
 ) {
+    let delta = if scheduler.is_paused() {
+        0.0
+    } else {
+        time.delta_secs()
+    };
     for m in motion.characters.values_mut() {
-        m.elapsed_seconds += time.delta_secs();
+        m.elapsed_seconds += delta;
+        m.phase_seconds = (m.phase_seconds + delta).rem_euclid(5.0);
     }
-    for (pawn, mut transform) in &mut pawns {
+    for (pawn, mut transform) in &mut transforms {
         let Some(m) = motion.characters.get(&pawn.0) else {
             continue;
         };
