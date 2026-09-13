@@ -24,9 +24,9 @@
 
 **Interfaces:** `Character::rest() -> u8`, `Character::is_tired() -> bool`, `Character::decay_rest()`, `Character::restore_rest(u8)`, `CharacterSnapshot::rest: u8`.
 
-- [ ] Write focused tests first: at ticks `47/48`, assert rest `100/99`; round-trip a non-full rest; remove `rest` from a v1 character JSON and assert default `100`; inspect detached snapshot. Run `cargo test -p progressus-sim rest_` and `cargo test -p progressus-app rest_` and observe the expected missing-behavior failure.
-- [ ] Add constants and the bounded field/accessors to `Character`; call `decay_rest_if_due()` from `advance_ticks()` using tick divisibility by `48`; extend `CharacterSave` with `#[serde(default = "default_rest")]` and reject values over `100`; extend detached `CharacterSnapshot` and client synthetic fixture.
-- [ ] Run the same focused tests green, then `cargo check -p progressus-client --all-targets -j 1`; commit and push.
+- [x] Write focused save-based tests first: at ticks `47/48`, assert rest `100/99`; round-trip a non-full rest; remove `rest` from a v1 character JSON and assert default `100`. The first test failed on absent `rest` before implementation.
+- [x] Add constants and the bounded field/accessors to `Character`; call `decay_rest_if_due()` from `advance_ticks()` using tick divisibility by `48`; extend `CharacterSave` with `#[serde(default = "default_rest")]` and reject values over `100`; extend detached `CharacterSnapshot` and client synthetic fixture.
+- [x] Run the focused tests green, `cargo check -p progressus-client --all-targets -j 1`, `cargo test -p progressus-sim --lib`, and `cargo test -p progressus-app`; commit and push.
 
 ### Task 2: Physical bed construction
 

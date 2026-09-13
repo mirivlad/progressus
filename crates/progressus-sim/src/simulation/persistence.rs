@@ -18,7 +18,7 @@ use crate::residency::ChunkResidency;
 use crate::stockpile::StockpileWorld;
 use crate::workstation_world::WorkstationWorld;
 use crate::world_state::ModifiedWorld;
-use crate::{MAX_CONTAINER_DEPTH, MAX_SATIETY, MovementSpeed, ResourceLayerId, SlotId};
+use crate::{MAX_CONTAINER_DEPTH, MAX_REST, MAX_SATIETY, MovementSpeed, ResourceLayerId, SlotId};
 
 pub const SAVE_FORMAT_VERSION: u32 = 1;
 const SAVE_FORMAT_NAME: &str = "progressus-save";
@@ -614,6 +614,8 @@ struct CharacterSave {
     interaction_radius_subunits: u32,
     #[serde(default = "default_satiety")]
     satiety: u8,
+    #[serde(default = "default_rest")]
+    rest: u8,
     #[serde(default)]
     idle_anchor: Option<CellSave>,
     movement: MovementSave,
@@ -622,6 +624,10 @@ struct CharacterSave {
 
 const fn default_satiety() -> u8 {
     MAX_SATIETY
+}
+
+const fn default_rest() -> u8 {
+    MAX_REST
 }
 
 impl CharacterSave {
@@ -633,6 +639,7 @@ impl CharacterSave {
             speed_subunits_per_tick: character.speed().subunits_per_tick(),
             interaction_radius_subunits: character.interaction_radius().subunits(),
             satiety: character.satiety(),
+            rest: character.rest(),
             idle_anchor: Some(character.idle_anchor().into()),
             movement: character.movement().into(),
             navigation: character.navigation_route().map(NavigationSave::from_route),
@@ -651,6 +658,12 @@ impl CharacterSave {
                 id.value(),
                 self.satiety,
                 MAX_SATIETY
+            ));
+        }
+        if self.rest > MAX_REST {
+            return invalid(format!(
+                "character {} has rest {} above maximum {}",
+                id.value(), self.rest, MAX_REST
             ));
         }
         let idle_anchor = self
@@ -688,6 +701,7 @@ impl CharacterSave {
                 speed,
                 interaction_radius: InteractionRadius::new(self.interaction_radius_subunits),
                 satiety: self.satiety,
+                rest: self.rest,
                 idle_anchor,
                 movement,
                 route,
@@ -2925,6 +2939,48 @@ mod tests {
                 .all(|character| character.satiety() == MAX_SATIETY)
         );
     }
+
+    #[test]
+    fn rest_decays_on_tick_48_and_round_trips_in_v1_save() {
+        let mut simulation = Simulation::new(WorldSeed::new(42)).unwrap();
+        simulation.advance_ticks(47).unwrap();
+        let before: Value = serde_json::from_slice(&simulation.save_json().unwrap()).unwrap();
+        assert!(before["characters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|character| character["rest"] == 100));
+
+        simulation.advance_ticks(1).unwrap();
+        let saved = simulation.save_json().unwrap();
+        let after: Value = serde_json::from_slice(&saved).unwrap();
+        assert!(after["characters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|character| character["rest"] == 99));
+        assert_eq!(Simulation::load_json(&saved).unwrap().save_json().unwrap(), saved);
+    }
+
+    #[test]
+    fn save_v1_without_rest_defaults_existing_characters_to_full() {
+        let simulation = Simulation::new(WorldSeed::new(42)).unwrap();
+        let mut json: Value = serde_json::from_slice(&simulation.save_json().unwrap()).unwrap();
+        for character in json["characters"].as_array_mut().unwrap() {
+            character.as_object_mut().unwrap().remove("rest");
+        }
+        let restored = Simulation::load_json(&serde_json::to_vec(&json).unwrap()).unwrap();
+        assert!(restored.characters().all(|character| character.rest() == MAX_REST));
+    }
+
+    #[test]
+    fn save_rejects_rest_above_maximum() {
+        let simulation = Simulation::new(WorldSeed::new(42)).unwrap();
+        let mut json: Value = serde_json::from_slice(&simulation.save_json().unwrap()).unwrap();
+        json["characters"][0]["rest"] = Value::from(101);
+        assert!(Simulation::load_json(&serde_json::to_vec(&json).unwrap()).is_err());
+    }
+
 
     #[test]
     fn active_production_and_navigation_continue_deterministically_after_load() {

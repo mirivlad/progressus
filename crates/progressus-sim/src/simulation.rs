@@ -55,7 +55,8 @@ use crate::{
     EAT_WORK_TICKS, EffectiveChunk, EntityId, GeneratedChunk, HAND_LOAD_UNITS, HARVEST_WORK_TICKS,
     InteractionRadius, ItemId, ItemLocation, ItemQuantity, ItemStack, Job, JobKind, JobState,
     LocalCell, MAX_STACK_QUANTITY, MovementState, NaturalResource, ProductionLogistics,
-    ProductionOrder, ProductionTarget, ProductionZoneKind, RecipeId, SATIETY_DECAY_INTERVAL_TICKS,
+    ProductionOrder, ProductionTarget, ProductionZoneKind, RecipeId, REST_DECAY_INTERVAL_TICKS,
+    SATIETY_DECAY_INTERVAL_TICKS,
     SimulationTick, SlotId, Stockpile, Structure, StructureId, TerrainId, Workstation,
     WorkstationConstructionSite, WorkstationId, WorldCell, WorldPosition, WorldPositionError,
     WorldSeed, WorldgenVersion, within_interaction_range,
@@ -265,6 +266,7 @@ impl Simulation {
             self.maintain_renewable_resources()?;
             self.advance_characters_one_tick()?;
             self.decay_satiety_if_due();
+            self.decay_rest_if_due();
             self.maintain_nutrition_jobs()?;
             self.maintain_construction_jobs()?;
             self.maintain_craft_jobs()?;

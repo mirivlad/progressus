@@ -57,6 +57,9 @@ pub const DEFAULT_CHARACTER_INTERACTION_RADIUS: InteractionRadius = InteractionR
 pub const MAX_SATIETY: u8 = 100;
 pub const HUNGRY_SATIETY: u8 = 50;
 pub const SATIETY_DECAY_INTERVAL_TICKS: u64 = 16;
+pub const MAX_REST: u8 = 100;
+pub const TIRED_REST: u8 = 30;
+pub const REST_DECAY_INTERVAL_TICKS: u64 = 48;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct EntityId(u64);
@@ -76,6 +79,7 @@ pub(crate) struct CharacterRestoreState {
     pub(crate) speed: MovementSpeed,
     pub(crate) interaction_radius: InteractionRadius,
     pub(crate) satiety: u8,
+    pub(crate) rest: u8,
     pub(crate) idle_anchor: WorldCell,
     pub(crate) movement: MovementState,
     pub(crate) route: Option<NavigationRoute>,
@@ -89,6 +93,7 @@ pub struct Character {
     speed: MovementSpeed,
     interaction_radius: InteractionRadius,
     satiety: u8,
+    rest: u8,
     idle_anchor: WorldCell,
     movement: MovementState,
     route: Option<NavigationRoute>,
@@ -104,6 +109,7 @@ impl Character {
             speed: DEFAULT_CHARACTER_SPEED,
             interaction_radius: DEFAULT_CHARACTER_INTERACTION_RADIUS,
             satiety: MAX_SATIETY,
+            rest: MAX_REST,
             idle_anchor: position.containing_cell(),
             movement: MovementState::Idle,
             route: None,
@@ -124,6 +130,7 @@ impl Character {
             speed: state.speed,
             interaction_radius: state.interaction_radius,
             satiety: state.satiety,
+            rest: state.rest,
             idle_anchor: state.idle_anchor,
             movement: state.movement,
             route: state.route,
@@ -153,6 +160,18 @@ impl Character {
 
     pub const fn satiety(&self) -> u8 {
         self.satiety
+    }
+
+    pub const fn rest(&self) -> u8 {
+        self.rest
+    }
+
+    pub const fn is_tired(&self) -> bool {
+        self.rest <= TIRED_REST
+    }
+
+    pub(crate) fn decay_rest(&mut self) {
+        self.rest = self.rest.saturating_sub(1);
     }
 
     pub const fn is_hungry(&self) -> bool {

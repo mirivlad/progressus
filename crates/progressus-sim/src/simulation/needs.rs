@@ -3,6 +3,15 @@
 use super::*;
 
 impl Simulation {
+    pub(super) fn decay_rest_if_due(&mut self) {
+        if !self.clock.tick().value().is_multiple_of(REST_DECAY_INTERVAL_TICKS) {
+            return;
+        }
+        for character in self.characters.values_mut() {
+            character.decay_rest();
+        }
+    }
+
     pub(super) fn decay_satiety_if_due(&mut self) {
         if !self
             .clock
