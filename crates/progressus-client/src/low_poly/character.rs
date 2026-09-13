@@ -1,9 +1,16 @@
 //! Disposable render hierarchy for a character. Simulation identity stays on the root.
 
-use super::{MotionTarget, Palette, Pawn, models::CharacterPart, space};
+use super::{
+    MotionTarget, Palette, Pawn,
+    models::{CartPart, CharacterPart, ModelKind},
+    space,
+};
 use crate::{navigation::VisualMotion, runtime::AuthoritativeClient};
 use bevy::prelude::*;
-use progressus_app::{EntityId, JobKind, JobSnapshot, JobState, WorldCell, WorldPosition};
+use progressus_app::{
+    EntityId, InventoryItemSnapshot, ItemId, ItemLocation, JobKind, JobSnapshot, JobState,
+    WorldCell, WorldPosition, item, slot,
+};
 
 #[derive(Component)]
 pub(crate) struct CharacterRig {
@@ -13,6 +20,112 @@ pub(crate) struct CharacterRig {
     pub(crate) right_arm: Entity,
     pub(crate) left_leg: Entity,
     pub(crate) right_leg: Entity,
+}
+
+#[derive(Component)]
+pub(crate) struct EquippedVisual {
+    pub(crate) bearer_id: EntityId,
+    wheels: Option<[Entity; 2]>,
+    last_position: Option<WorldPosition>,
+    wheel_angle: f32,
+}
+
+pub(crate) fn spawn_equipped(
+    commands: &mut Commands,
+    palette: &mut Palette,
+    meshes: &mut Assets<Mesh>,
+    bearer_root: Entity,
+    rig: &CharacterRig,
+    bearer_id: EntityId,
+    item: (EntityId, ItemId),
+) -> Entity {
+    let (item_id, kind) = item;
+    let variant = item_id.value() as u8 % 2;
+    let material = palette.material.clone();
+    if kind == item::PRIMITIVE_TOOL {
+        let mesh = palette.get(ModelKind::PrimitiveTool, variant, meshes);
+        let mut visual = None;
+        commands.entity(rig.right_arm).with_children(|parent| {
+            visual = Some(
+                parent
+                    .spawn((
+                        Mesh3d(mesh),
+                        MeshMaterial3d(material),
+                        Transform {
+                            translation: Vec3::new(0., -0.30, 0.),
+                            rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+                            scale: Vec3::splat(1.2),
+                        },
+                        EquippedVisual {
+                            bearer_id,
+                            wheels: None,
+                            last_position: None,
+                            wheel_angle: 0.,
+                        },
+                    ))
+                    .id(),
+            );
+        });
+        return visual.expect("tool visual child was spawned");
+    }
+    let body = palette.cart_part(CartPart::Body, variant, meshes);
+    let wheel = palette.cart_part(CartPart::Wheel, variant, meshes);
+    let mut visual = None;
+    commands.entity(bearer_root).with_children(|parent| {
+        visual = Some(
+            parent
+                .spawn((
+                    Mesh3d(body),
+                    MeshMaterial3d(material.clone()),
+                    Transform {
+                        translation: Vec3::new(0., 0., -0.55),
+                        rotation: Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2),
+                        ..default()
+                    },
+                ))
+                .id(),
+        );
+    });
+    let visual = visual.expect("cart visual child was spawned");
+    let mut wheels = Vec::with_capacity(2);
+    commands.entity(visual).with_children(|parent| {
+        for z in [-0.19, 0.19] {
+            wheels.push(
+                parent
+                    .spawn((
+                        Mesh3d(wheel.clone()),
+                        MeshMaterial3d(material.clone()),
+                        Transform::from_xyz(-0.06, 0.16, z),
+                    ))
+                    .id(),
+            );
+        }
+    });
+    commands.entity(visual).insert(EquippedVisual {
+        bearer_id,
+        wheels: Some([wheels[0], wheels[1]]),
+        last_position: None,
+        wheel_angle: 0.,
+    });
+    visual
+}
+
+pub(crate) fn equipped_visual(
+    row: &InventoryItemSnapshot,
+    bearer: EntityId,
+) -> Option<(EntityId, ItemId)> {
+    match row.location {
+        ItemLocation::Equipped {
+            character_id,
+            slot: worn_slot,
+        } if character_id == bearer
+            && worn_slot == slot::TOOL
+            && matches!(row.kind, item::PRIMITIVE_TOOL | item::CART) =>
+        {
+            Some((row.id, row.kind))
+        }
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -88,6 +201,7 @@ pub(crate) fn animate_rigs(
     game: Res<AuthoritativeClient>,
     motion: Res<VisualMotion>,
     rigs: Query<(&Pawn, &CharacterRig)>,
+    mut equipped: Query<&mut EquippedVisual>,
     mut parts: Query<&mut Transform>,
 ) {
     for (pawn, rig) in &rigs {
@@ -110,6 +224,29 @@ pub(crate) fn animate_rigs(
         ] {
             if let Ok(mut part) = parts.get_mut(entity) {
                 part.rotation = Quat::from_rotation_x(angle);
+            }
+        }
+    }
+    for mut visual in &mut equipped {
+        let Some(wheels) = visual.wheels else {
+            continue;
+        };
+        let Some(motion) = motion.characters.get(&visual.bearer_id) else {
+            continue;
+        };
+        let point =
+            crate::navigation::interpolate_trace(&motion.trace, motion.elapsed_seconds / 0.25);
+        if let Some(previous) = visual.last_position {
+            let dx = (point.x_subunits() - previous.x_subunits()) as f64;
+            let dy = (point.y_subunits() - previous.y_subunits()) as f64;
+            let distance = dx.hypot(dy) / progressus_app::SUBUNITS_PER_CELL as f64;
+            visual.wheel_angle =
+                (visual.wheel_angle + (distance / 0.16) as f32).rem_euclid(std::f32::consts::TAU);
+        }
+        visual.last_position = Some(point);
+        for wheel in wheels {
+            if let Ok(mut transform) = parts.get_mut(wheel) {
+                transform.rotation = Quat::from_rotation_z(visual.wheel_angle);
             }
         }
     }
@@ -172,7 +309,85 @@ pub(crate) fn spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use progressus_app::{JobKind, JobSnapshot, JobState};
+    use progressus_app::{
+        InventoryItemSnapshot, ItemLocation, JobKind, JobSnapshot, JobState, item, slot,
+    };
+
+    #[test]
+    fn equipped_visual_uses_physical_tool_slot_and_bearer() {
+        let bearer = EntityId::new(3).unwrap();
+        let other = EntityId::new(4).unwrap();
+        let point = WorldPosition::from_subunits(0, 0).unwrap();
+        let row = |id, kind, location| InventoryItemSnapshot {
+            id,
+            kind,
+            quantity: 1,
+            location,
+            reserved: false,
+            load: 1,
+            contained_load: None,
+            capacity: None,
+        };
+        let tool = EntityId::new(10).unwrap();
+        let cart = EntityId::new(11).unwrap();
+        let items = [
+            row(
+                EntityId::new(5).unwrap(),
+                item::PRIMITIVE_TOOL,
+                ItemLocation::Ground { position: point },
+            ),
+            row(
+                EntityId::new(6).unwrap(),
+                item::PRIMITIVE_TOOL,
+                ItemLocation::Carried {
+                    character_id: bearer,
+                },
+            ),
+            row(
+                EntityId::new(7).unwrap(),
+                item::PRIMITIVE_TOOL,
+                ItemLocation::Contained { container_id: cart },
+            ),
+            row(
+                EntityId::new(8).unwrap(),
+                item::PRIMITIVE_TOOL,
+                ItemLocation::Equipped {
+                    character_id: other,
+                    slot: slot::TOOL,
+                },
+            ),
+            row(
+                tool,
+                item::PRIMITIVE_TOOL,
+                ItemLocation::Equipped {
+                    character_id: bearer,
+                    slot: slot::TOOL,
+                },
+            ),
+        ];
+        assert_eq!(
+            items.iter().find_map(|row| equipped_visual(row, bearer)),
+            Some((tool, item::PRIMITIVE_TOOL))
+        );
+        assert_eq!(
+            items[..4]
+                .iter()
+                .find_map(|row| equipped_visual(row, bearer)),
+            None
+        );
+        let cart_row = [row(
+            cart,
+            item::CART,
+            ItemLocation::Equipped {
+                character_id: bearer,
+                slot: slot::TOOL,
+            },
+        )];
+        assert_eq!(
+            cart_row.iter().find_map(|row| equipped_visual(row, bearer)),
+            Some((cart, item::CART))
+        );
+    }
 
     #[test]
     fn pose_kind_prioritizes_movement_then_active_work() {

@@ -1,7 +1,7 @@
 use super::*;
 use progressus_app::{
-    ChunkCoord, ChunkSnapshot, DoorState, ItemId, LocalCell, SnapshotQuery, WorldPosition,
-    structure,
+    ChunkCoord, ChunkSnapshot, DoorState, ItemId, ItemLocation, LocalCell, SnapshotQuery,
+    WorldPosition, structure,
 };
 use std::collections::BTreeSet;
 
@@ -37,6 +37,8 @@ pub(crate) struct SceneCache {
     invalidated: bool,
     objects: BTreeMap<ObjectKey, (Object, Entity)>,
     pub(crate) pawns: BTreeMap<EntityId, Entity>,
+    attachments: BTreeMap<EntityId, (EntityId, ItemId, Entity)>,
+    pending_attachments: bool,
     pub(crate) resources: Vec<progressus_app::NaturalResourceSnapshot>,
     pub(crate) items: Vec<progressus_app::GroundItemSnapshot>,
     pub(crate) inventory_items: Vec<progressus_app::InventoryItemSnapshot>,
@@ -115,6 +117,7 @@ pub(crate) fn sync(
     mut palette: ResMut<Palette>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut motion: ResMut<VisualMotion>,
+    rigs: Query<&super::character::CharacterRig>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     windows: Query<&Window>,
 ) {
@@ -129,6 +132,8 @@ pub(crate) fn sync(
         for (_, entity) in std::mem::take(&mut cache.pawns) {
             commands.entity(entity).try_despawn();
         }
+        cache.attachments.clear();
+        cache.pending_attachments = false;
         cache.chunks.clear();
         cache.invalidated = false;
         motion.clear();
@@ -274,9 +279,37 @@ pub(crate) fn sync(
         cache.chunks = chunks;
         cache.revisions = Some(revisions);
     }
-    if !dirty && !viewport_changed && !view.rebased && !items_changed && !resources_changed {
+    if !dirty
+        && !viewport_changed
+        && !view.rebased
+        && !items_changed
+        && !resources_changed
+        && !cache.pending_attachments
+    {
         return;
     }
+    let visible: BTreeSet<_> = cache.chunks.iter().copied().collect();
+    let visible_characters: BTreeSet<_> = game
+        .snapshot()
+        .characters
+        .iter()
+        .filter(|c| visible.contains(&c.containing_cell.split().0))
+        .map(|c| c.id)
+        .collect();
+    let desired_attachments: BTreeMap<_, _> = cache
+        .inventory_items
+        .iter()
+        .filter_map(|row| {
+            let ItemLocation::Equipped { character_id, .. } = row.location else {
+                return None;
+            };
+            if !visible_characters.contains(&character_id) {
+                return None;
+            }
+            super::character::equipped_visual(row, character_id)
+                .map(|(item_id, kind)| (item_id, (character_id, kind)))
+        })
+        .collect();
     if view.rebased {
         for (coord, entry) in &cache.terrain {
             let start = coord
@@ -291,7 +324,6 @@ pub(crate) fn sync(
         }
     }
     let mut objects = BTreeMap::new();
-    let visible: BTreeSet<_> = cache.chunks.iter().copied().collect();
     let mut insert = |key, kind: ModelKind, cell: WorldCell, mask: u8| {
         if visible.contains(&cell.split().0) {
             // Natural things pick their own shape from the cell; built things
@@ -492,6 +524,38 @@ pub(crate) fn sync(
             )
         });
     }
+    cache.attachments.retain(|item_id, (bearer, kind, entity)| {
+        if desired_attachments.get(item_id) == Some(&(*bearer, *kind)) {
+            true
+        } else {
+            commands.entity(*entity).try_despawn();
+            false
+        }
+    });
+    cache.pending_attachments = false;
+    for (item_id, (bearer, kind)) in desired_attachments {
+        if cache.attachments.contains_key(&item_id) {
+            continue;
+        }
+        let Some(root) = cache.pawns.get(&bearer).copied() else {
+            continue;
+        };
+        let Ok(rig) = rigs.get(root) else {
+            // A newly spawned rig enters the query on the next frame.
+            cache.pending_attachments = true;
+            continue;
+        };
+        let visual = super::character::spawn_equipped(
+            &mut commands,
+            &mut palette,
+            &mut meshes,
+            root,
+            rig,
+            bearer,
+            (item_id, kind),
+        );
+        cache.attachments.insert(item_id, (bearer, kind, visual));
+    }
     view.rebased = false;
 }
 
@@ -647,6 +711,7 @@ mod tests {
             .insert_resource(Palette {
                 models: BTreeMap::new(),
                 character_parts: BTreeMap::new(),
+                cart_parts: BTreeMap::new(),
                 material: Handle::default(),
             })
             .add_systems(Update, sync);
@@ -740,6 +805,310 @@ mod tests {
         assert!(left_rotation.x * right_rotation.x < 0.);
     }
     #[test]
+    fn equipped_visual_attaches_once_then_drops_and_clears_on_load() {
+        use progressus_app::{InventoryItemSnapshot, ItemLocation, item, slot};
+
+        let mut app = app();
+        app.update();
+        let bearer = *app
+            .world()
+            .resource::<SceneCache>()
+            .pawns
+            .keys()
+            .next()
+            .unwrap();
+        let position = app
+            .world()
+            .resource::<AuthoritativeClient>()
+            .snapshot()
+            .characters
+            .iter()
+            .find(|c| c.id == bearer)
+            .unwrap()
+            .position;
+        let tool_id = EntityId::new(9000).unwrap();
+        let cart_id = EntityId::new(9001).unwrap();
+        let row = |id, kind, location| InventoryItemSnapshot {
+            id,
+            kind,
+            quantity: 1,
+            location,
+            reserved: false,
+            load: 1,
+            contained_load: None,
+            capacity: None,
+        };
+        app.world_mut()
+            .resource_mut::<SceneCache>()
+            .inventory_items
+            .push(row(
+                tool_id,
+                item::PRIMITIVE_TOOL,
+                ItemLocation::Equipped {
+                    character_id: bearer,
+                    slot: slot::TOOL,
+                },
+            ));
+        app.world_mut().resource_mut::<View>().rebased = true;
+        app.update();
+        let tool_visual = app.world().resource::<SceneCache>().attachments[&tool_id].2;
+        assert!(
+            app.world()
+                .get::<super::super::character::EquippedVisual>(tool_visual)
+                .is_some()
+        );
+        assert!(
+            !app.world()
+                .resource::<SceneCache>()
+                .objects
+                .contains_key(&ObjectKey::Item(tool_id))
+        );
+
+        {
+            let mut cache = app.world_mut().resource_mut::<SceneCache>();
+            cache
+                .inventory_items
+                .iter_mut()
+                .find(|row| row.id == tool_id)
+                .unwrap()
+                .location = ItemLocation::Ground { position };
+            cache.items.push(progressus_app::GroundItemSnapshot {
+                id: tool_id,
+                kind: item::PRIMITIVE_TOOL,
+                quantity: 1,
+                position,
+            });
+            cache.inventory_items.push(row(
+                cart_id,
+                item::CART,
+                ItemLocation::Equipped {
+                    character_id: bearer,
+                    slot: slot::TOOL,
+                },
+            ));
+        }
+        app.world_mut().resource_mut::<View>().rebased = true;
+        app.update();
+        let cache = app.world().resource::<SceneCache>();
+        assert!(!cache.attachments.contains_key(&tool_id));
+        assert!(cache.objects.contains_key(&ObjectKey::Item(tool_id)));
+        let cart_visual = cache.attachments[&cart_id].2;
+        assert_eq!(app.world().get::<Children>(cart_visual).unwrap().len(), 2);
+        assert!(app.world().get_entity(tool_visual).is_err());
+
+        use crate::interaction::TickScheduler;
+        use std::time::Duration;
+        let wheel = app.world().get::<Children>(cart_visual).unwrap()[0];
+        app.insert_resource(Time::<()>::default());
+        app.insert_resource(TickScheduler::default());
+        app.add_systems(
+            PostUpdate,
+            (super::super::animate, super::super::character::animate_rigs).chain(),
+        );
+        app.world_mut()
+            .resource_mut::<VisualMotion>()
+            .characters
+            .get_mut(&bearer)
+            .unwrap()
+            .trace = vec![position, position.checked_translate(400, 0).unwrap()];
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_millis(100));
+        app.update();
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_millis(100));
+        app.update();
+        assert!(
+            app.world()
+                .get::<Transform>(wheel)
+                .unwrap()
+                .rotation
+                .z
+                .abs()
+                > 0.01
+        );
+
+        app.world_mut().resource_mut::<View>().focus = Vec3::new(10000., 0., 10000.);
+        app.update();
+        assert!(app.world().resource::<SceneCache>().attachments.is_empty());
+        assert!(app.world().get_entity(cart_visual).is_err());
+        app.world_mut().resource_mut::<View>().focus = Vec3::ZERO;
+        app.update();
+        app.world_mut()
+            .resource_mut::<SceneCache>()
+            .inventory_items
+            .push(row(
+                cart_id,
+                item::CART,
+                ItemLocation::Equipped {
+                    character_id: bearer,
+                    slot: slot::TOOL,
+                },
+            ));
+        app.world_mut().resource_mut::<View>().rebased = true;
+        app.update();
+        let cart_visual = app.world().resource::<SceneCache>().attachments[&cart_id].2;
+
+        let replacement = AuthoritativeClient::new_with_seed(WorldSeed::new(73))
+            .unwrap()
+            .save_json()
+            .unwrap();
+        app.world_mut()
+            .resource_mut::<AuthoritativeClient>()
+            .load_json(&replacement)
+            .unwrap();
+        app.world_mut()
+            .resource_mut::<SceneCache>()
+            .invalidate_loaded_world();
+        app.update();
+        assert!(app.world().resource::<SceneCache>().attachments.is_empty());
+        assert!(app.world().get_entity(cart_visual).is_err());
+    }
+    #[test]
+    fn public_equip_and_drop_commands_reconcile_scene_attachment() {
+        use progressus_app::{ItemLocation, ProductionTarget, item, recipe, slot, workstation};
+
+        let mut app = app();
+        app.update();
+        let (bearer, tool_id) = {
+            let mut game = app.world_mut().resource_mut::<AuthoritativeClient>();
+            let application = game.application_mut();
+            application
+                .execute(Command::CreateStockpile {
+                    cell: WorldCell::new(-2, 1),
+                })
+                .unwrap();
+            let stockpile_id = application
+                .snapshot(SnapshotQuery::default())
+                .unwrap()
+                .stockpiles[0]
+                .id;
+            for x in -1..=2 {
+                application
+                    .execute(Command::SetStockpileCell {
+                        stockpile_id,
+                        cell: WorldCell::new(x, 1),
+                        enabled: true,
+                    })
+                    .unwrap();
+            }
+            application
+                .execute(Command::AdvanceTicks { count: 400 })
+                .unwrap();
+            let workstation_id = (2..=5)
+                .flat_map(|y| (-4..=4).map(move |x| WorldCell::new(x, y)))
+                .find_map(|cell| {
+                    if application
+                        .execute(Command::PlaceWorkstation {
+                            kind: workstation::WORKBENCH,
+                            cell,
+                        })
+                        .is_err()
+                    {
+                        return None;
+                    }
+                    let snapshot = application.snapshot(SnapshotQuery::default()).unwrap();
+                    if let Some(workstation) = snapshot.workstations.iter().find(|w| w.cell == cell)
+                    {
+                        return Some(workstation.id);
+                    }
+                    let site_id = snapshot
+                        .workstation_construction_sites
+                        .iter()
+                        .find(|site| site.cell == cell)
+                        .unwrap()
+                        .id;
+                    application
+                        .execute(Command::CancelConstruction { site_id })
+                        .unwrap();
+                    None
+                })
+                .expect("no clear workbench cell");
+            application
+                .execute(Command::AddProductionOrder {
+                    workstation_id,
+                    recipe_id: recipe::PRIMITIVE_TOOL,
+                    target: ProductionTarget::Finite { remaining_runs: 1 },
+                })
+                .unwrap();
+            let nearby_chunks = (-2..=2)
+                .flat_map(|x| (-2..=2).map(move |y| ChunkCoord::new(x, y)))
+                .collect::<Vec<_>>();
+            let mut tool_id = None;
+            for _ in 0..40 {
+                application
+                    .execute(Command::AdvanceTicks { count: 100 })
+                    .unwrap();
+                tool_id = application
+                    .snapshot(SnapshotQuery {
+                        chunks: nearby_chunks.clone(),
+                        ..default()
+                    })
+                    .unwrap()
+                    .inventory_items
+                    .iter()
+                    .find(|row| row.kind == item::PRIMITIVE_TOOL && !row.reserved)
+                    .map(|row| row.id);
+                if tool_id.is_some() {
+                    break;
+                }
+            }
+            let tool_id = tool_id.expect("tool was not crafted");
+            let snapshot = application
+                .snapshot(SnapshotQuery {
+                    chunks: nearby_chunks,
+                    ..default()
+                })
+                .unwrap();
+            let bearer = snapshot
+                .characters
+                .iter()
+                .map(|c| c.id)
+                .find(|id| {
+                    application
+                        .execute(Command::PickUpItem {
+                            character_id: *id,
+                            item_id: tool_id,
+                        })
+                        .is_ok()
+                })
+                .expect("no character can pick up tool");
+            application
+                .execute(Command::EquipItem {
+                    character_id: bearer,
+                    item_id: tool_id,
+                })
+                .unwrap();
+            game.refresh_lightweight_snapshot(None).unwrap();
+            (bearer, tool_id)
+        };
+        app.update();
+        let cache = app.world().resource::<SceneCache>();
+        assert!(cache.inventory_items.iter().any(|row| row.id == tool_id
+            && row.location
+                == ItemLocation::Equipped {
+                    character_id: bearer,
+                    slot: slot::TOOL
+                }));
+        assert!(cache.attachments.contains_key(&tool_id));
+        assert!(!cache.objects.contains_key(&ObjectKey::Item(tool_id)));
+        {
+            let mut game = app.world_mut().resource_mut::<AuthoritativeClient>();
+            game.application_mut()
+                .execute(Command::DropItem {
+                    character_id: bearer,
+                    item_id: tool_id,
+                })
+                .unwrap();
+            game.refresh_lightweight_snapshot(None).unwrap();
+        }
+        app.update();
+        let cache = app.world().resource::<SceneCache>();
+        assert!(!cache.attachments.contains_key(&tool_id));
+        assert!(cache.objects.contains_key(&ObjectKey::Item(tool_id)));
+    }
+    #[test]
     fn idle_and_item_updates_retain_terrain_and_pawns() {
         let mut app = app();
         app.update();
@@ -779,6 +1148,7 @@ mod tests {
             app.world().resource::<Assets<Mesh>>().len(),
             app.world().resource::<Palette>().models.len()
                 + app.world().resource::<Palette>().character_parts.len()
+                + app.world().resource::<Palette>().cart_parts.len()
         );
         app.world_mut().resource_mut::<View>().focus = Vec3::ZERO;
         app.update();

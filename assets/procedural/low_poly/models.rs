@@ -41,6 +41,48 @@ pub enum CharacterPart {
     Leg,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CartPart {
+    Body,
+    Wheel,
+}
+
+pub fn cart_part_mesh(part: CartPart, variant: u8) -> Mesh {
+    let mut g = Geometry::default();
+    let tilt = (variant % 2) as f32 * 0.05;
+    match part {
+        CartPart::Body => {
+            g.cuboid(
+                Vec3::new(0., 0.26 + tilt, 0.),
+                Vec3::new(0.46, 0.16, 0.34),
+                BARK_LIGHT,
+            );
+            g.beam(
+                Vec3::new(0.20, 0.30 + tilt, 0.),
+                Vec3::new(0.52, 0.20 + tilt, 0.),
+                0.032,
+                BARK,
+            );
+            g.beam(
+                Vec3::new(-0.06, 0.16, -0.21),
+                Vec3::new(-0.06, 0.16, 0.21),
+                0.025,
+                BARK,
+            );
+        }
+        CartPart::Wheel => {
+            g.gem(
+                Vec3::ZERO,
+                Vec3::new(0.17, 0.16, 0.05),
+                7,
+                shade(BARK, 0.85),
+            );
+            g.gem(Vec3::ZERO, Vec3::new(0.04, 0.04, 0.055), 6, BARK_LIGHT);
+        }
+    }
+    g.mesh()
+}
+
 pub fn character_part_mesh(part: CharacterPart, variant: u8) -> Mesh {
     let mut g = Geometry::default();
     let variant = (variant % 4) as usize;
@@ -59,11 +101,6 @@ pub fn character_part_mesh(part: CharacterPart, variant: u8) -> Mesh {
     match part {
         CharacterPart::Torso => {
             g.prism(Vec3::new(0., 0., 0.), 0.36, 0.16, 0.12, 6, cloth);
-            g.cuboid(
-                Vec3::new(0., 0.06, 0.),
-                Vec3::new(0.33, 0.055, 0.25),
-                [0.18, 0.14, 0.12, 1.],
-            );
         }
         CharacterPart::Head => {
             g.gem(
@@ -358,6 +395,13 @@ impl Geometry {
             b + side + front,
             b - side + front,
             shade(color, 1.15),
+        );
+        self.quad(
+            a - side - front,
+            a - side + front,
+            a + side + front,
+            a + side - front,
+            shade(color, 0.65),
         );
     }
 
@@ -1031,6 +1075,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn character_torso_has_no_protruding_hip_bar() {
+        for variant in 0..4 {
+            let torso = character_part_mesh(CharacterPart::Torso, variant);
+            let low_torso_width = float3(&torso, Mesh::ATTRIBUTE_POSITION)
+                .iter()
+                .filter(|point| point[1] <= 0.10)
+                .map(|point| point[0].abs())
+                .fold(0.0_f32, f32::max);
+            assert!(
+                low_torso_width <= 0.1601,
+                "variant {variant}: waist bar reaches {low_torso_width}"
+            );
+        }
+    }
+
     /// The variant space must stay bounded: the mesh cache holds one entry per
     /// kind and variant, and an unbounded count would mean one mesh per world
     /// cell. See ADR-0005.
@@ -1329,5 +1389,19 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn beam_has_both_end_caps() {
+        let mut beam = Geometry::default();
+        beam.beam(Vec3::ZERO, Vec3::Y, 0.1, STONE);
+        // Four side quads and two end quads, each with two triangles.
+        assert_eq!(beam.positions.len() / 3, 12);
+        let bottom = beam
+            .normals
+            .chunks_exact(3)
+            .filter(|triangle| Vec3::from(triangle[0]).dot(-Vec3::Y) > 0.99)
+            .count();
+        assert_eq!(bottom, 2);
     }
 }

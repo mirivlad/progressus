@@ -10,7 +10,7 @@ mod terrain;
 use crate::interaction::TickScheduler;
 use crate::navigation::{VisualMotion, interpolate_trace};
 use bevy::{camera::ScalingMode, prelude::*};
-use models::{CharacterPart, ModelKind};
+use models::{CartPart, CharacterPart, ModelKind};
 use progressus_app::{EntityId, WorldCell};
 use std::collections::BTreeMap;
 #[derive(Resource)]
@@ -36,9 +36,23 @@ pub(crate) struct MotionTarget(pub(crate) EntityId, pub(crate) Vec3);
 pub(crate) struct Palette {
     pub(crate) models: BTreeMap<(ModelKind, u8), Handle<Mesh>>,
     pub(crate) character_parts: BTreeMap<(CharacterPart, u8), Handle<Mesh>>,
+    pub(crate) cart_parts: BTreeMap<(CartPart, u8), Handle<Mesh>>,
     pub(crate) material: Handle<StandardMaterial>,
 }
 impl Palette {
+    pub(crate) fn cart_part(
+        &mut self,
+        part: CartPart,
+        variant: u8,
+        meshes: &mut Assets<Mesh>,
+    ) -> Handle<Mesh> {
+        let variant = variant % 2;
+        self.cart_parts
+            .entry((part, variant))
+            .or_insert_with(|| meshes.add(models::cart_part_mesh(part, variant)))
+            .clone()
+    }
+
     pub(crate) fn character_part(
         &mut self,
         part: CharacterPart,
@@ -135,6 +149,7 @@ pub(crate) fn setup(
     commands.insert_resource(Palette {
         models: BTreeMap::new(),
         character_parts: BTreeMap::new(),
+        cart_parts: BTreeMap::new(),
         material: materials.add(StandardMaterial {
             base_color: Color::WHITE,
             perceptual_roughness: 0.95,

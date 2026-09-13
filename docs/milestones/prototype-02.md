@@ -115,6 +115,12 @@ Status: **Complete**
 
 Owner-PC visual validation completed on 2026-09-05. Characters who have no job and no urgent need now exhibit deterministic low-priority life rather than standing forever. Idle people periodically take short authoritative `Wandering` routes through explored walkable cells, and occasionally approach another nearby idle person. Wandering is not a job: real work, hunger and player orders may preempt it. Each character keeps a persistent local idle anchor and every idle route stays within Manhattan radius three of that anchor, so repeated wandering cannot become autonomous migration/scouting. See [`ADR-0017`](../adr/0017-bounded-deterministic-idle-behavior.md).
 
+## 9a. Articulated visual slice
+
+Status: **In progress**
+
+The client now renders procedural articulated people with detached-snapshot idle/walk/work poses and physical tool/cart attachments; shared meshes and the cart's wheel geometry remain client-owned. Headless simulation and saves are unchanged. Automated scene tests cover attach/drop/load/eviction and native default/close character captures exist. Native equipped-tool/cart captures, live picking validation, and owner aesthetic review remain open; this visual slice is not yet accepted as complete.
+
 ## 10. Persistence and determinism
 
 Every new authoritative state introduced by Prototype 02 must either:
