@@ -7,12 +7,13 @@ use progressus_app::{
 
 use crate::i18n::{Locale, TextKey};
 use crate::interaction::TickScheduler;
+use crate::inventory::InspectionState;
 use crate::navigation::{SelectedCharacter, VisualMotion};
 use crate::procedural_assets::{ProceduralAssetParams, workstation_asset};
 use crate::render::PresentationCache;
 use crate::runtime::AuthoritativeClient;
 use crate::save_slots::{SaveNotice, SaveSlot, SaveSlotState, SaveStore};
-use crate::ui::{SelectedStockpile, ToolMode, ToolState, UiCapture};
+use crate::ui::{SelectedStockpile, StockpileClickState, ToolMode, ToolState, UiCapture};
 use crate::ui_font::UiFont;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -139,6 +140,8 @@ pub(crate) struct SaveModalState<'w> {
     tool: ResMut<'w, ToolState>,
     selected: ResMut<'w, SelectedCharacter>,
     selected_stockpile: ResMut<'w, SelectedStockpile>,
+    stockpile_click: ResMut<'w, StockpileClickState>,
+    inspection: ResMut<'w, InspectionState>,
     motion: ResMut<'w, VisualMotion>,
     cache: ResMut<'w, PresentationCache>,
     scheduler: ResMut<'w, TickScheduler>,
@@ -274,6 +277,8 @@ pub(crate) fn save_modal_interaction(
 
             state.selected.0 = None;
             state.selected_stockpile.0 = None;
+            state.stockpile_click.last = None;
+            state.inspection.reset_for_load();
             state.motion.clear();
             state.audio.reset_observer();
             state.tool.mode = ToolMode::Select;

@@ -37,7 +37,7 @@ localization and application boundary fixtures.
 - [x] Add localized inventory and source/item inspection text from snapshots.
 - [x] Add reachable item/container actions, visible rejection feedback, click selection and hover identification.
 - [x] Make selected-character right-click on a ground tool/cart create a persisted physical fetch-and-equip job, while ordinary ground right-click remains `MoveTo`.
-- [ ] Preserve active tool actions and existing selection priorities; clear stale selection on load.
+- [x] Preserve active tool actions and existing selection priorities; clear stale selection on load.
 - [ ] Show equipped items in presentation, including parked/borne carts and their contents in the inspector.
 - [x] Test selection/text/actions and run client checks plus executable client tests when feasible.
 - [ ] Review and publish the complete inventory/resource interaction stage.
@@ -67,8 +67,7 @@ headless test, with remote source exploration staged by its fixture. Open risks:
 
 - equipped items are not drawn on the character in the 3D scene — a parked
   cart renders as an ordinary ground stack, and its contents appear only in
-  the inspector;
-- stale selection is not explicitly cleared on load.
+  the inspector.
 
 Save restoration now rejects overloaded hands/containers, invalid equipment
 slots or stack sizes, non-containers with contents, and nested carts.

@@ -52,6 +52,14 @@ impl InspectionState {
         }
     }
 
+    pub(crate) fn reset_for_load(&mut self) {
+        self.hovered = None;
+        self.pinned = None;
+        self.selected_item = None;
+        self.feedback = None;
+        self.bump();
+    }
+
     pub(crate) fn report_rejection(&mut self, locale: Locale, error: impl std::fmt::Display) {
         self.feedback = Some(ActionFeedback {
             text: format!("{}: {error}", action_rejected_label(locale)),
@@ -1117,6 +1125,23 @@ mod tests {
         assert!(click_pins_inspection(false, false));
         assert!(!click_pins_inspection(true, false));
         assert!(click_pins_inspection(true, true));
+    }
+
+    #[test]
+    fn loading_a_world_clears_hover_pinned_item_and_action_feedback() {
+        let mut inspection = InspectionState {
+            hovered: Some(InspectedObject::Item(id(20))),
+            ..default()
+        };
+        inspection.pin(InspectedObject::Item(id(20)));
+        inspection.report_rejection(Locale::default(), "stale action");
+
+        inspection.reset_for_load();
+
+        assert_eq!(inspection.hovered, None);
+        assert_eq!(inspection.pinned, None);
+        assert_eq!(inspection.selected_item, None);
+        assert!(inspection.feedback.is_none());
     }
 
     #[test]
