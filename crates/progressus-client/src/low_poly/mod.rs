@@ -1,4 +1,5 @@
 //! Primary low-poly presentation; authoritative gameplay remains in progressus-app.
+pub(crate) mod character;
 pub(crate) mod controls;
 #[path = "../../../../assets/procedural/low_poly/models.rs"]
 mod models;
@@ -8,7 +9,7 @@ pub(crate) mod space;
 mod terrain;
 use crate::navigation::{VisualMotion, interpolate_trace};
 use bevy::{camera::ScalingMode, prelude::*};
-use models::ModelKind;
+use models::{CharacterPart, ModelKind};
 use progressus_app::{EntityId, WorldCell};
 use std::collections::BTreeMap;
 #[derive(Resource)]
@@ -33,9 +34,23 @@ pub(crate) struct MotionTarget(pub(crate) EntityId, pub(crate) Vec3);
 #[derive(Resource)]
 pub(crate) struct Palette {
     pub(crate) models: BTreeMap<(ModelKind, u8), Handle<Mesh>>,
+    pub(crate) character_parts: BTreeMap<(CharacterPart, u8), Handle<Mesh>>,
     pub(crate) material: Handle<StandardMaterial>,
 }
 impl Palette {
+    pub(crate) fn character_part(
+        &mut self,
+        part: CharacterPart,
+        variant: u8,
+        meshes: &mut Assets<Mesh>,
+    ) -> Handle<Mesh> {
+        let variant = variant % 4;
+        self.character_parts
+            .entry((part, variant))
+            .or_insert_with(|| meshes.add(models::character_part_mesh(part, variant)))
+            .clone()
+    }
+
     pub(crate) fn get(
         &mut self,
         kind: ModelKind,
@@ -118,6 +133,7 @@ pub(crate) fn setup(
     ));
     commands.insert_resource(Palette {
         models: BTreeMap::new(),
+        character_parts: BTreeMap::new(),
         material: materials.add(StandardMaterial {
             base_color: Color::WHITE,
             perceptual_roughness: 0.95,

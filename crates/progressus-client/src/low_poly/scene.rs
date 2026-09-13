@@ -482,15 +482,14 @@ pub(crate) fn sync(
             },
         );
         cache.pawns.entry(c.id).or_insert_with(|| {
-            commands
-                .spawn((
-                    Pawn(c.id),
-                    MotionTarget(c.id, Vec3::ZERO),
-                    Mesh3d(palette.get(ModelKind::Character, c.id.value() as u8 % 4, &mut meshes)),
-                    MeshMaterial3d(palette.material.clone()),
-                    Transform::from_translation(space::local(c.position, view.origin)),
-                ))
-                .id()
+            super::character::spawn(
+                &mut commands,
+                &mut palette,
+                &mut meshes,
+                c.id,
+                c.position,
+                view.origin,
+            )
         });
     }
     view.rebased = false;
@@ -647,6 +646,7 @@ mod tests {
             .insert_resource(AuthoritativeClient::new().unwrap())
             .insert_resource(Palette {
                 models: BTreeMap::new(),
+                character_parts: BTreeMap::new(),
                 material: Handle::default(),
             })
             .add_systems(Update, sync);
@@ -665,6 +665,28 @@ mod tests {
             .values()
             .map(|e| (e.entity, e.mesh.id()))
             .collect()
+    }
+    #[test]
+    fn articulated_character_has_shared_child_meshes() {
+        let mut app = app();
+        app.update();
+        let pawns = app.world().resource::<SceneCache>().pawns.clone();
+        assert!(!pawns.is_empty());
+        for pawn in pawns.values() {
+            let children = app
+                .world()
+                .get::<Children>(*pawn)
+                .expect("pawn rig children");
+            assert_eq!(children.len(), 6);
+            assert!(
+                children
+                    .iter()
+                    .all(|child| app.world().get::<Mesh3d>(child).is_some())
+            );
+        }
+        let mesh_count = app.world().resource::<Assets<Mesh>>().len();
+        app.update();
+        assert_eq!(mesh_count, app.world().resource::<Assets<Mesh>>().len());
     }
     #[test]
     fn idle_and_item_updates_retain_terrain_and_pawns() {
@@ -705,6 +727,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<Assets<Mesh>>().len(),
             app.world().resource::<Palette>().models.len()
+                + app.world().resource::<Palette>().character_parts.len()
         );
         app.world_mut().resource_mut::<View>().focus = Vec3::ZERO;
         app.update();

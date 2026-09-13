@@ -34,9 +34,9 @@
 
 **Interfaces:** `models::CharacterPart` identifies `Torso`, `Head`, `Arm`, and `Leg`; `models::character_part_mesh(part, variant) -> Mesh` is a pure presentation recipe. `character::spawn(&mut Commands, &mut Palette, &mut Assets<Mesh>, Handle<StandardMaterial>, EntityId, WorldPosition, WorldCell) -> Entity` returns the existing `Pawn`/`MotionTarget` root with a `CharacterRig` of child handles.
 
-- [ ] **Step 1: Red test.** Add a model test that calls `character_part_mesh` for every `CharacterPart` and all four variants, asserts finite nonempty positions/normals, and checks torso/head/limb bounds fit the current one-cell pawn scale. Add a scene test that one visible character has exactly one `Pawn` root and articulated child handles, and that an idle second sync reuses the same mesh asset IDs.
-- [ ] **Step 2: Confirm red.** Run `cargo test -p progressus-client character_part -j 1 -- --nocapture` and `cargo test -p progressus-client articulated_character -j 1 -- --nocapture`; expect failure before production changes.
-- [ ] **Step 3: Mesh recipes.** Add the enum and dispatch to `models.rs` using the existing `Geometry` primitives. Each part is local to its pivot, not a world-space complete person:
+- [x] **Step 1: Red test.** Add a model test that calls `character_part_mesh` for every `CharacterPart` and all four variants, asserts finite nonempty positions/normals, and checks torso/head/limb bounds fit the current one-cell pawn scale. Add a scene test that one visible character has exactly one `Pawn` root and articulated child handles, and that an idle second sync reuses the same mesh asset IDs.
+- [x] **Step 2: Confirm red.** Run `cargo test -p progressus-client character_part -j 1 -- --nocapture` and `cargo test -p progressus-client articulated_character -j 1 -- --nocapture`; expect failure before production changes.
+- [x] **Step 3: Mesh recipes.** Add the enum and dispatch to `models.rs` using the existing `Geometry` primitives. Each part is local to its pivot, not a world-space complete person:
 
   ```rust
   #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -80,7 +80,7 @@
   ```
 
   Shape the recipes for a legible clothed silhouette and clean neck/shoulder/hip joints at the existing orthographic scale; retain four deterministic appearance variants keyed by stable character ID. Keep the old `Character` recipe until scene migration passes.
-- [ ] **Step 4: Cache and rig.** Add `Palette.character_parts: BTreeMap<(CharacterPart, u8), Handle<Mesh>>` and `Palette::character_part` with the same `entry(...).or_insert_with(|| meshes.add(...))` pattern as `Palette::get`. In `character.rs`, spawn one root with `Pawn(id)` and `MotionTarget(id, Vec3::ZERO)`, then torso/head/two arms/two legs as children, storing child `Entity` handles on `CharacterRig`. Replace only the character root spawn in `scene::sync`; leave terrain, items, workstation, and resource reconciliation untouched. Update the scene test's `Palette` fixture with the new cache field.
+- [x] **Step 4: Cache and rig.** Add `Palette.character_parts: BTreeMap<(CharacterPart, u8), Handle<Mesh>>` and `Palette::character_part` with the same `entry(...).or_insert_with(|| meshes.add(...))` pattern as `Palette::get`. In `character.rs`, spawn one root with `Pawn(id)` and `MotionTarget(id, Vec3::ZERO)`, then torso/head/two arms/two legs as children, storing child `Entity` handles on `CharacterRig`. Replace only the character root spawn in `scene::sync`; leave terrain, items, workstation, and resource reconciliation untouched. Update the scene test's `Palette` fixture with the new cache field.
 - [ ] **Step 5: Green and commit.** Run the two focused tests, `cargo check -p progressus-client --all-targets -j 1`, and `cargo fmt --all -- --check`. Review only these files, commit `client: build articulated procedural character rig`, push `main`, and verify `HEAD == origin/main`.
 
 ## Task 2: Client-only idle, walk, and work poses

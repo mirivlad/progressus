@@ -31,6 +31,73 @@ pub enum ModelKind {
     Placeholder,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CharacterPart {
+    Torso,
+    Head,
+    Arm,
+    Leg,
+}
+
+pub fn character_part_mesh(part: CharacterPart, variant: u8) -> Mesh {
+    let mut g = Geometry::default();
+    let variant = (variant % 4) as usize;
+    let cloth = [
+        [0.16, 0.36, 0.58, 1.],
+        [0.54, 0.25, 0.16, 1.],
+        [0.24, 0.48, 0.28, 1.],
+        [0.47, 0.28, 0.56, 1.],
+    ][variant];
+    let skin = [
+        0.69 + variant as f32 * 0.045,
+        0.49 + variant as f32 * 0.035,
+        0.33 + variant as f32 * 0.025,
+        1.,
+    ];
+    match part {
+        CharacterPart::Torso => {
+            g.prism(Vec3::new(0., 0., 0.), 0.36, 0.16, 0.12, 6, cloth);
+            g.cuboid(
+                Vec3::new(0., 0.06, 0.),
+                Vec3::new(0.33, 0.055, 0.25),
+                [0.18, 0.14, 0.12, 1.],
+            );
+        }
+        CharacterPart::Head => {
+            g.gem(
+                Vec3::new(0., 0.11, 0.),
+                Vec3::new(0.13, 0.145, 0.12),
+                7,
+                skin,
+            );
+            g.gem(
+                Vec3::new(0., 0.2, -0.012),
+                Vec3::new(0.14, 0.075, 0.13),
+                7,
+                [0.13 + variant as f32 * 0.035, 0.075, 0.035, 1.],
+            );
+        }
+        CharacterPart::Arm => {
+            g.beam(Vec3::ZERO, Vec3::new(0., -0.28, 0.), 0.052, cloth);
+            g.gem(Vec3::new(0., -0.3, 0.), Vec3::splat(0.055), 6, skin);
+        }
+        CharacterPart::Leg => {
+            g.beam(
+                Vec3::ZERO,
+                Vec3::new(0., -0.32, 0.),
+                0.064,
+                [0.23, 0.25, 0.27, 1.],
+            );
+            g.cuboid(
+                Vec3::new(0., -0.345, 0.04),
+                Vec3::new(0.14, 0.07, 0.19),
+                [0.16, 0.13, 0.11, 1.],
+            );
+        }
+    }
+    g.mesh()
+}
+
 impl ModelKind {
     /// Every kind, so tests cover a new model without being edited. Nothing in
     /// the running client needs to enumerate kinds.
@@ -932,6 +999,34 @@ mod tests {
             (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)),
             |(min, max), p| (min.min(Vec3::from(*p)), max.max(Vec3::from(*p))),
         )
+    }
+
+    #[test]
+    fn character_parts_have_finite_one_cell_geometry() {
+        for part in [
+            CharacterPart::Torso,
+            CharacterPart::Head,
+            CharacterPart::Arm,
+            CharacterPart::Leg,
+        ] {
+            for variant in 0..4 {
+                let mesh = character_part_mesh(part, variant);
+                let positions = float3(&mesh, Mesh::ATTRIBUTE_POSITION);
+                let normals = float3(&mesh, Mesh::ATTRIBUTE_NORMAL);
+                assert!(!positions.is_empty(), "{part:?} variant {variant}");
+                assert_eq!(positions.len(), normals.len());
+                assert!(
+                    positions
+                        .iter()
+                        .chain(normals)
+                        .flatten()
+                        .all(|v| v.is_finite())
+                );
+                let (min, max) = mesh_bounds(&mesh);
+                assert!(min.cmpge(Vec3::splat(-0.55)).all(), "{part:?} {min:?}");
+                assert!(max.cmple(Vec3::splat(0.55)).all(), "{part:?} {max:?}");
+            }
+        }
     }
 
     /// The variant space must stay bounded: the mesh cache holds one entry per
