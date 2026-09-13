@@ -1252,6 +1252,44 @@ mod tests {
     }
 
     #[test]
+    fn bed_construction_consumes_delivered_wood_and_remains_passable() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let cell = empty_stockpile_cells(&simulation, 1)[0];
+        let wood_before = simulation
+            .items()
+            .filter(|item| item.kind() == item::WOOD)
+            .map(|item| item.quantity().get())
+            .sum::<u32>();
+        let site_id = simulation.designate_construction(structure::BED, cell).unwrap();
+        let mut delivered = false;
+        for _ in 0..768 {
+            simulation.advance_ticks(1).unwrap();
+            delivered |= simulation
+                .construction_world
+                .site(site_id)
+                .is_some_and(|site| {
+                    site.material_state() == Some(ConstructionMaterialState::Delivered)
+                });
+            if simulation.structure_at(cell) == Some(site_id) {
+                break;
+            }
+        }
+        assert!(delivered);
+        assert_eq!(simulation.structure_at(cell), Some(site_id));
+        assert!(simulation.is_walkable(cell).unwrap());
+        assert_eq!(
+            simulation
+                .items()
+                .filter(|item| item.kind() == item::WOOD)
+                .map(|item| item.quantity().get())
+                .sum::<u32>(),
+            wood_before - 2
+        );
+        let restored = Simulation::load_json(&simulation.save_json().unwrap()).unwrap();
+        assert_eq!(restored.structure_at(cell), Some(site_id));
+    }
+
+    #[test]
     fn door_designation_replaces_planned_stone_wall_without_leaving_old_site() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         let cell = empty_stockpile_cells(&simulation, 1)[0];

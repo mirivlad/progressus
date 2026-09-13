@@ -34,9 +34,9 @@
 
 **Interfaces:** `structure::BED: StructureId`; the existing construction command, material delivery, `Structure`, and save DTOs remain the only path to a finished bed.
 
-- [ ] Add red tests asserting the bed registry cost/passability/non-connectivity, that designation requires a real `Wood x2` delivery before construction, and save/load retains the finished bed. Run focused `cargo test -p progressus-content bed` and `cargo test -p progressus-sim bed`.
-- [ ] Append `bed` to the registry without changing existing IDs. Adapt only kind-specific placement or persistence matches needed for this new passable structure; do not special-case a free bed spawn.
-- [ ] Run tests green and `cargo test -p progressus-sim --lib`; commit and push.
+- [x] Add a red registry test for bed cost/passability/non-connectivity; add a physical delivery and save/load regression for the finished bed.
+- [x] Append `bed` to the registry without changing existing IDs. Existing construction and persistence paths already accept the new passable structure; no kind-specific special case was needed.
+- [x] Run focused tests, all `progressus-content` tests and `cargo test -p progressus-sim --lib`; commit and push.
 
 ### Task 3: Enclosure and Sleep lifecycle
 

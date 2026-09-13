@@ -42,6 +42,15 @@ pub static STRUCTURES: &[StructureDefinition] = &[
         connects_to_wall_network: true,
         has_open_state: true,
     },
+    StructureDefinition {
+        name: "bed",
+        material: item::WOOD,
+        material_quantity: 2,
+        work_ticks: 6,
+        navigation_cost: Some(2),
+        connects_to_wall_network: false,
+        has_open_state: false,
+    },
 ];
 
 content_handle!(StructureId, StructureDefinition, STRUCTURES, structure);
@@ -55,6 +64,7 @@ impl StructureId {
 
 pub const STONE_WALL: StructureId = structure("stone_wall");
 pub const DOOR: StructureId = structure("door");
+pub const BED: StructureId = structure("bed");
 
 #[cfg(test)]
 mod tests {
@@ -62,7 +72,7 @@ mod tests {
 
     #[test]
     fn named_constants_address_their_own_definitions() {
-        for (id, name) in [(STONE_WALL, "stone_wall"), (DOOR, "door")] {
+        for (id, name) in [(STONE_WALL, "stone_wall"), (DOOR, "door"), (BED, "bed")] {
             assert_eq!(id.name(), name);
             assert_eq!(StructureId::from_name(name), Some(id));
         }
@@ -115,6 +125,16 @@ mod tests {
 
     #[test]
     fn unknown_names_resolve_to_nothing_rather_than_a_substitute() {
-        assert_eq!(StructureId::from_name("bed"), None);
+        assert_eq!(StructureId::from_name("unknown"), None);
+    }
+
+    #[test]
+    fn bed_costs_two_wood_and_is_passable_without_enclosing_space() {
+        let bed = StructureId::from_name("bed").expect("bed is registered");
+        assert_eq!(bed.definition().material, item::WOOD);
+        assert_eq!(bed.definition().material_quantity, 2);
+        assert_eq!(bed.definition().navigation_cost, DOOR.definition().navigation_cost);
+        assert!(!bed.definition().connects_to_wall_network);
+        assert!(!bed.definition().has_open_state);
     }
 }
