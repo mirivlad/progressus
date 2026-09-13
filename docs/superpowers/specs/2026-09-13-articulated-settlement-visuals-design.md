@@ -1,6 +1,6 @@
 # Articulated settlement visuals — design
 
-Status: **Proposed for owner review**
+Status: **Approved for implementation**
 
 Date: 2026-09-13
 
