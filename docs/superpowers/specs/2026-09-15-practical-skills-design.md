@@ -1,6 +1,6 @@
 # Prototype 02 Stage C — Practical Skills
 
-Status: **Concept approved by project owner on 2026-09-15; written specification awaiting review**
+Status: **Approved by project owner on 2026-09-15; implementation in progress**
 
 ## Purpose and scope
 
