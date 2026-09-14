@@ -89,6 +89,7 @@ Status: **Implemented; native interaction acceptance pending**
 
 - a non-renewable ore source distinct from ordinary Stone;
 - physical ore item and extraction work;
+- player-directed physical excavation of ground and rock on the existing flat map: work changes the authoritative cell and creates physical output that must be transported; no underground levels in Prototype 02;
 - one furnace/smelting production object using the generic production-logistics contract;
 - at least one fuel/material requirement;
 - one metal intermediate/product;
