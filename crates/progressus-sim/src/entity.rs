@@ -80,6 +80,7 @@ pub(crate) struct CharacterRestoreState {
     pub(crate) interaction_radius: InteractionRadius,
     pub(crate) satiety: u8,
     pub(crate) rest: u8,
+    pub(crate) last_sleep_sheltered: Option<bool>,
     pub(crate) idle_anchor: WorldCell,
     pub(crate) movement: MovementState,
     pub(crate) route: Option<NavigationRoute>,
@@ -94,6 +95,7 @@ pub struct Character {
     interaction_radius: InteractionRadius,
     satiety: u8,
     rest: u8,
+    last_sleep_sheltered: Option<bool>,
     idle_anchor: WorldCell,
     movement: MovementState,
     route: Option<NavigationRoute>,
@@ -110,6 +112,7 @@ impl Character {
             interaction_radius: DEFAULT_CHARACTER_INTERACTION_RADIUS,
             satiety: MAX_SATIETY,
             rest: MAX_REST,
+            last_sleep_sheltered: None,
             idle_anchor: position.containing_cell(),
             movement: MovementState::Idle,
             route: None,
@@ -131,6 +134,7 @@ impl Character {
             interaction_radius: state.interaction_radius,
             satiety: state.satiety,
             rest: state.rest,
+            last_sleep_sheltered: state.last_sleep_sheltered,
             idle_anchor: state.idle_anchor,
             movement: state.movement,
             route: state.route,
@@ -164,6 +168,14 @@ impl Character {
 
     pub const fn rest(&self) -> u8 {
         self.rest
+    }
+
+    pub const fn last_sleep_sheltered(&self) -> Option<bool> {
+        self.last_sleep_sheltered
+    }
+
+    pub(crate) fn record_sleep_shelter(&mut self, sheltered: bool) {
+        self.last_sleep_sheltered = Some(sheltered);
     }
 
     pub const fn is_tired(&self) -> bool {

@@ -77,8 +77,10 @@ impl Palette {
             ModelKind::Wall
                 | ModelKind::Door
                 | ModelKind::OpenDoor
+                | ModelKind::Bed
                 | ModelKind::ConstructionWall
                 | ModelKind::ConstructionDoor
+                | ModelKind::ConstructionBed
         );
         let variant = variant % kind.variant_count();
         self.models

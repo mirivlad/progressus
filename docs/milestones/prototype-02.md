@@ -71,12 +71,11 @@ Worldgen v3 adds deterministic `BerryBush` sources, including four guaranteed bu
 
 ## 4. Stage B — Sleep and shelter
 
-- authoritative fatigue state;
-- autonomous Sleep job;
-- a simple physical sleeping place/shelter structure;
-- sleeping restores fatigue;
-- shelter materially improves sleep/rest or prevents an environmental penalty;
-- no hidden abstract housing inventory.
+Status: **Implemented; native interaction acceptance pending**
+
+- Each character has persistent authoritative rest (`0..=100`), decaying by one every 48 ticks. At 30 or below, an exclusive autonomous Sleep job can reserve a finished Bed; without a reachable free bed, the character sleeps on the ground. Hunger and direct player orders preempt Sleep and release its reservation.
+- Bed is an ordinary physically delivered `2 Wood` construction, passable and separate from wall connectivity. At Sleep completion, a bounded 256-cell cardinal fill derives whether real walls, doors, or impassable terrain enclose the sleeping cell. An enclosed bed restores rest to 100; an open bed adds 50; ground sleep adds 25. No housing inventory or stored room state exists.
+- Save v1 persists rest, active Sleep and bed ownership, and the most recent shelter verdict. Detached snapshots expose them to the localized inspector and the Bed build tool/low-poly presentation. Headless tier, reservation, save/load and 10,000-tick five-person food/rest tests pass. The native Build palette and bed model were observed, but exact click-to-designate and live sleep-pose acceptance still need a fresh owner-side check. See [`ADR-0020`](../adr/0020-rest-sleep-and-enclosure-shelter.md).
 
 ## 5. Stage C — Skills and practical knowledge
 
@@ -161,7 +160,7 @@ Prototype 02 does not require:
 
 - [x] nutrition and autonomous physical eating work;
 - [x] renewable physical food can sustain the five-character settlement;
-- [ ] sleep and shelter work;
+- [x] sleep and shelter work in authoritative simulation and client plumbing (native interaction acceptance pending);
 - [ ] at least one practical skill changes work outcomes;
 - [ ] ore extraction works;
 - [ ] one early metallurgy chain works through physical production logistics;

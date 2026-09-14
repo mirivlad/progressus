@@ -361,12 +361,20 @@ pub(crate) fn sync(
         .snapshot()
         .structures
         .iter()
+        .filter(|s| s.kind.definition().connects_to_wall_network)
         .map(|s| s.cell)
-        .chain(game.snapshot().construction_sites.iter().map(|s| s.cell))
+        .chain(
+            game.snapshot()
+                .construction_sites
+                .iter()
+                .filter(|s| s.kind.definition().connects_to_wall_network)
+                .map(|s| s.cell),
+        )
         .collect();
     for s in &game.snapshot().structures {
         let kind = match s.kind.name() {
             "stone_wall" => ModelKind::Wall,
+            "bed" => ModelKind::Bed,
             "door" => {
                 if s.door_state == Some(DoorState::Open) {
                     ModelKind::OpenDoor
@@ -389,6 +397,8 @@ pub(crate) fn sync(
             ObjectKey::Site(s.id),
             if s.kind == structure::DOOR {
                 ModelKind::ConstructionDoor
+            } else if s.kind == structure::BED {
+                ModelKind::ConstructionBed
             } else {
                 ModelKind::ConstructionWall
             },
@@ -673,8 +683,10 @@ mod tests {
             ModelKind::Wall,
             ModelKind::Door,
             ModelKind::OpenDoor,
+            ModelKind::Bed,
             ModelKind::ConstructionWall,
             ModelKind::ConstructionDoor,
+            ModelKind::ConstructionBed,
         ] {
             assert!(!kind.accepts_pose_variety(), "{kind:?} would lose its axis");
         }

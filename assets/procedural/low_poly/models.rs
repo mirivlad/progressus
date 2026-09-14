@@ -19,8 +19,10 @@ pub enum ModelKind {
     Wall,
     Door,
     OpenDoor,
+    Bed,
     ConstructionWall,
     ConstructionDoor,
+    ConstructionBed,
     Wood,
     Stone,
     PrimitiveTool,
@@ -141,7 +143,7 @@ impl ModelKind {
     /// Every kind, so tests cover a new model without being edited. Nothing in
     /// the running client needs to enumerate kinds.
     #[cfg(test)]
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::Tree,
         Self::StoneOutcrop,
         Self::BerryBush,
@@ -150,8 +152,10 @@ impl ModelKind {
         Self::Wall,
         Self::Door,
         Self::OpenDoor,
+        Self::Bed,
         Self::ConstructionWall,
         Self::ConstructionDoor,
+        Self::ConstructionBed,
         Self::Wood,
         Self::Stone,
         Self::PrimitiveTool,
@@ -172,6 +176,7 @@ impl ModelKind {
             Self::Character => 4,
             Self::Wood | Self::Stone | Self::Berries | Self::CopperOre => 3,
             Self::PrimitiveTool | Self::Workbench | Self::Placeholder | Self::Cart => 2,
+            Self::Bed | Self::ConstructionBed => 1,
             // Structure variants are connectivity masks, not shapes.
             Self::Wall
             | Self::Door
@@ -203,8 +208,10 @@ pub fn model_mesh(kind: ModelKind, variant: u8) -> Mesh {
         ModelKind::Wall => wall(&mut geometry, 10),
         ModelKind::Door => door(&mut geometry, false),
         ModelKind::OpenDoor => door(&mut geometry, true),
+        ModelKind::Bed => bed(&mut geometry),
         ModelKind::ConstructionWall => construction_wall(&mut geometry, 10),
         ModelKind::ConstructionDoor => construction_door(&mut geometry),
+        ModelKind::ConstructionBed => construction_bed(&mut geometry),
         ModelKind::Wood => wood(&mut geometry, variant),
         ModelKind::Stone => loose_stone(&mut geometry, variant),
         ModelKind::PrimitiveTool => primitive_tool(&mut geometry, variant),
@@ -253,6 +260,51 @@ const MORTAR: Rgba = [0.56, 0.53, 0.46, 1.0];
 const COPPER: Rgba = [0.72, 0.39, 0.17, 1.0];
 const VERDIGRIS: Rgba = [0.25, 0.60, 0.50, 1.0];
 const BLUEPRINT: Rgba = [0.10, 0.66, 0.88, 0.72];
+
+fn bed(g: &mut Geometry) {
+    for x in [-0.30, 0.30] {
+        for z in [-0.18, 0.18] {
+            g.cuboid(Vec3::new(x, 0.10, z), Vec3::new(0.07, 0.20, 0.07), BARK);
+        }
+    }
+    g.cuboid(
+        Vec3::new(0., 0.20, 0.),
+        Vec3::new(0.70, 0.09, 0.43),
+        BARK_LIGHT,
+    );
+    g.cuboid(
+        Vec3::new(0., 0.265, 0.025),
+        Vec3::new(0.60, 0.05, 0.31),
+        [0.20, 0.42, 0.47, 1.],
+    );
+    g.cuboid(
+        Vec3::new(0., 0.30, -0.125),
+        Vec3::new(0.21, 0.055, 0.105),
+        [0.75, 0.72, 0.60, 1.],
+    );
+    g.cuboid(
+        Vec3::new(0., 0.30, 0.215),
+        Vec3::new(0.70, 0.20, 0.045),
+        BARK,
+    );
+}
+
+fn construction_bed(g: &mut Geometry) {
+    for x in [-0.30, 0.30] {
+        g.cuboid(
+            Vec3::new(x, 0.10, 0.),
+            Vec3::new(0.055, 0.20, 0.43),
+            BLUEPRINT,
+        );
+    }
+    for z in [-0.18, 0.18] {
+        g.cuboid(
+            Vec3::new(0., 0.10, z),
+            Vec3::new(0.65, 0.20, 0.055),
+            BLUEPRINT,
+        );
+    }
+}
 
 #[derive(Default)]
 struct Geometry {
@@ -1177,6 +1229,8 @@ mod tests {
                         | ModelKind::CopperOre
                         | ModelKind::PrimitiveTool
                         | ModelKind::Workbench
+                        | ModelKind::Bed
+                        | ModelKind::ConstructionBed
                         | ModelKind::Character
                 )
         };

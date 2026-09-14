@@ -56,15 +56,15 @@
 
 **Interfaces:** Build palette's Bed tool submits ordinary `DesignateConstruction { kind: structure::BED }`; `CharacterSnapshot` supplies rest and sleep status. Client never computes enclosure.
 
-- [ ] Write red client tests for Bed tool mapping/localized strings, rest inspector, and deterministic bed presentation selection. Run `cargo test -p progressus-client bed_` and `cargo test -p progressus-client rest_`.
-- [ ] Add Bed palette entry, localized labels, a distinct low-poly bed mesh, and rest/sleep inspector state. If completed-sleep shelter status needs a persistent signal, publish it from simulation through the application read model; do not infer it from client geometry.
+- [x] Write red client tests for Bed tool mapping/localized strings, rest inspector, and deterministic bed presentation selection. Run focused client tests. Localization and pose tests first failed on missing Bed/Sleep support; full client tests are part of the final gate.
+- [x] Add Bed palette entry, localized labels, a distinct low-poly bed mesh, and rest/sleep inspector state. The completed-sleep shelter verdict is persisted by simulation and published through the application read model, not inferred from client geometry.
 - [ ] Run focused tests green and `cargo check -p progressus-client --all-targets -j 1`; perform native click/designation and visible sleep smoke; commit and push.
 
 ### Task 5: Integration and milestone evidence
 
 **Files:** `crates/progressus-sim/src/simulation/needs.rs`, `crates/progressus-app/tests/client_boundary.rs`, `docs/milestones/prototype-02.md`, `docs/architecture/overview.md`, `README.md`.
 
-- [ ] Add a headless five-person food-and-rest long run and a public app command/snapshot regression that constructs a bed, sleeps, saves during Sleep, reloads, and converges deterministically. This is a Stage B scenario, not a false claim that Stage C–E activity coverage is complete.
-- [ ] Run red, implement only missing integration, run green. Check item conservation, stable IDs, bounded residency and save/load.
+- [x] Add a headless five-person food-and-rest long run and a public app command/snapshot regression that constructs a bed, sleeps, saves during Sleep, reloads, and converges deterministically. This is a Stage B scenario, not a false claim that Stage C–E activity coverage is complete.
+- [x] Run focused tests, implement only missing integration, run green. Existing conservation/stable-ID tests plus the long-run job/item index checks and bounded-residency app assertion passed.
 - [ ] Run `PROGRESSUS_RUN_CLIENT_TESTS=1 ./scripts/check-prototype-01.sh`; inspect full exit code and native evidence. Update docs with proved behavior and explicitly pending GUI or owner-acceptance observations.
 - [ ] Run `git diff --check`, commit, push, verify `HEAD == origin/main` and a clean worktree. Report all unverified acceptance items separately.

@@ -616,6 +616,8 @@ struct CharacterSave {
     satiety: u8,
     #[serde(default = "default_rest")]
     rest: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_sleep_sheltered: Option<bool>,
     #[serde(default)]
     idle_anchor: Option<CellSave>,
     movement: MovementSave,
@@ -640,6 +642,7 @@ impl CharacterSave {
             interaction_radius_subunits: character.interaction_radius().subunits(),
             satiety: character.satiety(),
             rest: character.rest(),
+            last_sleep_sheltered: character.last_sleep_sheltered(),
             idle_anchor: Some(character.idle_anchor().into()),
             movement: character.movement().into(),
             navigation: character.navigation_route().map(NavigationSave::from_route),
@@ -704,6 +707,7 @@ impl CharacterSave {
                 interaction_radius: InteractionRadius::new(self.interaction_radius_subunits),
                 satiety: self.satiety,
                 rest: self.rest,
+                last_sleep_sheltered: self.last_sleep_sheltered,
                 idle_anchor,
                 movement,
                 route,
@@ -3039,12 +3043,21 @@ mod tests {
         let mut json: Value = serde_json::from_slice(&simulation.save_json().unwrap()).unwrap();
         for character in json["characters"].as_array_mut().unwrap() {
             character.as_object_mut().unwrap().remove("rest");
+            character
+                .as_object_mut()
+                .unwrap()
+                .remove("last_sleep_sheltered");
         }
         let restored = Simulation::load_json(&serde_json::to_vec(&json).unwrap()).unwrap();
         assert!(
             restored
                 .characters()
                 .all(|character| character.rest() == MAX_REST)
+        );
+        assert!(
+            restored
+                .characters()
+                .all(|character| character.last_sleep_sheltered().is_none())
         );
     }
 

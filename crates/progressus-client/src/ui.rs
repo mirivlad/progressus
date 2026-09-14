@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use progressus_app::{JobState, MAX_SATIETY, MovementState};
+use progressus_app::{JobState, MAX_REST, MAX_SATIETY, MovementState};
 
 use crate::i18n::{Language, Locale, TextKey};
 use crate::interaction::TickScheduler;
@@ -19,6 +19,7 @@ pub(crate) enum ToolMode {
     Harvest,
     Wall,
     Door,
+    Bed,
     Workbench,
     CancelJobs,
 }
@@ -32,6 +33,7 @@ impl ToolMode {
             Self::Harvest => TextKey::Harvest,
             Self::Wall => TextKey::StoneWall,
             Self::Door => TextKey::Door,
+            Self::Bed => TextKey::Bed,
             Self::Workbench => TextKey::Workbench,
             Self::CancelJobs => TextKey::CancelJobs,
         }
@@ -205,6 +207,7 @@ pub(crate) fn setup_toolbar(
         &[
             (ToolMode::Wall, "W"),
             (ToolMode::Door, "D"),
+            (ToolMode::Bed, "B"),
             (ToolMode::Workbench, "T"),
         ],
         &font,
@@ -679,8 +682,13 @@ pub(crate) fn sync_character_inspector(
         carrying.join(", ")
     };
 
+    let last_sleep = match character.last_sleep_sheltered {
+        Some(true) => locale.tr(TextKey::Sheltered),
+        Some(false) => locale.tr(TextKey::Unsheltered),
+        None => locale.tr(TextKey::NoneValue),
+    };
     let text = format!(
-        "{}: {}\n{}: {}\n{}: ({}, {})\n{}: {}/{}\n{}: {}\n{}: {}\n{}: {}",
+        "{}: {}\n{}: {}\n{}: ({}, {})\n{}: {}/{}\n{}: {}/{}\n{}: {}\n{}: {}\n{}: {}\n{}: {}",
         locale.tr(TextKey::Character),
         character.name,
         locale.tr(TextKey::Identifier),
@@ -691,6 +699,11 @@ pub(crate) fn sync_character_inspector(
         locale.tr(TextKey::Satiety),
         character.satiety,
         MAX_SATIETY,
+        locale.tr(TextKey::Rest),
+        character.rest,
+        MAX_REST,
+        locale.tr(TextKey::LastSleepShelter),
+        last_sleep,
         locale.tr(TextKey::Movement),
         movement,
         locale.tr(TextKey::Work),
@@ -988,6 +1001,11 @@ fn hud_tooltip_text(
             "Поставить автоматически открывающуюся дверь в проходе стены.",
             None,
         ),
+        (Language::Ru, HudTooltipKind::Tool(ToolMode::Bed)) => (
+            "Кровать",
+            "Построить кровать из двух единиц дерева. В закрытом помещении сон восстанавливает больше сил.",
+            None,
+        ),
         (Language::Ru, HudTooltipKind::Tool(ToolMode::Workbench)) => {
             ("Верстак", "Поставить производственный верстак.", None)
         }
@@ -1053,6 +1071,11 @@ fn hud_tooltip_text(
             "Place an automatically opening door in a wall passage.",
             None,
         ),
+        (Language::En, HudTooltipKind::Tool(ToolMode::Bed)) => (
+            "Bed",
+            "Build a bed from two wood. Sleep restores more rest inside an enclosed room.",
+            None,
+        ),
         (Language::En, HudTooltipKind::Tool(ToolMode::Workbench)) => {
             ("Workbench", "Place a production workbench.", None)
         }
@@ -1115,5 +1138,7 @@ mod tests {
         assert_eq!(locale.tr(ToolMode::Workbench.text_key()), "Верстак");
         assert!(ToolMode::Wall.uses_area_drag());
         assert!(!ToolMode::Workbench.uses_area_drag());
+        assert_eq!(ToolMode::Bed.text_key(), TextKey::Bed);
+        assert!(!ToolMode::Bed.uses_area_drag());
     }
 }

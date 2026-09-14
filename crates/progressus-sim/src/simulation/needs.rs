@@ -176,12 +176,10 @@ impl Simulation {
                 .set_remaining_work(job_id, remaining_ticks - 1)
                 .map_err(SimulationError::from_job_world);
         }
+        let sheltered =
+            bed_id.is_some() && self.is_enclosed(character.position().containing_cell())?;
         let restoration = if bed_id.is_some() {
-            if self.is_enclosed(character.position().containing_cell())? {
-                crate::MAX_REST
-            } else {
-                50
-            }
+            if sheltered { crate::MAX_REST } else { 50 }
         } else {
             25
         };
@@ -189,6 +187,10 @@ impl Simulation {
             .get_mut(&character_id)
             .expect("sleep worker is present")
             .restore_rest(restoration);
+        self.characters
+            .get_mut(&character_id)
+            .expect("sleep worker is present")
+            .record_sleep_shelter(sheltered);
         self.job_world
             .remove(job_id)
             .map_err(SimulationError::from_job_world)?;
@@ -679,6 +681,20 @@ mod tests {
                 character(&simulation, sleeper).rest(),
                 if enclosed { 100 } else { 79 }
             );
+            let saved: serde_json::Value =
+                serde_json::from_slice(&simulation.save_json().unwrap()).unwrap();
+            let sleeper_save = saved["characters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|value| value["id"] == sleeper.value())
+                .unwrap();
+            assert_eq!(sleeper_save["last_sleep_sheltered"], enclosed);
+            let restored = Simulation::load_json(&simulation.save_json().unwrap()).unwrap();
+            assert_eq!(
+                character(&restored, sleeper).last_sleep_sheltered(),
+                Some(enclosed)
+            );
         }
     }
 
@@ -915,19 +931,38 @@ mod tests {
         }
 
         let mut minimum_satiety = MAX_SATIETY;
+        let mut minimum_rest = crate::MAX_REST;
+        let mut saw_sleep = false;
         for _ in 0..625 {
             simulation.advance_ticks(16).unwrap();
+            saw_sleep |= simulation
+                .jobs()
+                .any(|job| matches!(job.kind(), JobKind::Sleep { .. }));
             for character in simulation.characters() {
                 minimum_satiety = minimum_satiety.min(character.satiety());
+                minimum_rest = minimum_rest.min(character.rest());
                 assert!(
                     character.satiety() > 0,
                     "character {} starved at tick {}",
                     character.id().value(),
                     simulation.tick().value()
                 );
+                assert!(
+                    character.rest() > 0,
+                    "character {} became exhausted at tick {}",
+                    character.id().value(),
+                    simulation.tick().value()
+                );
             }
+            assert!(simulation.job_world.indexes_are_consistent());
+            assert!(simulation.item_world.indexes_are_consistent());
         }
         assert!(minimum_satiety <= HUNGRY_SATIETY);
+        assert!(minimum_rest <= crate::TIRED_REST);
+        assert!(
+            saw_sleep,
+            "no character slept in the 10,000-tick settlement run"
+        );
         assert!(simulation.resource_revision() >= 8);
         assert!(
             simulation.explored_world.cells().all(|cell| {

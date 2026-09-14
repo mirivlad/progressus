@@ -10,7 +10,7 @@ pub use progressus_sim::{
     ConstructionPreparationTarget, ConstructionSite, DEFAULT_CHARACTER_INTERACTION_RADIUS,
     DEFAULT_CHARACTER_SPEED, Direction, DoorState, EntityId, InteractionRadius, ItemCategory,
     ItemId, ItemLocation, ItemQuantity, JobKind, JobState, LocalCell, MAX_PRODUCTION_ORDER_RUNS,
-    MAX_SATIETY, MovementSpeed, MovementState, NaturalResource, NaturalResourceId,
+    MAX_REST, MAX_SATIETY, MovementSpeed, MovementState, NaturalResource, NaturalResourceId,
     ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind,
     RESIDENT_CHUNK_RADIUS, RESIDENT_CHUNKS_PER_CENTER, RecipeId, SAVE_FORMAT_VERSION,
     SUBUNITS_PER_CELL, SaveError, SaveMetadata, SimulationTick, SlotId, Stockpile, Structure,

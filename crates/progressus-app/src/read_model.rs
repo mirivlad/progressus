@@ -341,6 +341,7 @@ pub struct CharacterSnapshot {
     pub containing_cell: WorldCell,
     pub satiety: u8,
     pub rest: u8,
+    pub last_sleep_sheltered: Option<bool>,
     pub movement: MovementState,
     pub last_tick_motion_trace: Vec<WorldPosition>,
 }
@@ -354,6 +355,7 @@ impl From<&Character> for CharacterSnapshot {
             containing_cell: character.position().containing_cell(),
             satiety: character.satiety(),
             rest: character.rest(),
+            last_sleep_sheltered: character.last_sleep_sheltered(),
             movement: character.movement(),
             last_tick_motion_trace: character.last_tick_motion_trace().to_vec(),
         }

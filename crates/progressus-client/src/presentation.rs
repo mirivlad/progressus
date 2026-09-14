@@ -68,6 +68,7 @@ mod tests {
             containing_cell: WorldCell::new(32, 0),
             satiety: 100,
             rest: 100,
+            last_sleep_sheltered: None,
             movement: MovementState::Idle,
             last_tick_motion_trace: vec![
                 WorldPosition::from_cell_center(WorldCell::new(32, 0)).unwrap(),

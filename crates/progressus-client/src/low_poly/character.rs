@@ -133,6 +133,7 @@ pub(crate) enum PoseKind {
     Idle,
     Walk,
     Work,
+    Sleep,
 }
 
 pub(crate) struct CharacterPose {
@@ -151,6 +152,12 @@ pub(crate) fn pose_kind(
 ) -> PoseKind {
     if elapsed_seconds < 0.25 && trace.first() != trace.last() {
         return PoseKind::Walk;
+    }
+    if jobs.iter().any(|job| {
+        matches!(job.state, JobState::Working { worker_id, .. } if worker_id == id)
+            && matches!(job.kind, JobKind::Sleep { .. })
+    }) {
+        return PoseKind::Sleep;
     }
     if jobs.iter().any(|job| {
         matches!(job.state, JobState::Working { worker_id, .. } if worker_id == id)
@@ -194,6 +201,13 @@ pub(crate) fn pose(kind: PoseKind, phase_seconds: f32) -> CharacterPose {
             right_arm: -0.25 + wave * 0.3,
             torso_bob: wave * 0.012,
         },
+        PoseKind::Sleep => CharacterPose {
+            left_leg: -0.95,
+            right_leg: -0.95,
+            left_arm: -0.55,
+            right_arm: -0.55,
+            torso_bob: wave * 0.004,
+        },
     }
 }
 
@@ -210,20 +224,40 @@ pub(crate) fn animate_rigs(
         };
         let kind = pose_kind(pawn.0, &m.trace, m.elapsed_seconds, &game.snapshot().jobs);
         let pose = pose(kind, m.phase_seconds);
+        let sleeping = kind == PoseKind::Sleep;
         if let Ok(mut torso) = parts.get_mut(rig.torso) {
-            torso.translation.y = 0.34 + pose.torso_bob;
+            torso.translation.y = if sleeping { 0.27 } else { 0.34 } + pose.torso_bob;
+            torso.rotation = Quat::from_rotation_x(if sleeping { -0.18 } else { 0. });
         }
         if let Ok(mut head) = parts.get_mut(rig.head) {
-            head.translation.y = 0.72 + pose.torso_bob;
+            head.translation.y = if sleeping { 0.52 } else { 0.72 } + pose.torso_bob;
+            head.rotation = Quat::from_rotation_x(if sleeping { -0.12 } else { 0. });
         }
-        for (entity, angle) in [
-            (rig.left_arm, pose.left_arm),
-            (rig.right_arm, pose.right_arm),
-            (rig.left_leg, pose.left_leg),
-            (rig.right_leg, pose.right_leg),
+        for (entity, angle, height) in [
+            (
+                rig.left_arm,
+                pose.left_arm,
+                if sleeping { 0.50 } else { 0.65 },
+            ),
+            (
+                rig.right_arm,
+                pose.right_arm,
+                if sleeping { 0.50 } else { 0.65 },
+            ),
+            (
+                rig.left_leg,
+                pose.left_leg,
+                if sleeping { 0.30 } else { 0.37 },
+            ),
+            (
+                rig.right_leg,
+                pose.right_leg,
+                if sleeping { 0.30 } else { 0.37 },
+            ),
         ] {
             if let Ok(mut part) = parts.get_mut(entity) {
                 part.rotation = Quat::from_rotation_x(angle);
+                part.translation.y = height;
             }
         }
     }
@@ -416,6 +450,11 @@ mod tests {
             requested_worker_id: Some(id),
         };
         assert_eq!(pose_kind(id, &[last], 0., &work), PoseKind::Idle);
+        work[0].kind = JobKind::Sleep {
+            character_id: id,
+            bed_id: None,
+        };
+        assert_eq!(pose_kind(id, &[last], 0., &work), PoseKind::Sleep);
         work[0].kind = JobKind::Harvest {
             source: WorldCell::new(0, 0),
         };

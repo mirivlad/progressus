@@ -538,6 +538,14 @@ fn apply_point_tool(
                     cell,
                 })?;
         }
+        ToolMode::Bed => {
+            authoritative
+                .application
+                .execute(Command::DesignateConstruction {
+                    kind: structure::BED,
+                    cell,
+                })?;
+        }
         ToolMode::Workbench => {
             if workstation_at(authoritative.snapshot(), cell).is_none()
                 && !authoritative
@@ -768,7 +776,7 @@ fn apply_tool_area(
                     })?;
             }
         }
-        ToolMode::Door | ToolMode::Workbench => {}
+        ToolMode::Door | ToolMode::Bed | ToolMode::Workbench => {}
         ToolMode::CancelJobs => {
             let selected = cells.into_iter().collect::<BTreeSet<_>>();
             let jobs = area_snapshot
@@ -942,7 +950,10 @@ const fn cell_selection_target(
 }
 
 const fn cell_selection_allowed(mode: ToolMode) -> bool {
-    !matches!(mode, ToolMode::Wall | ToolMode::Door | ToolMode::Workbench)
+    !matches!(
+        mode,
+        ToolMode::Wall | ToolMode::Door | ToolMode::Bed | ToolMode::Workbench
+    )
 }
 
 fn workstation_at(snapshot: &ClientSnapshot, cell: WorldCell) -> Option<EntityId> {
@@ -1541,9 +1552,29 @@ mod tests {
     fn construction_tools_send_an_unmodified_click_to_the_tool() {
         assert!(!super::cell_selection_allowed(ToolMode::Wall));
         assert!(!super::cell_selection_allowed(ToolMode::Door));
+        assert!(!super::cell_selection_allowed(ToolMode::Bed));
         assert!(!super::cell_selection_allowed(ToolMode::Workbench));
         assert!(super::cell_selection_allowed(ToolMode::Select));
         assert!(super::cell_selection_allowed(ToolMode::Harvest));
+    }
+
+    #[test]
+    fn bed_point_tool_designates_a_real_bed_site() {
+        let mut client = AuthoritativeClient::new().unwrap();
+        let cell = (-5..=5)
+            .flat_map(|y| (-5..=5).map(move |x| WorldCell::new(x, y)))
+            .find(|cell| super::apply_point_tool(&mut client, ToolMode::Bed, *cell).is_ok())
+            .expect("starter region has a bed construction cell");
+        let snapshot = client
+            .application
+            .snapshot(progressus_app::SnapshotQuery::default())
+            .unwrap();
+        assert!(
+            snapshot
+                .construction_sites
+                .iter()
+                .any(|site| { site.cell == cell && site.kind == progressus_app::structure::BED })
+        );
     }
 
     #[test]

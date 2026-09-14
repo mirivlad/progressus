@@ -1164,6 +1164,69 @@ fn save_load_crosses_the_public_application_boundary_without_internal_access() {
 }
 
 #[test]
+fn bed_sleep_and_active_save_cross_the_public_application_boundary() {
+    let mut application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(0),
+    })
+    .unwrap();
+    let cell = WorldCell::new(0, 1);
+    application
+        .execute(Command::DesignateConstruction {
+            kind: structure::BED,
+            cell,
+        })
+        .unwrap();
+    let bed_id = application
+        .snapshot(SnapshotQuery::default())
+        .unwrap()
+        .construction_sites[0]
+        .id;
+
+    let mut saved_during_sleep = None;
+    for _ in 0..5_000 {
+        application
+            .execute(Command::AdvanceTicks { count: 1 })
+            .unwrap();
+        let snapshot = application.snapshot(SnapshotQuery::default()).unwrap();
+        if snapshot
+            .structures
+            .iter()
+            .any(|structure| structure.id == bed_id)
+            && snapshot.jobs.iter().any(
+                |job| matches!(job.kind, JobKind::Sleep { bed_id: Some(id), .. } if id == bed_id),
+            )
+        {
+            saved_during_sleep = Some(application.save_json().unwrap());
+            break;
+        }
+    }
+    let saved_during_sleep = saved_during_sleep.expect("constructed bed was never used for Sleep");
+    let mut restored = Application::from_save_json(&saved_during_sleep).unwrap();
+    assert_eq!(restored.save_json().unwrap(), saved_during_sleep);
+
+    application
+        .execute(Command::AdvanceTicks { count: 256 })
+        .unwrap();
+    restored
+        .execute(Command::AdvanceTicks { count: 256 })
+        .unwrap();
+    assert_eq!(
+        application.save_json().unwrap(),
+        restored.save_json().unwrap()
+    );
+    let snapshot = restored.snapshot(SnapshotQuery::default()).unwrap();
+    assert!(
+        snapshot
+            .characters
+            .iter()
+            .any(|character| character.last_sleep_sheltered.is_some())
+    );
+    assert!(
+        snapshot.resident_chunks.len() <= snapshot.characters.len() * RESIDENT_CHUNKS_PER_CENTER
+    );
+}
+
+#[test]
 fn nutrition_and_physical_eating_cross_the_public_application_boundary() {
     let mut application = Application::new_game(NewGameOptions {
         seed: WorldSeed::new(42),
