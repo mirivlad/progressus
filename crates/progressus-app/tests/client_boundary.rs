@@ -27,6 +27,32 @@ fn snapshot_after_long_run(seed: u64) -> progressus_app::ClientSnapshot {
 }
 
 #[test]
+fn skill_snapshot_starts_zero_and_is_detached() {
+    let application = Application::new_game(NewGameOptions {
+        seed: WorldSeed::new(0),
+    })
+    .unwrap();
+    let mut snapshot = application.snapshot(SnapshotQuery::default()).unwrap();
+    assert_eq!(snapshot.characters[0].skills.len(), 3);
+    assert!(
+        snapshot.characters[0]
+            .skills
+            .iter()
+            .all(|entry| entry.practice == 0 && !entry.mastered)
+    );
+    snapshot.characters[0].skills.clear();
+    assert_eq!(
+        application
+            .snapshot(SnapshotQuery::default())
+            .unwrap()
+            .characters[0]
+            .skills
+            .len(),
+        3
+    );
+}
+
+#[test]
 fn snapshot_is_bounded_ordered_and_renderable() {
     let snapshot = snapshot_after_long_run(42);
 

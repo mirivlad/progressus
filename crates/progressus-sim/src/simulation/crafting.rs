@@ -1,6 +1,7 @@
 //! Craft jobs: input selection, physical supply, execution and output.
 
 use super::*;
+use progressus_content::skill;
 
 impl Simulation {
     pub(super) fn craft_local_quantity(&self, workstation_id: EntityId, kind: ItemId) -> u32 {
@@ -625,6 +626,7 @@ impl Simulation {
             .remove(job_id)
             .map_err(SimulationError::from_job_world)?;
         if let Some(character) = self.characters.get_mut(&worker_id) {
+            character.record_skill_practice(skill::CRAFTING);
             character.set_movement(MovementState::Idle);
         }
         Ok(())
@@ -635,7 +637,95 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::simulation::test_support::*;
-    use progressus_content::{item, recipe, terrain, workstation};
+    use progressus_content::{item, recipe, skill, terrain, workstation};
+
+    #[test]
+    fn mastered_crafter_starts_real_order_with_shorter_work_phase() {
+        fn first_work_ticks(simulation: &mut Simulation, workstation: EntityId) -> u32 {
+            let job = simulation
+                .designate_craft(workstation, recipe::PRIMITIVE_TOOL)
+                .unwrap();
+            for _ in 0..256 {
+                simulation.advance_ticks(1).unwrap();
+                if let Some(JobState::Working {
+                    remaining_ticks, ..
+                }) = simulation.job_world.get(job).map(Job::state)
+                {
+                    return remaining_ticks;
+                }
+            }
+            panic!("craft did not enter Working");
+        }
+
+        let mut untrained = Simulation::new(WorldSeed::new(0)).unwrap();
+        let workstation = place_clear_workbench(&mut untrained);
+        seed_recipe_inputs(&mut untrained, workstation, 2, 1);
+        let mut trained = untrained.clone();
+        for character in trained.characters.values_mut() {
+            for _ in 0..5 {
+                character.record_skill_practice(skill::CRAFTING);
+            }
+        }
+        assert_eq!(
+            first_work_ticks(&mut untrained, workstation),
+            recipe::PRIMITIVE_TOOL.definition().work_ticks
+        );
+        assert_eq!(
+            first_work_ticks(&mut trained, workstation),
+            recipe::PRIMITIVE_TOOL.definition().work_ticks - 1
+        );
+        let saved = trained.save_json().unwrap();
+        let mut restored = Simulation::load_json(&saved).unwrap();
+        assert_eq!(restored.save_json().unwrap(), saved);
+        trained.advance_ticks(32).unwrap();
+        restored.advance_ticks(32).unwrap();
+        assert_eq!(restored.save_json().unwrap(), trained.save_json().unwrap());
+        assert_eq!(total_item_quantity(&restored, item::PRIMITIVE_TOOL), 1);
+    }
+
+    #[test]
+    fn six_completed_crafts_cap_only_the_worker_at_five_practice() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        clear_all_items(&mut simulation);
+        let worker = crate::simulation::test_support::cora();
+        simulation.characters.retain(|id, _| *id == worker);
+        let workstation = place_clear_workbench(&mut simulation);
+        seed_recipe_inputs(&mut simulation, workstation, 12, 6);
+        let order = simulation
+            .add_production_order(
+                workstation,
+                recipe::PRIMITIVE_TOOL,
+                ProductionTarget::finite(6),
+            )
+            .unwrap();
+        for _ in 0..2048 {
+            if simulation
+                .production_world
+                .get(order)
+                .unwrap()
+                .remaining_runs()
+                == Some(0)
+            {
+                break;
+            }
+            simulation.advance_ticks(1).unwrap();
+        }
+        assert_eq!(
+            simulation
+                .production_world
+                .get(order)
+                .unwrap()
+                .remaining_runs(),
+            Some(0)
+        );
+        assert_eq!(total_item_quantity(&simulation, item::PRIMITIVE_TOOL), 6);
+        assert_eq!(
+            simulation.characters[&worker].skill_practice(skill::CRAFTING),
+            5
+        );
+        assert!(simulation.item_world.indexes_are_consistent());
+        assert!(simulation.job_world.indexes_are_consistent());
+    }
 
     /// A production input port must not be held hostage by an ingredient that
     /// is already satisfied.
@@ -711,9 +801,16 @@ mod tests {
             .designate_craft(workstation_id, recipe::PRIMITIVE_TOOL)
             .unwrap();
         let mut saw_working = false;
+        let mut worker = None;
 
         for _ in 0..128 {
             simulation.advance_ticks(1).unwrap();
+            worker = worker.or_else(|| {
+                simulation
+                    .job_world
+                    .get(job_id)
+                    .and_then(|job| job.state().worker())
+            });
             saw_working |= simulation
                 .job_world
                 .get(job_id)
@@ -724,6 +821,11 @@ mod tests {
         }
 
         assert!(saw_working);
+        let worker = worker.expect("craft had a worker");
+        assert_eq!(
+            simulation.characters[&worker].skill_practice(skill::CRAFTING),
+            1
+        );
         assert!(simulation.job_world.get(job_id).is_none());
         assert_eq!(
             simulation.item_world.get(wood_id).unwrap().quantity().get(),
@@ -1097,10 +1199,18 @@ mod tests {
             1
         );
         assert_eq!(total_item_quantity(&simulation, item::PRIMITIVE_TOOL), 0);
+        assert_eq!(
+            simulation.characters[&worker_id].skill_practice(skill::CRAFTING),
+            0
+        );
 
         let saved = simulation.save_json().unwrap();
         let mut completed = Simulation::load_json(&saved).unwrap();
         let mut cancelled = Simulation::load_json(&saved).unwrap();
+        assert_eq!(
+            completed.characters[&worker_id].skill_practice(skill::CRAFTING),
+            0
+        );
 
         for cell in &output_cells {
             completed
@@ -1118,6 +1228,10 @@ mod tests {
             Some(0)
         );
         assert!(completed.job_world.get(job_id).is_none());
+        assert_eq!(
+            completed.characters[&worker_id].skill_practice(skill::CRAFTING),
+            1
+        );
         completed.advance_ticks(16).unwrap();
         assert_eq!(total_item_quantity(&completed, item::PRIMITIVE_TOOL), 1);
 
@@ -1136,6 +1250,10 @@ mod tests {
             1
         );
         assert!(cancelled.job_world.indexes_are_consistent());
+        assert_eq!(
+            cancelled.characters[&worker_id].skill_practice(skill::CRAFTING),
+            0
+        );
     }
 
     #[test]

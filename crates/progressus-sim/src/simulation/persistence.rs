@@ -1,4 +1,4 @@
-use progressus_content::item;
+use progressus_content::{SkillId, item};
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
@@ -18,7 +18,10 @@ use crate::residency::ChunkResidency;
 use crate::stockpile::StockpileWorld;
 use crate::workstation_world::WorkstationWorld;
 use crate::world_state::ModifiedWorld;
-use crate::{MAX_CONTAINER_DEPTH, MAX_REST, MAX_SATIETY, MovementSpeed, ResourceLayerId, SlotId};
+use crate::{
+    MAX_CONTAINER_DEPTH, MAX_REST, MAX_SATIETY, MAX_SKILL_PRACTICE, MovementSpeed, ResourceLayerId,
+    SlotId,
+};
 
 pub const SAVE_FORMAT_VERSION: u32 = 1;
 const SAVE_FORMAT_NAME: &str = "progressus-save";
@@ -618,10 +621,18 @@ struct CharacterSave {
     rest: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_sleep_sheltered: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    skills: Vec<SkillPracticeSave>,
     #[serde(default)]
     idle_anchor: Option<CellSave>,
     movement: MovementSave,
     navigation: Option<NavigationSave>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+struct SkillPracticeSave {
+    name: String,
+    practice: u8,
 }
 
 const fn default_satiety() -> u8 {
@@ -643,6 +654,15 @@ impl CharacterSave {
             satiety: character.satiety(),
             rest: character.rest(),
             last_sleep_sheltered: character.last_sleep_sheltered(),
+            skills: SkillId::all()
+                .filter_map(|skill| {
+                    let practice = character.skill_practice(skill);
+                    (practice > 0).then(|| SkillPracticeSave {
+                        name: skill.name().to_owned(),
+                        practice,
+                    })
+                })
+                .collect(),
             idle_anchor: Some(character.idle_anchor().into()),
             movement: character.movement().into(),
             navigation: character.navigation_route().map(NavigationSave::from_route),
@@ -670,6 +690,32 @@ impl CharacterSave {
                 self.rest,
                 MAX_REST
             ));
+        }
+        let mut skills = BTreeMap::new();
+        for entry in self.skills {
+            let skill = SkillId::from_name(&entry.name).ok_or_else(|| {
+                SaveError::InvalidData(format!(
+                    "character {} has unknown skill {}",
+                    id.value(),
+                    entry.name
+                ))
+            })?;
+            if entry.practice > MAX_SKILL_PRACTICE {
+                return invalid(format!(
+                    "character {} has {} practice {} above maximum {}",
+                    id.value(),
+                    entry.name,
+                    entry.practice,
+                    MAX_SKILL_PRACTICE
+                ));
+            }
+            if skills.insert(skill, entry.practice).is_some() {
+                return invalid(format!(
+                    "character {} has duplicate skill {}",
+                    id.value(),
+                    entry.name
+                ));
+            }
         }
         let idle_anchor = self
             .idle_anchor
@@ -708,6 +754,7 @@ impl CharacterSave {
                 satiety: self.satiety,
                 rest: self.rest,
                 last_sleep_sheltered: self.last_sleep_sheltered,
+                skills,
                 idle_anchor,
                 movement,
                 route,
@@ -2611,7 +2658,7 @@ fn validate_restored_job_state(simulation: &Simulation, job: &Job) -> Result<(),
 #[cfg(test)]
 mod tests {
     use progressus_content::{
-        item, natural_resource, recipe, slot, structure, terrain, workstation,
+        item, natural_resource, recipe, skill, slot, structure, terrain, workstation,
     };
 
     /// A loaded cart must survive a save with its goods still inside it and
@@ -3067,6 +3114,63 @@ mod tests {
         let mut json: Value = serde_json::from_slice(&simulation.save_json().unwrap()).unwrap();
         json["characters"][0]["rest"] = Value::from(101);
         assert!(Simulation::load_json(&serde_json::to_vec(&json).unwrap()).is_err());
+    }
+
+    #[test]
+    fn skill_practice_round_trips_by_stable_name() {
+        let mut simulation = Simulation::new(WorldSeed::new(42)).unwrap();
+        let id = crate::simulation::test_support::cora();
+        simulation
+            .characters
+            .get_mut(&id)
+            .unwrap()
+            .record_skill_practice(skill::GATHERING);
+        let saved = simulation.save_json().unwrap();
+        let json: Value = serde_json::from_slice(&saved).unwrap();
+        let character = json["characters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|character| character["id"] == id.value())
+            .unwrap();
+        assert_eq!(character["skills"][0]["name"], "gathering");
+        assert_eq!(character["skills"][0]["practice"], 1);
+        let restored = Simulation::load_json(&saved).unwrap();
+        assert_eq!(restored.characters[&id].skill_practice(skill::GATHERING), 1);
+        assert_eq!(restored.save_json().unwrap(), saved);
+    }
+
+    #[test]
+    fn save_v1_without_skills_defaults_existing_characters_to_zero() {
+        let simulation = Simulation::new(WorldSeed::new(42)).unwrap();
+        let mut json: Value = serde_json::from_slice(&simulation.save_json().unwrap()).unwrap();
+        for character in json["characters"].as_array_mut().unwrap() {
+            character.as_object_mut().unwrap().remove("skills");
+        }
+        let restored = Simulation::load_json(&serde_json::to_vec(&json).unwrap()).unwrap();
+        assert!(
+            restored.characters().all(|character| {
+                SkillId::all().all(|skill| character.skill_practice(skill) == 0)
+            })
+        );
+    }
+
+    #[test]
+    fn save_rejects_unknown_duplicate_and_excessive_skill_practice() {
+        let simulation = Simulation::new(WorldSeed::new(42)).unwrap();
+        let base: Value = serde_json::from_slice(&simulation.save_json().unwrap()).unwrap();
+        for entries in [
+            serde_json::json!([{ "name": "unrecognized", "practice": 1 }]),
+            serde_json::json!([
+                { "name": "gathering", "practice": 1 },
+                { "name": "gathering", "practice": 2 }
+            ]),
+            serde_json::json!([{ "name": "mining", "practice": 6 }]),
+        ] {
+            let mut json = base.clone();
+            json["characters"][0]["skills"] = entries;
+            assert!(Simulation::load_json(&serde_json::to_vec(&json).unwrap()).is_err());
+        }
     }
 
     #[test]

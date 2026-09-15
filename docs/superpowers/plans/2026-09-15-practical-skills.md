@@ -8,6 +8,8 @@
 
 **Tech Stack:** Rust workspace, serde save v1 DTOs, content registry, Bevy client, headless tests.
 
+**Execution note (2026-09-15):** Task 1's practice-award method triggered strict dead-code Clippy until Task 2 used it, so Tasks 1–2 were implemented and verified together rather than committed separately. The implementation also includes a six-completion Craft cap test, trained-Working save/load, blocked-output/cancellation checks and localized inspector-row test. The repository gate with client tests enabled passes. Native inspector appearance remains a separate visual check.
+
 ## Global Constraints
 
 - Follow [the approved spec](../specs/2026-09-15-practical-skills-design.md) and ADR-0001/0002/0021/0024.

@@ -73,6 +73,7 @@ mod tests {
             last_tick_motion_trace: vec![
                 WorldPosition::from_cell_center(WorldCell::new(32, 0)).unwrap(),
             ],
+            skills: Vec::new(),
         }];
 
         assert_eq!(

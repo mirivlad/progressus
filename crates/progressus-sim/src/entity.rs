@@ -1,4 +1,6 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
+
+use progressus_content::SkillId;
 
 use crate::{InteractionRadius, SimulationError, WorldCell, WorldPosition};
 
@@ -60,6 +62,7 @@ pub const SATIETY_DECAY_INTERVAL_TICKS: u64 = 16;
 pub const MAX_REST: u8 = 100;
 pub const TIRED_REST: u8 = 30;
 pub const REST_DECAY_INTERVAL_TICKS: u64 = 48;
+pub const MAX_SKILL_PRACTICE: u8 = 5;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct EntityId(u64);
@@ -81,6 +84,7 @@ pub(crate) struct CharacterRestoreState {
     pub(crate) satiety: u8,
     pub(crate) rest: u8,
     pub(crate) last_sleep_sheltered: Option<bool>,
+    pub(crate) skills: BTreeMap<SkillId, u8>,
     pub(crate) idle_anchor: WorldCell,
     pub(crate) movement: MovementState,
     pub(crate) route: Option<NavigationRoute>,
@@ -96,6 +100,7 @@ pub struct Character {
     satiety: u8,
     rest: u8,
     last_sleep_sheltered: Option<bool>,
+    skills: BTreeMap<SkillId, u8>,
     idle_anchor: WorldCell,
     movement: MovementState,
     route: Option<NavigationRoute>,
@@ -113,6 +118,7 @@ impl Character {
             satiety: MAX_SATIETY,
             rest: MAX_REST,
             last_sleep_sheltered: None,
+            skills: BTreeMap::new(),
             idle_anchor: position.containing_cell(),
             movement: MovementState::Idle,
             route: None,
@@ -135,6 +141,7 @@ impl Character {
             satiety: state.satiety,
             rest: state.rest,
             last_sleep_sheltered: state.last_sleep_sheltered,
+            skills: state.skills,
             idle_anchor: state.idle_anchor,
             movement: state.movement,
             route: state.route,
@@ -172,6 +179,15 @@ impl Character {
 
     pub const fn last_sleep_sheltered(&self) -> Option<bool> {
         self.last_sleep_sheltered
+    }
+
+    pub fn skill_practice(&self, skill: SkillId) -> u8 {
+        self.skills.get(&skill).copied().unwrap_or(0)
+    }
+
+    pub(crate) fn record_skill_practice(&mut self, skill: SkillId) {
+        let practice = self.skills.entry(skill).or_default();
+        *practice = practice.saturating_add(1).min(MAX_SKILL_PRACTICE);
     }
 
     pub(crate) fn record_sleep_shelter(&mut self, sheltered: bool) {
@@ -305,5 +321,24 @@ impl EntityIdAllocator {
 
     pub(crate) fn peek(self) -> Option<EntityId> {
         self.next.and_then(EntityId::new)
+    }
+}
+
+#[cfg(test)]
+mod skill_tests {
+    use super::*;
+    use progressus_content::skill;
+
+    #[test]
+    fn skill_practice_starts_empty_and_caps_at_five() {
+        let id = EntityId::new(1).unwrap();
+        let position = WorldPosition::from_cell_center(WorldCell::new(0, 0)).unwrap();
+        let mut person = Character::new(id, "Ada", position);
+        assert_eq!(person.skill_practice(skill::GATHERING), 0);
+        for _ in 0..6 {
+            person.record_skill_practice(skill::GATHERING);
+        }
+        assert_eq!(person.skill_practice(skill::GATHERING), 5);
+        assert_eq!(person.skill_practice(skill::MINING), 0);
     }
 }

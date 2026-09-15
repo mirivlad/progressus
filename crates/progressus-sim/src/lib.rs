@@ -21,8 +21,8 @@ pub use construction::{
 };
 pub use entity::{
     Character, DEFAULT_CHARACTER_INTERACTION_RADIUS, DEFAULT_CHARACTER_SPEED, Direction, EntityId,
-    HUNGRY_SATIETY, MAX_REST, MAX_SATIETY, MovementSpeed, MovementState, REST_DECAY_INTERVAL_TICKS,
-    SATIETY_DECAY_INTERVAL_TICKS, TIRED_REST,
+    HUNGRY_SATIETY, MAX_REST, MAX_SATIETY, MAX_SKILL_PRACTICE, MovementSpeed, MovementState,
+    REST_DECAY_INTERVAL_TICKS, SATIETY_DECAY_INTERVAL_TICKS, TIRED_REST,
 };
 pub use exploration::CHARACTER_VISION_RADIUS_CELLS;
 pub use item_world::{ItemLocation, ItemQuantity, ItemStack, MAX_CONTAINER_DEPTH};
@@ -39,9 +39,9 @@ pub use production_logistics::{ProductionLogistics, ProductionZoneKind};
 pub use progressus_content::{
     CapabilityDefinition, CapabilityId, HAND_LOAD_UNITS, ItemCategory, ItemDefinition, ItemId,
     MAX_STACK_QUANTITY, NaturalResourceDefinition, NaturalResourceId, RecipeDefinition, RecipeId,
-    RecipeInput, SlotDefinition, SlotId, StructureDefinition, StructureId, TerrainDefinition,
-    TerrainId, WorkstationDefinition, WorkstationId, capability, item, natural_resource, recipe,
-    slot, structure, terrain, workstation,
+    RecipeInput, SkillDefinition, SkillId, SlotDefinition, SlotId, StructureDefinition,
+    StructureId, TerrainDefinition, TerrainId, WorkstationDefinition, WorkstationId, capability,
+    item, natural_resource, recipe, skill, slot, structure, terrain, workstation,
 };
 pub use progressus_worldgen::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, GeneratedChunk, LocalCell,

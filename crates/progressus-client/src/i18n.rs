@@ -81,6 +81,9 @@ pub(crate) enum TextKey {
 /// Adding content without adding a row here is caught by a test rather than by
 /// the compiler; see ADR-0021.
 const CONTENT_NAMES: &[(&str, &str, &str, &str)] = &[
+    ("skill", "gathering", "Собирательство", "Gathering"),
+    ("skill", "mining", "Горное дело", "Mining"),
+    ("skill", "crafting", "Ремесло", "Crafting"),
     ("item", "wood", "Дерево", "Wood"),
     ("item", "stone", "Камень", "Stone"),
     (
@@ -235,6 +238,10 @@ impl Locale {
         self.content_name("recipe", recipe_id.name())
     }
 
+    pub(crate) fn skill_name(self, skill_id: progressus_app::SkillId) -> &'static str {
+        self.content_name("skill", skill_id.name())
+    }
+
     pub(crate) fn workstation_name(self, kind: WorkstationId) -> &'static str {
         self.content_name("workstation", kind.name())
     }
@@ -349,7 +356,7 @@ impl Locale {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use progressus_app::{NaturalResourceId, StructureId, TerrainId, item};
+    use progressus_app::{NaturalResourceId, SkillId, StructureId, TerrainId, item};
 
     /// The compiler can no longer demand a translation for new content, so this
     /// test does. See ADR-0021.
@@ -362,6 +369,7 @@ mod tests {
             .chain(RecipeId::all().map(|id| ("recipe", id.name())))
             .chain(TerrainId::all().map(|id| ("terrain", id.name())))
             .chain(NaturalResourceId::all().map(|id| ("natural_resource", id.name())))
+            .chain(SkillId::all().map(|id| ("skill", id.name())))
             .collect();
         for (kind, name) in entries {
             let row = CONTENT_NAMES

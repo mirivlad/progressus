@@ -79,11 +79,7 @@ Status: **Implemented; native interaction acceptance pending**
 
 ## 5. Stage C — Skills and practical knowledge
 
-- small typed skill set, starting with skills actually used by implemented work;
-- work grants deterministic practice/experience;
-- skill has a measured gameplay effect such as work duration or yield;
-- skill state persists and appears in the character inspector;
-- knowledge remains partly attached to people as required by the vision.
+Implemented: the typed, stable-name Gathering, Mining and Crafting registry gives each person 0–5 persistent practice. A completed physical Harvest or Craft job awards one point only to its worker; sources requiring the mining capability train Mining, other sources train Gathering. At five points the matching work phase takes one tick less (minimum one), without changing output/input quantities or bypassing tools. Save v1 accepts old characters with no skill field, validates named entries and retains active work ticks; detached snapshots expose localized progress in the character inspector. Native inspector appearance still needs a visual smoke.
 
 ## 6. Stage D — Mining and early metallurgy
 
@@ -162,7 +158,7 @@ Prototype 02 does not require:
 - [x] nutrition and autonomous physical eating work;
 - [x] renewable physical food can sustain the five-character settlement;
 - [x] sleep and shelter work in authoritative simulation and client plumbing (native interaction acceptance pending);
-- [ ] at least one practical skill changes work outcomes;
+- [x] at least one practical skill changes work outcomes (Stage C headless/client checks; native inspector smoke pending);
 - [ ] ore extraction works;
 - [ ] one early metallurgy chain works through physical production logistics;
 - [ ] knowledge/research gates a capability without replacing physical prerequisites;

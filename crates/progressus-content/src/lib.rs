@@ -25,6 +25,7 @@ pub mod capability;
 pub mod item;
 pub mod natural_resource;
 pub mod recipe;
+pub mod skill;
 pub mod slot;
 pub mod structure;
 pub mod terrain;
@@ -34,6 +35,7 @@ pub use capability::{CapabilityDefinition, CapabilityId};
 pub use item::{HAND_LOAD_UNITS, ItemCategory, ItemDefinition, ItemId, MAX_STACK_QUANTITY};
 pub use natural_resource::{NaturalResourceDefinition, NaturalResourceId};
 pub use recipe::{RecipeDefinition, RecipeId, RecipeInput};
+pub use skill::{SkillDefinition, SkillId};
 pub use slot::{SlotDefinition, SlotId};
 pub use structure::{StructureDefinition, StructureId};
 pub use terrain::{TerrainDefinition, TerrainId};
@@ -71,6 +73,7 @@ mod tests {
             WorkstationId::all().map(WorkstationId::name).collect(),
         );
         unique("recipe", RecipeId::all().map(RecipeId::name).collect());
+        unique("skill", SkillId::all().map(SkillId::name).collect());
     }
 
     /// Handles are registry indexes, so ordering is stable and total. Anything
@@ -93,6 +96,15 @@ mod tests {
                 "cart"
             ]
         );
+    }
+
+    #[test]
+    fn skill_registry_has_stable_typed_names() {
+        assert_eq!(skill::GATHERING.name(), "gathering");
+        assert_eq!(skill::MINING.name(), "mining");
+        assert_eq!(skill::CRAFTING.name(), "crafting");
+        assert_eq!(SkillId::from_name("unknown"), None);
+        assert_eq!(SkillId::all().count(), 3);
     }
 
     /// Anything a resource requires must be something some item can provide,

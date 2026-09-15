@@ -1,8 +1,17 @@
 //! Generic job lifecycle: designation, assignment, advancement and interruption.
 
 use super::*;
+use progressus_content::{SkillId, capability, skill};
 
 impl Simulation {
+    pub(super) fn skilled_work_ticks(&self, worker_id: EntityId, skill: SkillId, base: u32) -> u32 {
+        if self.characters[&worker_id].skill_practice(skill) == crate::MAX_SKILL_PRACTICE {
+            base.saturating_sub(1).max(1)
+        } else {
+            base
+        }
+    }
+
     pub fn designate_harvest(&mut self, source: WorldCell) -> Result<EntityId, SimulationError> {
         if !self.is_explored(source) {
             return Err(SimulationError::HarvestSourceUndiscovered(source));
@@ -502,10 +511,10 @@ impl Simulation {
                 target: ConstructionPreparationTarget::NaturalResource { source },
                 ..
             } => {
-                if self.natural_resource_at(source)?.is_none() {
+                let Some(resource) = self.natural_resource_at(source)? else {
                     self.cancel_job(job_id)?;
                     return Ok(());
-                }
+                };
                 let Some(character) = self.characters.get(&worker_id) else {
                     self.job_world
                         .remove(job_id)
@@ -523,8 +532,20 @@ impl Simulation {
                         .get_mut(&worker_id)
                         .expect("worker was checked above")
                         .set_movement(MovementState::Idle);
+                    let learned = if resource
+                        .kind()
+                        .definition()
+                        .requires
+                        .contains(&capability::MINE)
+                    {
+                        skill::MINING
+                    } else {
+                        skill::GATHERING
+                    };
+                    let work_ticks =
+                        self.skilled_work_ticks(worker_id, learned, HARVEST_WORK_TICKS);
                     self.job_world
-                        .start_working(job_id, HARVEST_WORK_TICKS)
+                        .start_working(job_id, work_ticks)
                         .map_err(SimulationError::from_job_world)?;
                 } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
                     self.job_world
@@ -746,8 +767,13 @@ impl Simulation {
                         .get_mut(&worker_id)
                         .expect("worker was checked above")
                         .set_movement(MovementState::Idle);
+                    let work_ticks = self.skilled_work_ticks(
+                        worker_id,
+                        skill::CRAFTING,
+                        recipe_id.definition().work_ticks,
+                    );
                     self.job_world
-                        .start_working(job_id, recipe_id.definition().work_ticks)
+                        .start_working(job_id, work_ticks)
                         .map_err(SimulationError::from_job_world)?;
                 } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
                     self.job_world
@@ -1421,6 +1447,17 @@ impl Simulation {
             .remove(job_id)
             .map_err(SimulationError::from_job_world)?;
         if let Some(character) = self.characters.get_mut(&worker_id) {
+            let learned = if resource
+                .kind()
+                .definition()
+                .requires
+                .contains(&capability::MINE)
+            {
+                skill::MINING
+            } else {
+                skill::GATHERING
+            };
+            character.record_skill_practice(learned);
             character.set_movement(MovementState::Idle);
         }
         Ok(())
@@ -1429,7 +1466,71 @@ impl Simulation {
 
 #[cfg(test)]
 mod tests {
-    use progressus_content::{capability, item, natural_resource, recipe, slot};
+    use progressus_content::{capability, item, natural_resource, recipe, skill, slot};
+
+    #[test]
+    fn skilled_worker_gets_one_less_work_tick() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let trained = cora();
+        let untrained = EntityId::new(1).unwrap();
+        for _ in 0..5 {
+            simulation
+                .characters
+                .get_mut(&trained)
+                .unwrap()
+                .record_skill_practice(skill::GATHERING);
+        }
+        assert_eq!(
+            simulation.skilled_work_ticks(untrained, skill::GATHERING, HARVEST_WORK_TICKS),
+            4
+        );
+        assert_eq!(
+            simulation.skilled_work_ticks(trained, skill::GATHERING, HARVEST_WORK_TICKS),
+            3
+        );
+        assert_eq!(
+            simulation.skilled_work_ticks(trained, skill::GATHERING, 1),
+            1
+        );
+    }
+
+    #[test]
+    fn mastered_gatherer_starts_real_harvest_with_shorter_work_phase() {
+        fn first_work_ticks(simulation: &mut Simulation, source: WorldCell) -> u32 {
+            let job_id = simulation.designate_harvest(source).unwrap();
+            for _ in 0..256 {
+                simulation.advance_ticks(1).unwrap();
+                if let Some(JobState::Working {
+                    remaining_ticks, ..
+                }) = simulation.job_world.get(job_id).map(Job::state)
+                {
+                    return remaining_ticks;
+                }
+            }
+            panic!("harvest did not enter Working");
+        }
+
+        let mut untrained = Simulation::new(WorldSeed::new(0)).unwrap();
+        let mut trained = untrained.clone();
+        let (source, resource) = harvest_fixture(&untrained);
+        assert!(
+            !resource
+                .kind()
+                .definition()
+                .requires
+                .contains(&capability::MINE)
+        );
+        for character in trained.characters.values_mut() {
+            for _ in 0..5 {
+                character.record_skill_practice(skill::GATHERING);
+            }
+        }
+        assert_eq!(first_work_ticks(&mut untrained, source), HARVEST_WORK_TICKS);
+        assert_eq!(
+            first_work_ticks(&mut trained, source),
+            HARVEST_WORK_TICKS - 1
+        );
+    }
 
     /// Copper needs a pick. Nobody starts with one, so the settlement must
     /// fetch and equip the tool it crafted before it can mine at all — which
@@ -1463,6 +1564,19 @@ mod tests {
 
         let requires = natural_resource::COPPER_VEIN.definition().requires;
         assert_eq!(requires, [capability::MINE]);
+
+        for _ in 0..5 {
+            simulation
+                .characters
+                .get_mut(&scout)
+                .unwrap()
+                .record_skill_practice(skill::MINING);
+        }
+        assert_eq!(
+            simulation.characters[&scout].skill_practice(skill::MINING),
+            5
+        );
+        assert!(!simulation.meets_requirements(scout, requires));
 
         // Nobody is equipped, so nobody qualifies for the work.
         for id in simulation.characters.keys() {
@@ -1637,6 +1751,14 @@ mod tests {
         );
         assert!(simulation.item_world.indexes_are_consistent());
         assert!(simulation.job_world.indexes_are_consistent());
+        assert_eq!(
+            simulation.characters[&miner].skill_practice(skill::MINING),
+            1
+        );
+        assert_eq!(
+            simulation.characters[&miner].skill_practice(skill::GATHERING),
+            0
+        );
     }
 
     /// One tool, one fetcher: a second worker must not be sent after a pick
@@ -1843,6 +1965,45 @@ mod tests {
     }
 
     #[test]
+    fn skilled_harvest_awards_only_the_actual_worker_on_completion() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let (source, resource) = harvest_fixture(&simulation);
+        let output_kind = resource.kind().definition().yields;
+        let before_quantity = total_item_quantity(&simulation, output_kind);
+        let job_id = simulation.designate_harvest(source).unwrap();
+        let mut worker = None;
+        for _ in 0..256 {
+            if simulation.job_world.get(job_id).is_none() {
+                break;
+            }
+            simulation.advance_ticks(1).unwrap();
+            worker = worker.or_else(|| {
+                simulation
+                    .job_world
+                    .get(job_id)
+                    .and_then(|job| job.state().worker())
+            });
+        }
+        let worker = worker.expect("harvest had a worker");
+        assert!(simulation.job_world.get(job_id).is_none());
+        assert_eq!(
+            simulation.characters[&worker].skill_practice(skill::GATHERING),
+            1
+        );
+        assert!(
+            simulation
+                .characters
+                .iter()
+                .filter(|(id, _)| **id != worker)
+                .all(|(_, person)| person.skill_practice(skill::GATHERING) == 0)
+        );
+        assert_eq!(
+            total_item_quantity(&simulation, output_kind),
+            before_quantity + resource.yield_quantity()
+        );
+    }
+
+    #[test]
     fn harvest_assignment_is_deterministic_and_exclusive() {
         let mut first = Simulation::new(WorldSeed::new(0)).unwrap();
         let mut second = first.clone();
@@ -1920,6 +2081,10 @@ mod tests {
         );
         assert_eq!(simulation.job_for_worker(worker), None);
         assert!(simulation.job_world.indexes_are_consistent());
+        assert_eq!(
+            simulation.characters[&worker].skill_practice(skill::GATHERING),
+            0
+        );
 
         simulation.advance_ticks(1).unwrap();
         let worker = simulation
@@ -1938,6 +2103,10 @@ mod tests {
         );
         assert!(simulation.job_world.indexes_are_consistent());
         assert!(simulation.natural_resource_at(source).unwrap().is_some());
+        assert_eq!(
+            simulation.characters[&worker].skill_practice(skill::GATHERING),
+            0
+        );
     }
 
     #[test]

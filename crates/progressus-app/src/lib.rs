@@ -10,19 +10,19 @@ pub use progressus_sim::{
     ConstructionPreparationTarget, ConstructionSite, DEFAULT_CHARACTER_INTERACTION_RADIUS,
     DEFAULT_CHARACTER_SPEED, Direction, DoorState, EntityId, InteractionRadius, ItemCategory,
     ItemId, ItemLocation, ItemQuantity, JobKind, JobState, LocalCell, MAX_PRODUCTION_ORDER_RUNS,
-    MAX_REST, MAX_SATIETY, MovementSpeed, MovementState, NaturalResource, NaturalResourceId,
-    ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind,
+    MAX_REST, MAX_SATIETY, MAX_SKILL_PRACTICE, MovementSpeed, MovementState, NaturalResource,
+    NaturalResourceId, ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind,
     RESIDENT_CHUNK_RADIUS, RESIDENT_CHUNKS_PER_CENTER, RecipeId, SAVE_FORMAT_VERSION,
-    SUBUNITS_PER_CELL, SaveError, SaveMetadata, SimulationTick, SlotId, Stockpile, Structure,
-    StructureId, TerrainId, Workstation, WorkstationConstructionSite, WorkstationId, WorldCell,
-    WorldPosition, WorldSeed, WorldgenVersion, item, natural_resource, recipe, slot, structure,
-    terrain, workstation,
+    SUBUNITS_PER_CELL, SaveError, SaveMetadata, SimulationTick, SkillId, SlotId, Stockpile,
+    Structure, StructureId, TerrainId, Workstation, WorkstationConstructionSite, WorkstationId,
+    WorldCell, WorldPosition, WorldSeed, WorldgenVersion, item, natural_resource, recipe, skill,
+    slot, structure, terrain, workstation,
 };
 pub use read_model::{
     CarriedItemSnapshot, CharacterSnapshot, ChunkSnapshot, ClientSnapshot,
     ConstructionSiteSnapshot, GroundItemSnapshot, InventoryItemSnapshot, JobSnapshot, KnownTerrain,
     NaturalResourceSnapshot, NavigationSnapshot, ProductionLogisticsSnapshot,
-    ProductionOrderSnapshot, StockpileSnapshot, StructureSnapshot,
+    ProductionOrderSnapshot, SkillPracticeSnapshot, StockpileSnapshot, StructureSnapshot,
     WorkstationConstructionSiteSnapshot, WorkstationSnapshot,
 };
 

@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use progressus_app::{JobState, MAX_REST, MAX_SATIETY, MovementState};
+use progressus_app::{JobState, MAX_REST, MAX_SATIETY, MAX_SKILL_PRACTICE, MovementState};
 
 use crate::i18n::{Language, Locale, TextKey};
 use crate::interaction::TickScheduler;
@@ -687,8 +687,9 @@ pub(crate) fn sync_character_inspector(
         Some(false) => locale.tr(TextKey::Unsheltered),
         None => locale.tr(TextKey::NoneValue),
     };
+    let skills = skill_practice_lines(*locale, character);
     let text = format!(
-        "{}: {}\n{}: {}\n{}: ({}, {})\n{}: {}/{}\n{}: {}/{}\n{}: {}\n{}: {}\n{}: {}\n{}: {}",
+        "{}: {}\n{}: {}\n{}: ({}, {})\n{}: {}/{}\n{}: {}/{}\n{}: {}\n{}: {}\n{}: {}\n{}: {}\n{}",
         locale.tr(TextKey::Character),
         character.name,
         locale.tr(TextKey::Identifier),
@@ -709,7 +710,8 @@ pub(crate) fn sync_character_inspector(
         locale.tr(TextKey::Work),
         work,
         locale.tr(TextKey::Carrying),
-        carrying
+        carrying,
+        skills
     );
     if let Ok(mut output) = texts.single_mut() {
         **output = text;
@@ -717,6 +719,22 @@ pub(crate) fn sync_character_inspector(
     if let Ok(mut visibility) = panels.single_mut() {
         *visibility = Visibility::Visible;
     }
+}
+
+fn skill_practice_lines(locale: Locale, character: &progressus_app::CharacterSnapshot) -> String {
+    character
+        .skills
+        .iter()
+        .map(|entry| {
+            format!(
+                "{}: {}/{}",
+                locale.skill_name(entry.kind),
+                entry.practice,
+                MAX_SKILL_PRACTICE
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn hud_button_node() -> Node {
@@ -1128,8 +1146,37 @@ pub(crate) fn update_ui_capture(
 
 #[cfg(test)]
 mod tests {
-    use super::ToolMode;
-    use crate::i18n::{Locale, TextKey};
+    use super::{ToolMode, skill_practice_lines};
+    use crate::i18n::{Language, Locale, TextKey};
+    use progressus_app::{Application, NewGameOptions, SnapshotQuery, WorldSeed};
+
+    #[test]
+    fn inspector_skill_rows_are_localized_and_show_mastery_progress() {
+        let app = Application::new_game(NewGameOptions {
+            seed: WorldSeed::new(0),
+        })
+        .unwrap();
+        let mut person = app
+            .snapshot(SnapshotQuery::default())
+            .unwrap()
+            .characters
+            .remove(0);
+        assert_eq!(
+            skill_practice_lines(Locale::default(), &person),
+            "Собирательство: 0/5\nГорное дело: 0/5\nРемесло: 0/5"
+        );
+        person.skills[1].practice = 5;
+        person.skills[1].mastered = true;
+        assert_eq!(
+            skill_practice_lines(
+                Locale {
+                    language: Language::En
+                },
+                &person
+            ),
+            "Gathering: 0/5\nMining: 5/5\nCrafting: 0/5"
+        );
+    }
 
     #[test]
     fn toolbar_modes_are_localized_instead_of_owning_display_strings() {

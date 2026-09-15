@@ -1,9 +1,9 @@
 use progressus_sim::{
     Character, ConstructionMaterialState, ConstructionSite, DoorState, ItemId, ItemLocation,
-    ItemStack, Job, JobKind, JobState, MovementState, NaturalResource, NaturalResourceId,
-    ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind, RecipeId,
-    Stockpile, Structure, StructureId, Workstation, WorkstationConstructionSite, WorkstationId,
-    WorldPosition,
+    ItemStack, Job, JobKind, JobState, MAX_SKILL_PRACTICE, MovementState, NaturalResource,
+    NaturalResourceId, ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind,
+    RecipeId, SkillId, Stockpile, Structure, StructureId, Workstation, WorkstationConstructionSite,
+    WorkstationId, WorldPosition,
 };
 
 use crate::{
@@ -344,6 +344,14 @@ pub struct CharacterSnapshot {
     pub last_sleep_sheltered: Option<bool>,
     pub movement: MovementState,
     pub last_tick_motion_trace: Vec<WorldPosition>,
+    pub skills: Vec<SkillPracticeSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SkillPracticeSnapshot {
+    pub kind: SkillId,
+    pub practice: u8,
+    pub mastered: bool,
 }
 
 impl From<&Character> for CharacterSnapshot {
@@ -358,6 +366,16 @@ impl From<&Character> for CharacterSnapshot {
             last_sleep_sheltered: character.last_sleep_sheltered(),
             movement: character.movement(),
             last_tick_motion_trace: character.last_tick_motion_trace().to_vec(),
+            skills: SkillId::all()
+                .map(|kind| {
+                    let practice = character.skill_practice(kind);
+                    SkillPracticeSnapshot {
+                        kind,
+                        practice,
+                        mastered: practice == MAX_SKILL_PRACTICE,
+                    }
+                })
+                .collect(),
         }
     }
 }
