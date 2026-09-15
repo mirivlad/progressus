@@ -120,6 +120,8 @@ struct SaveV1 {
     next_entity_id: Option<u64>,
     characters: Vec<CharacterSave>,
     terrain_overrides: Vec<TerrainOverrideSave>,
+    #[serde(default)]
+    terrain_revision: u64,
     explored_cells: Vec<CellSave>,
     depleted_resources: Vec<CellSave>,
     #[serde(default)]
@@ -167,6 +169,7 @@ impl SaveV1 {
                     terrain: TerrainSave::from(terrain),
                 })
                 .collect(),
+            terrain_revision: simulation.terrain_revision,
             explored_cells: simulation
                 .explored_world
                 .cells()
@@ -311,6 +314,7 @@ impl SaveV1 {
             id_allocator: EntityIdAllocator::restore_next(self.next_entity_id),
             characters,
             modified_world,
+            terrain_revision: self.terrain_revision,
             item_world,
             job_world,
             production_world,
@@ -2660,6 +2664,25 @@ mod tests {
     use progressus_content::{
         item, natural_resource, recipe, skill, slot, structure, terrain, workstation,
     };
+
+    #[test]
+    fn terrain_revision_round_trips_and_legacy_save_defaults_to_zero() {
+        let mut sim = Simulation::new(WorldSeed::new(0)).unwrap();
+        let cell = WorldCell::new(0, 0);
+        sim.set_terrain_override(cell, terrain::ROCK).unwrap();
+        let encoded = sim.save_json().unwrap();
+        let restored = Simulation::load_json(&encoded).unwrap();
+        assert_eq!(restored.effective_terrain_at(cell).unwrap(), terrain::ROCK);
+        assert_eq!(restored.terrain_revision(), 1);
+
+        let mut legacy: Value = serde_json::from_slice(&encoded).unwrap();
+        legacy.as_object_mut().unwrap().remove("terrain_revision");
+        let legacy = serde_json::to_vec(&legacy).unwrap();
+        assert_eq!(
+            Simulation::load_json(&legacy).unwrap().terrain_revision(),
+            0
+        );
+    }
 
     /// A loaded cart must survive a save with its goods still inside it and
     /// still counted exactly once — a container is the easiest place for

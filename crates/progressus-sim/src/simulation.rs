@@ -85,6 +85,7 @@ pub struct Simulation {
     id_allocator: EntityIdAllocator,
     characters: BTreeMap<EntityId, Character>,
     modified_world: ModifiedWorld,
+    terrain_revision: u64,
     item_world: ItemWorld,
     job_world: JobWorld,
     production_world: ProductionWorld,
@@ -200,6 +201,7 @@ impl Simulation {
             id_allocator,
             characters,
             modified_world: ModifiedWorld::default(),
+            terrain_revision: 0,
             item_world,
             job_world: JobWorld::default(),
             production_world: ProductionWorld::default(),
@@ -325,6 +327,10 @@ impl Simulation {
 
     pub const fn resource_revision(&self) -> u64 {
         self.resource_revision
+    }
+
+    pub const fn terrain_revision(&self) -> u64 {
+        self.terrain_revision
     }
 
     /// A cell the player has claimed by building or zoning on it. A resource
@@ -988,10 +994,18 @@ impl Simulation {
         position: WorldCell,
         terrain: TerrainId,
     ) -> Result<(), SimulationError> {
+        if self.effective_terrain_at(position)? == terrain {
+            return Ok(());
+        }
+        let next_revision = self
+            .terrain_revision
+            .checked_add(1)
+            .ok_or(SimulationError::TerrainRevisionOverflow)?;
         let (coordinate, local) = position.split();
         let base = self.base_terrain_at(position)?;
         self.modified_world
             .set_override(coordinate, local, base, terrain);
+        self.terrain_revision = next_revision;
         Ok(())
     }
 
@@ -1308,6 +1322,18 @@ fn translate(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn terrain_revision_changes_only_with_effective_terrain() {
+        let mut sim = Simulation::new(WorldSeed::new(0)).unwrap();
+        let cell = WorldCell::new(0, 0);
+        assert_eq!(sim.terrain_revision(), 0);
+        sim.set_terrain_override(cell, terrain::ROCK).unwrap();
+        assert_eq!(sim.terrain_revision(), 1);
+        sim.set_terrain_override(cell, terrain::ROCK).unwrap();
+        assert_eq!(sim.terrain_revision(), 1);
+        sim.set_terrain_override(cell, terrain::GRASS).unwrap();
+        assert_eq!(sim.terrain_revision(), 2);
+    }
 
     /// The whole point of a cart: one trip moves four times what hands do, and
     /// the goods ride in the cart rather than in the bearer's arms.

@@ -502,6 +502,7 @@ impl Application {
             tick: self.simulation.tick(),
             worldgen_version: self.simulation.worldgen_version(),
             exploration_revision: self.simulation.exploration_revision(),
+            terrain_revision: self.simulation.terrain_revision(),
             item_revision: self.simulation.item_revision(),
             resource_revision: self.simulation.resource_revision(),
             job_revision: self.simulation.job_revision(),
@@ -958,6 +959,7 @@ mod tests {
             snapshot.chunks[0].known_terrain_at(local),
             Some(terrain::ROCK)
         );
+        assert_eq!(snapshot.terrain_revision, 1);
     }
 
     #[test]

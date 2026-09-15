@@ -32,7 +32,7 @@ pub(crate) struct TerrainEntry {
 #[derive(Resource, Default)]
 pub(crate) struct SceneCache {
     chunks: Vec<ChunkCoord>,
-    revisions: Option<[u64; 3]>,
+    revisions: Option<[u64; 4]>,
     pub(crate) terrain: BTreeMap<ChunkCoord, TerrainEntry>,
     invalidated: bool,
     objects: BTreeMap<ObjectKey, (Object, Entity)>,
@@ -49,6 +49,10 @@ impl SceneCache {
         self.invalidated = true;
         self.revisions = None;
     }
+}
+
+fn terrain_refresh_required(viewport_changed: bool, old: Option<[u64; 4]>, now: [u64; 4]) -> bool {
+    viewport_changed || old.is_none_or(|value| value[0] != now[0] || value[1] != now[1])
 }
 
 /// A deterministic, presentation-only value for one cell. The previous scheme
@@ -162,20 +166,20 @@ pub(crate) fn sync(
     let chunks = space::visible_chunks(&points, view.origin);
     let revisions = [
         game.snapshot().exploration_revision,
+        game.snapshot().terrain_revision,
         game.snapshot().item_revision,
         game.snapshot().resource_revision,
     ];
     let viewport_changed = chunks != cache.chunks;
-    let terrain_changed =
-        viewport_changed || cache.revisions.is_none_or(|old| old[0] != revisions[0]);
+    let terrain_changed = terrain_refresh_required(viewport_changed, cache.revisions, revisions);
     let items_changed = viewport_changed
         || cache
             .revisions
-            .is_none_or(|old| old[1] != revisions[1] || old[0] != revisions[0]);
+            .is_none_or(|old| old[2] != revisions[2] || old[0] != revisions[0]);
     let resources_changed = viewport_changed
         || cache
             .revisions
-            .is_none_or(|old| old[2] != revisions[2] || old[0] != revisions[0]);
+            .is_none_or(|old| old[3] != revisions[3] || old[0] != revisions[0]);
     if terrain_changed || items_changed || resources_changed {
         let spatial = match game.application_mut().snapshot(SnapshotQuery {
             chunks: chunks.clone(),
@@ -571,6 +575,12 @@ pub(crate) fn sync(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn terrain_revision_invalidates_only_terrain_meshes() {
+        let old = Some([2, 4, 7, 9]);
+        assert!(terrain_refresh_required(false, old, [2, 5, 7, 9]));
+        assert!(!terrain_refresh_required(false, old, [2, 4, 8, 9]));
+    }
 
     /// The defect this pins: the variant used to be `(37x + y) % 4`, and since
     /// 37 is congruent to 1 modulo 4 that collapsed to `(x + y) % 4`, tiling

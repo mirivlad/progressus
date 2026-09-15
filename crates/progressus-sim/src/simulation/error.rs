@@ -74,6 +74,7 @@ pub enum SimulationError {
     HarvestAlreadyDesignated(WorldCell),
     JobRevisionOverflow,
     ResourceRevisionOverflow,
+    TerrainRevisionOverflow,
     JobInvariantViolation,
     ItemNotOnGround(EntityId),
     ItemReserved(EntityId),
@@ -478,6 +479,7 @@ impl Display for SimulationError {
             ),
             Self::JobRevisionOverflow => formatter.write_str("job revision overflow"),
             Self::ResourceRevisionOverflow => formatter.write_str("resource revision overflow"),
+            Self::TerrainRevisionOverflow => formatter.write_str("terrain revision overflow"),
             Self::JobInvariantViolation => {
                 formatter.write_str("job reservation invariant violated")
             }

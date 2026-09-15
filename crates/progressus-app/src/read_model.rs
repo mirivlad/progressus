@@ -15,6 +15,7 @@ pub struct ClientSnapshot {
     pub tick: SimulationTick,
     pub worldgen_version: WorldgenVersion,
     pub exploration_revision: u64,
+    pub terrain_revision: u64,
     pub item_revision: u64,
     pub resource_revision: u64,
     pub job_revision: u64,
