@@ -699,6 +699,7 @@ fn apply_tool_area(
                             ..
                         } => Some(source),
                         JobKind::Eat { .. }
+                        | JobKind::ExcavateRock { .. }
                         | JobKind::Sleep { .. }
                         | JobKind::Haul { .. }
                         | JobKind::SupplyProduction { .. }
@@ -785,6 +786,7 @@ fn apply_tool_area(
                 .filter_map(|job| match job.kind {
                     JobKind::Harvest { source } if selected.contains(&source) => Some(job.id),
                     JobKind::Harvest { .. }
+                    | JobKind::ExcavateRock { .. }
                     | JobKind::Eat { .. }
                     | JobKind::Sleep { .. }
                     | JobKind::Haul { .. }

@@ -72,6 +72,10 @@ pub enum SimulationError {
     HarvestSourceUndiscovered(WorldCell),
     NaturalResourceMissing(WorldCell),
     HarvestAlreadyDesignated(WorldCell),
+    RockExcavationUndiscovered(WorldCell),
+    RockExcavationNotRock(WorldCell),
+    RockExcavationClaimed(WorldCell),
+    RockExcavationAlreadyDesignated(WorldCell),
     JobRevisionOverflow,
     ResourceRevisionOverflow,
     TerrainRevisionOverflow,
@@ -119,6 +123,9 @@ impl SimulationError {
             JobWorldError::UnknownJob(id) => Self::UnknownJob(id),
             JobWorldError::HarvestSourceAlreadyDesignated(source) => {
                 Self::HarvestAlreadyDesignated(source)
+            }
+            JobWorldError::RockAlreadyDesignated(cell) => {
+                Self::RockExcavationAlreadyDesignated(cell)
             }
             JobWorldError::CraftWorkstationAlreadyDesignated(workstation_id) => {
                 Self::CraftAlreadyDesignated(workstation_id)
@@ -476,6 +483,27 @@ impl Display for SimulationError {
                 "natural resource at ({}, {}) is already designated for harvest",
                 source.x(),
                 source.y()
+            ),
+            Self::RockExcavationUndiscovered(cell) => write!(
+                formatter,
+                "rock cell ({}, {}) is undiscovered",
+                cell.x(),
+                cell.y()
+            ),
+            Self::RockExcavationNotRock(cell) => {
+                write!(formatter, "cell ({}, {}) is not rock", cell.x(), cell.y())
+            }
+            Self::RockExcavationClaimed(cell) => write!(
+                formatter,
+                "rock cell ({}, {}) is claimed or occupied by a resource",
+                cell.x(),
+                cell.y()
+            ),
+            Self::RockExcavationAlreadyDesignated(cell) => write!(
+                formatter,
+                "rock cell ({}, {}) is already designated for excavation",
+                cell.x(),
+                cell.y()
             ),
             Self::JobRevisionOverflow => formatter.write_str("job revision overflow"),
             Self::ResourceRevisionOverflow => formatter.write_str("resource revision overflow"),

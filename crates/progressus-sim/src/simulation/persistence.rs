@@ -1050,6 +1050,9 @@ enum JobKindSave {
     Harvest {
         source: CellSave,
     },
+    ExcavateRock {
+        cell: CellSave,
+    },
     Eat {
         character_id: u64,
         item_id: u64,
@@ -1168,6 +1171,7 @@ impl From<JobKind> for JobKindSave {
             JobKind::Harvest { source } => Self::Harvest {
                 source: source.into(),
             },
+            JobKind::ExcavateRock { cell } => Self::ExcavateRock { cell: cell.into() },
             JobKind::Eat {
                 character_id,
                 item_id,
@@ -1238,6 +1242,9 @@ impl JobKindSave {
             },
             Self::Harvest { source } => JobKind::Harvest {
                 source: source.into_cell(),
+            },
+            Self::ExcavateRock { cell } => JobKind::ExcavateRock {
+                cell: cell.into_cell(),
             },
             Self::Eat {
                 character_id,
@@ -2065,6 +2072,7 @@ fn restore_jobs(
                 if !matches!(
                     kind,
                     JobKind::Harvest { .. }
+                        | JobKind::ExcavateRock { .. }
                         | JobKind::Eat { .. }
                         | JobKind::Sleep { .. }
                         | JobKind::Craft { .. }
@@ -2141,7 +2149,7 @@ fn validate_job_references(
     construction: &ConstructionWorld,
 ) -> Result<(), SaveError> {
     match kind {
-        JobKind::Harvest { .. } => {}
+        JobKind::Harvest { .. } | JobKind::ExcavateRock { .. } => {}
         JobKind::EquipTool {
             item_id,
             requested_worker_id,
@@ -2571,6 +2579,23 @@ fn validate_restored_inventory(simulation: &Simulation) -> Result<(), SaveError>
 }
 
 fn validate_restored_job_state(simulation: &Simulation, job: &Job) -> Result<(), SaveError> {
+    if let JobKind::ExcavateRock { cell } = job.kind()
+        && (!simulation.is_explored(cell)
+            || simulation
+                .effective_terrain_at(cell)
+                .map_err(|error| invalid_world_error("rock excavation target", error))?
+                != terrain::ROCK
+            || simulation.cell_is_claimed(cell)
+            || simulation
+                .natural_resource_at(cell)
+                .map_err(|error| invalid_world_error("rock excavation resource", error))?
+                .is_some())
+    {
+        return invalid(format!(
+            "excavation job {} targets an unavailable rock cell",
+            job.id().value()
+        ));
+    }
     if let JobKind::Harvest { source } = job.kind()
         && (simulation.depleted_resources.contains(&source)
             || simulation.generator.natural_resource_at(source).is_none())
@@ -2664,6 +2689,22 @@ mod tests {
     use progressus_content::{
         item, natural_resource, recipe, skill, slot, structure, terrain, workstation,
     };
+
+    #[test]
+    fn loaded_excavation_rejects_hidden_or_non_rock_target() {
+        let mut sim = Simulation::new(WorldSeed::new(0)).unwrap();
+        let rock = WorldCell::new(0, 0);
+        sim.set_terrain_override(rock, terrain::ROCK).unwrap();
+        sim.designate_rock_excavation(rock).unwrap();
+        let encoded = sim.save_json().unwrap();
+        let mut non_rock: Value = serde_json::from_slice(&encoded).unwrap();
+        non_rock["jobs"][0]["job"]["cell"] = serde_json::json!({"x": 1, "y": 0});
+        assert!(Simulation::load_json(&serde_json::to_vec(&non_rock).unwrap()).is_err());
+
+        let mut hidden: Value = serde_json::from_slice(&encoded).unwrap();
+        hidden["jobs"][0]["job"]["cell"] = serde_json::json!({"x": 50_000, "y": -50_000});
+        assert!(Simulation::load_json(&serde_json::to_vec(&hidden).unwrap()).is_err());
+    }
 
     #[test]
     fn terrain_revision_round_trips_and_legacy_save_defaults_to_zero() {

@@ -281,6 +281,7 @@ impl Simulation {
             .filter_map(|job| match job.kind() {
                 JobKind::Haul { .. } => Some(job.id()),
                 JobKind::Harvest { .. }
+                | JobKind::ExcavateRock { .. }
                 | JobKind::Eat { .. }
                 | JobKind::Sleep { .. }
                 | JobKind::Craft { .. }
@@ -1010,6 +1011,7 @@ mod tests {
                     ..
                 } => Some((item_id, destination)),
                 JobKind::Harvest { .. }
+                | JobKind::ExcavateRock { .. }
                 | JobKind::Eat { .. }
                 | JobKind::Sleep { .. }
                 | JobKind::Craft { .. }

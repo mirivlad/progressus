@@ -318,6 +318,7 @@ impl Locale {
         match (self.language, kind) {
             (Language::Ru, JobKind::EquipTool { .. }) => "за инструментом",
             (Language::Ru, JobKind::Harvest { .. }) => "добыча",
+            (Language::Ru, JobKind::ExcavateRock { .. }) => "выемка породы",
             (Language::Ru, JobKind::Eat { .. }) => "еда",
             (Language::Ru, JobKind::Sleep { .. }) => "сон",
             (Language::Ru, JobKind::Haul { .. }) => "перенос на склад",
@@ -328,6 +329,7 @@ impl Locale {
             (Language::Ru, JobKind::PrepareConstruction { .. }) => "подготовка стройплощадки",
             (Language::En, JobKind::EquipTool { .. }) => "fetching a tool",
             (Language::En, JobKind::Harvest { .. }) => "harvest",
+            (Language::En, JobKind::ExcavateRock { .. }) => "rock excavation",
             (Language::En, JobKind::Eat { .. }) => "eat",
             (Language::En, JobKind::Sleep { .. }) => "sleep",
             (Language::En, JobKind::Haul { .. }) => "haul",

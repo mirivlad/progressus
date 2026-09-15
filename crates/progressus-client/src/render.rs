@@ -183,6 +183,7 @@ pub(crate) fn draw_job_designations(
     for job in &snapshot.jobs {
         let cell = match job.kind {
             JobKind::Harvest { source } => Some(source),
+            JobKind::ExcavateRock { .. } => None,
             JobKind::EquipTool { item_id, .. } => cache
                 .items
                 .iter()

@@ -1,7 +1,7 @@
 //! Generic job lifecycle: designation, assignment, advancement and interruption.
 
 use super::*;
-use progressus_content::{SkillId, capability, skill};
+use progressus_content::{SkillId, capability, skill, terrain};
 
 impl Simulation {
     pub(super) fn skilled_work_ticks(&self, worker_id: EntityId, skill: SkillId, base: u32) -> u32 {
@@ -25,6 +25,29 @@ impl Simulation {
         let id = self.id_allocator.allocate()?;
         self.job_world
             .insert(Job::new(id, JobKind::Harvest { source }))
+            .map_err(SimulationError::from_job_world)?;
+        Ok(id)
+    }
+
+    pub fn designate_rock_excavation(
+        &mut self,
+        cell: WorldCell,
+    ) -> Result<EntityId, SimulationError> {
+        if !self.is_explored(cell) {
+            return Err(SimulationError::RockExcavationUndiscovered(cell));
+        }
+        if self.effective_terrain_at(cell)? != terrain::ROCK {
+            return Err(SimulationError::RockExcavationNotRock(cell));
+        }
+        if self.cell_is_claimed(cell) || self.natural_resource_at(cell)?.is_some() {
+            return Err(SimulationError::RockExcavationClaimed(cell));
+        }
+        if self.job_world.excavation_job_at(cell).is_some() {
+            return Err(SimulationError::RockExcavationAlreadyDesignated(cell));
+        }
+        let id = self.id_allocator.allocate()?;
+        self.job_world
+            .insert(Job::new(id, JobKind::ExcavateRock { cell }))
             .map_err(SimulationError::from_job_world)?;
         Ok(id)
     }
@@ -103,6 +126,7 @@ impl Simulation {
                     ..
                 } => Some(item_id),
                 JobKind::Harvest { .. }
+                | JobKind::ExcavateRock { .. }
                 | JobKind::PrepareConstruction { .. }
                 | JobKind::Eat { .. }
                 | JobKind::Sleep { .. }
@@ -162,6 +186,7 @@ impl Simulation {
                     ..
                 } => Some(item_id),
                 JobKind::Harvest { .. }
+                | JobKind::ExcavateRock { .. }
                 | JobKind::PrepareConstruction { .. }
                 | JobKind::Eat { .. }
                 | JobKind::Sleep { .. }
@@ -223,6 +248,7 @@ impl Simulation {
                 requested_worker_id,
             } => self.try_assign_equip(job_id, item_id, requested_worker_id),
             JobKind::Harvest { source } => self.try_assign_harvest(job_id, source),
+            JobKind::ExcavateRock { cell } => self.try_assign_rock_excavation(job_id, cell),
             JobKind::Eat {
                 character_id,
                 item_id,
@@ -280,6 +306,18 @@ impl Simulation {
     pub(super) fn maintain_equip_jobs(&mut self) -> Result<(), SimulationError> {
         let mut wanted: BTreeSet<CapabilityId> = BTreeSet::new();
         for job in self.job_world.iter() {
+            if let (JobKind::ExcavateRock { cell }, JobState::Available) = (job.kind(), job.state())
+            {
+                if self.effective_terrain_at(cell)? == terrain::ROCK
+                    && !self
+                        .characters
+                        .keys()
+                        .any(|id| self.can_perform(*id, capability::MINE))
+                {
+                    wanted.insert(capability::MINE);
+                }
+                continue;
+            }
             let source = match (job.kind(), job.state()) {
                 (JobKind::Harvest { source }, JobState::Available)
                 | (
@@ -450,6 +488,52 @@ impl Simulation {
         Ok(())
     }
 
+    pub(super) fn try_assign_rock_excavation(
+        &mut self,
+        job_id: EntityId,
+        cell: WorldCell,
+    ) -> Result<(), SimulationError> {
+        if self.effective_terrain_at(cell)? != terrain::ROCK {
+            self.cancel_job(job_id)?;
+            return Ok(());
+        }
+        for worker_id in self.available_workers_by_distance(cell) {
+            if !self.can_perform(worker_id, capability::MINE) {
+                continue;
+            }
+            for direction in [
+                Direction::North,
+                Direction::East,
+                Direction::South,
+                Direction::West,
+            ] {
+                let Some(neighbor) = direction.adjacent(cell) else {
+                    continue;
+                };
+                if !self.is_explored(neighbor) || !self.is_walkable(neighbor)? {
+                    continue;
+                }
+                let target = WorldPosition::from_cell_center(neighbor)?;
+                let route = match self.plan_navigation_route(worker_id, target) {
+                    Ok(route) => route,
+                    Err(
+                        SimulationError::MoveToDestinationBlocked(_)
+                        | SimulationError::MoveToDestinationUndiscovered(_)
+                        | SimulationError::MoveToPathNotFound
+                        | SimulationError::MoveToSearchBudgetExceeded,
+                    ) => continue,
+                    Err(error) => return Err(error),
+                };
+                self.job_world
+                    .reserve_worker(job_id, worker_id)
+                    .map_err(SimulationError::from_job_world)?;
+                self.apply_navigation_route(worker_id, target, route);
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn advance_reserved_job(
         &mut self,
         job_id: EntityId,
@@ -500,6 +584,49 @@ impl Simulation {
                     if let Some(character) = self.characters.get_mut(&worker_id) {
                         character.set_movement(MovementState::Idle);
                     }
+                } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                }
+            }
+            JobKind::ExcavateRock { cell } => {
+                if self.effective_terrain_at(cell)? != terrain::ROCK {
+                    self.cancel_job(job_id)?;
+                    return Ok(());
+                }
+                let Some(character) = self.characters.get(&worker_id) else {
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                };
+                if !self.can_perform(worker_id, capability::MINE) {
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    self.characters
+                        .get_mut(&worker_id)
+                        .expect("worker was checked above")
+                        .set_movement(MovementState::Idle);
+                    return Ok(());
+                }
+                let target = WorldPosition::from_cell_center(cell)?;
+                if within_interaction_range(
+                    character.position(),
+                    character.interaction_radius(),
+                    target,
+                    InteractionRadius::new(256),
+                ) {
+                    self.characters
+                        .get_mut(&worker_id)
+                        .expect("worker was checked above")
+                        .set_movement(MovementState::Idle);
+                    let ticks =
+                        self.skilled_work_ticks(worker_id, skill::MINING, HARVEST_WORK_TICKS);
+                    self.job_world
+                        .start_working(job_id, ticks)
+                        .map_err(SimulationError::from_job_world)?;
                 } else if !matches!(character.movement(), MovementState::Navigating { .. }) {
                     self.job_world
                         .release_worker(job_id)
@@ -1195,6 +1322,7 @@ impl Simulation {
                 }
             }
             JobKind::Harvest { .. }
+            | JobKind::ExcavateRock { .. }
             | JobKind::Eat { .. }
             | JobKind::Sleep { .. }
             | JobKind::Craft { .. }
@@ -1216,6 +1344,43 @@ impl Simulation {
         match kind {
             // An equip job ends when the tool is stowed; it has no work phase.
             JobKind::EquipTool { .. } => return Err(SimulationError::JobInvariantViolation),
+            JobKind::ExcavateRock { cell } => {
+                if self.effective_terrain_at(cell)? != terrain::ROCK {
+                    self.cancel_job(job_id)?;
+                    return Ok(());
+                }
+                let Some(character) = self.characters.get(&worker_id) else {
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                };
+                let target = WorldPosition::from_cell_center(cell)?;
+                if !self.can_perform(worker_id, capability::MINE)
+                    || !within_interaction_range(
+                        character.position(),
+                        character.interaction_radius(),
+                        target,
+                        InteractionRadius::new(256),
+                    )
+                {
+                    self.job_world
+                        .release_worker(job_id)
+                        .map_err(SimulationError::from_job_world)?;
+                    self.characters
+                        .get_mut(&worker_id)
+                        .expect("worker was checked above")
+                        .set_movement(MovementState::Idle);
+                    return Ok(());
+                }
+                if remaining_ticks > 1 {
+                    self.job_world
+                        .set_remaining_work(job_id, remaining_ticks - 1)
+                        .map_err(SimulationError::from_job_world)?;
+                    return Ok(());
+                }
+                self.complete_rock_excavation(job_id, worker_id, cell)?;
+            }
             JobKind::Harvest { source } => {
                 let Some(resource) = self.natural_resource_at(source)? else {
                     self.cancel_job(job_id)?;
@@ -1462,11 +1627,563 @@ impl Simulation {
         }
         Ok(())
     }
+
+    pub(super) fn complete_rock_excavation(
+        &mut self,
+        job_id: EntityId,
+        worker_id: EntityId,
+        cell: WorldCell,
+    ) -> Result<(), SimulationError> {
+        self.terrain_revision
+            .checked_add(1)
+            .ok_or(SimulationError::TerrainRevisionOverflow)?;
+        let position = WorldPosition::from_cell_center(cell)?;
+        let item_id = self.id_allocator.allocate()?;
+        self.set_terrain_override(cell, terrain::GRASS)?;
+        self.item_world
+            .insert_ground(ItemStack::new_ground(
+                item_id,
+                item::STONE,
+                ItemQuantity::new(1).expect("one stone is a valid physical quantity"),
+                position,
+            ))
+            .expect("allocated item ID is unique and one stone fits a ground stack");
+        self.job_world
+            .remove(job_id)
+            .map_err(SimulationError::from_job_world)?;
+        self.characters
+            .get_mut(&worker_id)
+            .expect("working excavation has a live checked worker")
+            .record_skill_practice(skill::MINING);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use progressus_content::{capability, item, natural_resource, recipe, skill, slot};
+
+    fn explored_rock_fixture() -> (Simulation, WorldCell, WorldCell, EntityId) {
+        let mut sim = Simulation::new(WorldSeed::new(0)).unwrap();
+        let rock = (-30..30)
+            .flat_map(|y| (-30..30).map(move |x| WorldCell::new(x, y)))
+            .find(|cell| {
+                sim.effective_terrain_at(*cell).unwrap() == terrain::ROCK
+                    && [
+                        Direction::North,
+                        Direction::East,
+                        Direction::South,
+                        Direction::West,
+                    ]
+                    .into_iter()
+                    .filter_map(|direction| direction.adjacent(*cell))
+                    .any(|neighbor| {
+                        sim.effective_terrain_at(neighbor).unwrap() == terrain::GRASS
+                            && sim.natural_resource_at(neighbor).unwrap().is_none()
+                    })
+            })
+            .unwrap();
+        let approach = [
+            Direction::North,
+            Direction::East,
+            Direction::South,
+            Direction::West,
+        ]
+        .into_iter()
+        .filter_map(|direction| direction.adjacent(rock))
+        .find(|cell| {
+            sim.effective_terrain_at(*cell).unwrap() == terrain::GRASS
+                && sim.natural_resource_at(*cell).unwrap().is_none()
+        })
+        .unwrap();
+        let worker = cora();
+        place_on_grass(&mut sim, worker, approach);
+        sim.advance_ticks(1).unwrap();
+        assert!(sim.is_explored(rock));
+        (sim, rock, approach, worker)
+    }
+
+    fn equip_mining_tool(sim: &mut Simulation, worker: EntityId) -> EntityId {
+        let tool = sim.id_allocator.allocate().unwrap();
+        sim.item_world
+            .insert_ground(ItemStack::new_ground(
+                tool,
+                item::PRIMITIVE_TOOL,
+                ItemQuantity::new(1).unwrap(),
+                sim.characters[&worker].position(),
+            ))
+            .unwrap();
+        sim.pick_up_item(worker, tool).unwrap();
+        sim.equip_item(worker, tool).unwrap();
+        tool
+    }
+
+    #[test]
+    fn excavation_requires_a_physical_tool_and_changes_one_cell_once() {
+        let (mut sim, rock, approach, worker) = explored_rock_fixture();
+        let before_stone = sim
+            .item_world
+            .iter()
+            .filter(|stack| stack.kind() == item::STONE)
+            .map(ItemStack::id)
+            .collect::<BTreeSet<_>>();
+        let job = sim.designate_rock_excavation(rock).unwrap();
+        sim.advance_ticks(8).unwrap();
+        assert_eq!(sim.job_world.get(job).unwrap().state(), JobState::Available);
+        assert_eq!(sim.effective_terrain_at(rock).unwrap(), terrain::ROCK);
+
+        let tool = sim.id_allocator.allocate().unwrap();
+        sim.item_world
+            .insert_ground(ItemStack::new_ground(
+                tool,
+                item::PRIMITIVE_TOOL,
+                ItemQuantity::new(1).unwrap(),
+                WorldPosition::from_cell_center(approach).unwrap(),
+            ))
+            .unwrap();
+        sim.designate_equipment_fetch(worker, tool).unwrap();
+        for _ in 0..512 {
+            if sim.job_world.get(job).is_none() {
+                break;
+            }
+            sim.advance_ticks(1).unwrap();
+        }
+        assert!(sim.job_world.get(job).is_none());
+        assert_eq!(sim.effective_terrain_at(rock).unwrap(), terrain::GRASS);
+        assert_eq!(sim.characters[&worker].skill_practice(skill::MINING), 1);
+        assert!(sim.can_perform(worker, capability::MINE));
+        let output = sim
+            .item_world
+            .iter()
+            .filter(|stack| stack.kind() == item::STONE && !before_stone.contains(&stack.id()))
+            .collect::<Vec<_>>();
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].quantity().get(), 1);
+        assert_eq!(
+            output[0].ground_position(),
+            Some(WorldPosition::from_cell_center(rock).unwrap())
+        );
+        assert!(sim.job_world.indexes_are_consistent());
+        assert!(sim.item_world.indexes_are_consistent());
+        sim.advance_ticks(32).unwrap();
+        assert_eq!(sim.characters[&worker].skill_practice(skill::MINING), 1);
+        assert_eq!(
+            sim.item_world
+                .iter()
+                .filter(|stack| stack.kind() == item::STONE && !before_stone.contains(&stack.id()))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn rock_designation_rejects_invalid_cells_without_allocating_ids() {
+        let (mut sim, rock, approach, _) = explored_rock_fixture();
+        let hidden = WorldCell::new(50_000, -50_000);
+        sim.set_terrain_override(hidden, terrain::ROCK).unwrap();
+        let next = sim.id_allocator.peek();
+        assert_eq!(
+            sim.designate_rock_excavation(hidden),
+            Err(SimulationError::RockExcavationUndiscovered(hidden))
+        );
+        assert_eq!(
+            sim.designate_rock_excavation(approach),
+            Err(SimulationError::RockExcavationNotRock(approach))
+        );
+        assert_eq!(sim.id_allocator.peek(), next);
+
+        let claimed = WorldCell::new(0, 0);
+        sim.create_stockpile(claimed).unwrap();
+        sim.set_terrain_override(claimed, terrain::ROCK).unwrap();
+        let next = sim.id_allocator.peek();
+        assert_eq!(
+            sim.designate_rock_excavation(claimed),
+            Err(SimulationError::RockExcavationClaimed(claimed))
+        );
+        assert_eq!(sim.id_allocator.peek(), next);
+        sim.designate_rock_excavation(rock).unwrap();
+        let next = sim.id_allocator.peek();
+        assert_eq!(
+            sim.designate_rock_excavation(rock),
+            Err(SimulationError::RockExcavationAlreadyDesignated(rock))
+        );
+        assert_eq!(sim.id_allocator.peek(), next);
+    }
+
+    #[test]
+    fn mastered_miner_still_needs_tool_and_starts_three_tick_work() {
+        let (mut bare, rock, _, worker) = explored_rock_fixture();
+        for _ in 0..5 {
+            bare.characters
+                .get_mut(&worker)
+                .unwrap()
+                .record_skill_practice(skill::MINING);
+        }
+        let bare_job = bare.designate_rock_excavation(rock).unwrap();
+        bare.advance_ticks(8).unwrap();
+        assert_eq!(
+            bare.job_world.get(bare_job).unwrap().state(),
+            JobState::Available
+        );
+
+        let first_work = |mastered: bool| {
+            let (mut sim, rock, approach, worker) = explored_rock_fixture();
+            if mastered {
+                for _ in 0..5 {
+                    sim.characters
+                        .get_mut(&worker)
+                        .unwrap()
+                        .record_skill_practice(skill::MINING);
+                }
+            }
+            let tool = sim.id_allocator.allocate().unwrap();
+            sim.item_world
+                .insert_ground(ItemStack::new_ground(
+                    tool,
+                    item::PRIMITIVE_TOOL,
+                    ItemQuantity::new(1).unwrap(),
+                    sim.characters[&worker].position(),
+                ))
+                .unwrap();
+            sim.pick_up_item(worker, tool).unwrap();
+            sim.equip_item(worker, tool).unwrap();
+            assert_eq!(
+                sim.characters[&worker].position().containing_cell(),
+                approach
+            );
+            let job = sim.designate_rock_excavation(rock).unwrap();
+            for _ in 0..256 {
+                sim.advance_ticks(1).unwrap();
+                if let Some(JobState::Working {
+                    remaining_ticks, ..
+                }) = sim.job_world.get(job).map(Job::state)
+                {
+                    return remaining_ticks;
+                }
+            }
+            panic!("excavation did not enter Working");
+        };
+        assert_eq!(first_work(false), 4);
+        assert_eq!(first_work(true), 3);
+    }
+
+    #[test]
+    fn excavation_available_reserved_and_working_states_round_trip() {
+        let (mut sim, rock, _, worker) = explored_rock_fixture();
+        let job = sim.designate_rock_excavation(rock).unwrap();
+        let saved = sim.save_json().unwrap();
+        assert_eq!(
+            Simulation::load_json(&saved)
+                .unwrap()
+                .job_world
+                .get(job)
+                .unwrap()
+                .state(),
+            JobState::Available
+        );
+
+        for _ in 0..5 {
+            sim.characters
+                .get_mut(&worker)
+                .unwrap()
+                .record_skill_practice(skill::MINING);
+        }
+        equip_mining_tool(&mut sim, worker);
+        sim.advance_ticks(1).unwrap();
+        assert!(matches!(
+            sim.job_world.get(job).unwrap().state(),
+            JobState::Reserved { .. }
+        ));
+        let saved = sim.save_json().unwrap();
+        let restored = Simulation::load_json(&saved).unwrap();
+        assert_eq!(
+            restored.job_world.get(job).unwrap().state(),
+            sim.job_world.get(job).unwrap().state()
+        );
+        assert_eq!(restored.save_json().unwrap(), saved);
+
+        for _ in 0..256 {
+            sim.advance_ticks(1).unwrap();
+            if matches!(
+                sim.job_world.get(job).map(Job::state),
+                Some(JobState::Working { .. })
+            ) {
+                break;
+            }
+        }
+        assert_eq!(
+            sim.job_world.get(job).unwrap().state(),
+            JobState::Working {
+                worker_id: worker,
+                remaining_ticks: 3
+            }
+        );
+        let saved = sim.save_json().unwrap();
+        let mut restored = Simulation::load_json(&saved).unwrap();
+        assert_eq!(
+            restored.job_world.get(job).unwrap().state(),
+            sim.job_world.get(job).unwrap().state()
+        );
+        sim.advance_ticks(16).unwrap();
+        restored.advance_ticks(16).unwrap();
+        assert_eq!(restored.save_json().unwrap(), sim.save_json().unwrap());
+        assert_eq!(restored.effective_terrain_at(rock).unwrap(), terrain::GRASS);
+        assert!(restored.item_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn excavation_cancellation_target_change_and_tool_loss_have_no_output() {
+        let (mut sim, rock, _, worker) = explored_rock_fixture();
+        let tool = equip_mining_tool(&mut sim, worker);
+        let before_stone = sim
+            .item_world
+            .iter()
+            .filter(|item| item.kind() == item::STONE)
+            .count();
+        let job = sim.designate_rock_excavation(rock).unwrap();
+        sim.cancel_job(job).unwrap();
+        assert_eq!(sim.job_world.excavation_job_at(rock), None);
+        assert_eq!(sim.characters[&worker].skill_practice(skill::MINING), 0);
+        assert_eq!(
+            sim.item_world
+                .iter()
+                .filter(|item| item.kind() == item::STONE)
+                .count(),
+            before_stone
+        );
+
+        let job = sim.designate_rock_excavation(rock).unwrap();
+        sim.set_terrain_override(rock, terrain::GRASS).unwrap();
+        sim.advance_ticks(1).unwrap();
+        assert!(sim.job_world.get(job).is_none());
+        assert_eq!(
+            sim.item_world
+                .iter()
+                .filter(|item| item.kind() == item::STONE)
+                .count(),
+            before_stone
+        );
+
+        sim.set_terrain_override(rock, terrain::ROCK).unwrap();
+        let job = sim.designate_rock_excavation(rock).unwrap();
+        for _ in 0..256 {
+            sim.advance_ticks(1).unwrap();
+            if matches!(
+                sim.job_world.get(job).map(Job::state),
+                Some(JobState::Working { .. })
+            ) {
+                break;
+            }
+        }
+        assert!(matches!(
+            sim.job_world.get(job).unwrap().state(),
+            JobState::Working { .. }
+        ));
+        sim.unequip_item(worker, tool).unwrap();
+        sim.advance_ticks(1).unwrap();
+        assert_eq!(sim.job_world.get(job).unwrap().state(), JobState::Available);
+        assert_eq!(sim.job_world.job_for_worker(worker), None);
+        assert_eq!(sim.effective_terrain_at(rock).unwrap(), terrain::ROCK);
+        assert_eq!(
+            sim.item_world
+                .iter()
+                .filter(|item| item.kind() == item::STONE)
+                .count(),
+            before_stone
+        );
+        assert_eq!(sim.characters[&worker].skill_practice(skill::MINING), 0);
+    }
+
+    #[test]
+    fn missing_worker_releases_rock_reservation_without_output() {
+        for working in [false, true] {
+            let (mut sim, rock, _, worker) = explored_rock_fixture();
+            equip_mining_tool(&mut sim, worker);
+            let job = sim.designate_rock_excavation(rock).unwrap();
+            sim.job_world.reserve_worker(job, worker).unwrap();
+            if working {
+                sim.job_world.start_working(job, 4).unwrap();
+            }
+            let before_stone = sim
+                .item_world
+                .iter()
+                .filter(|item| item.kind() == item::STONE)
+                .count();
+            let removed = sim.characters.remove(&worker).unwrap();
+            assert_eq!(removed.skill_practice(skill::MINING), 0);
+            if working {
+                sim.advance_working_job(job, JobKind::ExcavateRock { cell: rock }, worker, 4)
+                    .unwrap();
+            } else {
+                sim.advance_reserved_job(job, JobKind::ExcavateRock { cell: rock }, worker)
+                    .unwrap();
+            }
+            assert_eq!(sim.job_world.get(job).unwrap().state(), JobState::Available);
+            assert_eq!(sim.job_world.job_for_worker(worker), None);
+            assert_eq!(sim.effective_terrain_at(rock).unwrap(), terrain::ROCK);
+            assert_eq!(
+                sim.item_world
+                    .iter()
+                    .filter(|item| item.kind() == item::STONE)
+                    .count(),
+                before_stone
+            );
+            assert!(sim.job_world.indexes_are_consistent());
+        }
+    }
+
+    #[test]
+    fn unreachable_rock_keeps_a_cancellable_available_job() {
+        let (mut sim, rock, approach, worker) = explored_rock_fixture();
+        equip_mining_tool(&mut sim, worker);
+        place_on_grass(&mut sim, worker, WorldCell::new(0, 0));
+        for direction in [
+            Direction::North,
+            Direction::East,
+            Direction::South,
+            Direction::West,
+        ] {
+            if let Some(neighbor) = direction.adjacent(rock)
+                && neighbor != approach
+            {
+                sim.set_terrain_override(neighbor, terrain::ROCK).unwrap();
+            }
+            if let Some(neighbor) = direction.adjacent(approach)
+                && neighbor != rock
+            {
+                sim.set_terrain_override(neighbor, terrain::ROCK).unwrap();
+            }
+        }
+        assert!(sim.is_walkable(approach).unwrap());
+        assert!(matches!(
+            sim.plan_navigation_route(worker, WorldPosition::from_cell_center(approach).unwrap()),
+            Err(SimulationError::MoveToPathNotFound)
+        ));
+        let job = sim.designate_rock_excavation(rock).unwrap();
+        sim.advance_ticks(8).unwrap();
+        assert_eq!(sim.job_world.get(job).unwrap().state(), JobState::Available);
+        sim.cancel_job(job).unwrap();
+        assert_eq!(sim.job_world.excavation_job_at(rock), None);
+        assert!(sim.job_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn excavated_stone_is_an_ordinary_physical_haul_candidate() {
+        let (mut sim, rock, approach, worker) = explored_rock_fixture();
+        let before = sim
+            .item_world
+            .iter()
+            .map(ItemStack::id)
+            .collect::<BTreeSet<_>>();
+        equip_mining_tool(&mut sim, worker);
+        let job = sim.designate_rock_excavation(rock).unwrap();
+        for _ in 0..256 {
+            if sim.job_world.get(job).is_none() {
+                break;
+            }
+            sim.advance_ticks(1).unwrap();
+        }
+        assert!(sim.job_world.get(job).is_none());
+        let stone = sim
+            .item_world
+            .iter()
+            .find(|item| item.kind() == item::STONE && !before.contains(&item.id()))
+            .unwrap()
+            .id();
+        assert_eq!(
+            sim.item_world
+                .get(stone)
+                .unwrap()
+                .ground_position()
+                .unwrap()
+                .containing_cell(),
+            rock
+        );
+        let stockpile = sim.create_stockpile(approach).unwrap();
+        for kind in [item::WOOD, item::BERRIES, item::PRIMITIVE_TOOL] {
+            sim.set_stockpile_item_allowed(stockpile, kind, false)
+                .unwrap();
+        }
+        let extra = ((approach.y() - 3)..=(approach.y() + 3))
+            .flat_map(|y| {
+                ((approach.x() - 3)..=(approach.x() + 3)).map(move |x| WorldCell::new(x, y))
+            })
+            .filter(|cell| *cell != approach && *cell != rock)
+            .filter(|cell| {
+                sim.is_explored(*cell)
+                    && sim.is_walkable(*cell).unwrap()
+                    && sim.natural_resource_at(*cell).unwrap().is_none()
+                    && sim
+                        .item_world
+                        .ground_items_in_chunk(cell.split().0)
+                        .all(|item| {
+                            item.ground_position()
+                                .is_none_or(|position| position.containing_cell() != *cell)
+                        })
+            })
+            .take(2)
+            .collect::<Vec<_>>();
+        assert_eq!(extra.len(), 2);
+        for cell in extra {
+            sim.set_stockpile_cell(stockpile, cell, true).unwrap();
+        }
+        let mut saw_haul = false;
+        for _ in 0..256 {
+            sim.advance_ticks(1).unwrap();
+            saw_haul |= sim
+                .jobs()
+                .any(|job| matches!(job.kind(), JobKind::Haul { item_id, .. } if item_id == stone));
+            if sim.item_world.get(stone).is_some_and(|item| {
+                item.ground_position().is_some_and(|position| {
+                    sim.stockpile_world.stockpile_at(position.containing_cell()) == Some(stockpile)
+                })
+            }) {
+                break;
+            }
+        }
+        assert!(
+            saw_haul,
+            "ordinary logistics never reserved the excavated stone"
+        );
+        let destination = sim
+            .item_world
+            .get(stone)
+            .unwrap()
+            .ground_position()
+            .unwrap()
+            .containing_cell();
+        assert_eq!(
+            sim.stockpile_world.stockpile_at(destination),
+            Some(stockpile)
+        );
+        assert_eq!(sim.item_world.get(stone).unwrap().quantity().get(), 1);
+        assert!(sim.item_world.indexes_are_consistent());
+    }
+
+    #[test]
+    fn manual_interruption_returns_rock_job_to_available() {
+        let (mut sim, rock, _, worker) = explored_rock_fixture();
+        equip_mining_tool(&mut sim, worker);
+        let job = sim.designate_rock_excavation(rock).unwrap();
+        for _ in 0..256 {
+            sim.advance_ticks(1).unwrap();
+            if matches!(
+                sim.job_world.get(job).map(Job::state),
+                Some(JobState::Working { .. })
+            ) {
+                break;
+            }
+        }
+        assert!(matches!(
+            sim.job_world.get(job).unwrap().state(),
+            JobState::Working { .. }
+        ));
+        sim.set_movement_direction(worker, Direction::East).unwrap();
+        assert_eq!(sim.job_world.get(job).unwrap().state(), JobState::Available);
+        assert_eq!(sim.job_world.job_for_worker(worker), None);
+        assert_eq!(sim.effective_terrain_at(rock).unwrap(), terrain::ROCK);
+        assert_eq!(sim.characters[&worker].skill_practice(skill::MINING), 0);
+    }
 
     #[test]
     fn skilled_worker_gets_one_less_work_tick() {

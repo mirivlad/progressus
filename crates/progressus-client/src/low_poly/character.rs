@@ -164,6 +164,7 @@ pub(crate) fn pose_kind(
             && matches!(
                 job.kind,
                 JobKind::Harvest { .. }
+                    | JobKind::ExcavateRock { .. }
                     | JobKind::Craft { .. }
                     | JobKind::Construct { .. }
                     | JobKind::PrepareConstruction { .. }

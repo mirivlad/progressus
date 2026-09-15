@@ -26,6 +26,9 @@ pub enum JobKind {
     Harvest {
         source: WorldCell,
     },
+    ExcavateRock {
+        cell: WorldCell,
+    },
     Eat {
         character_id: EntityId,
         item_id: EntityId,
@@ -129,6 +132,7 @@ impl Job {
 pub(crate) struct JobWorld {
     jobs: BTreeMap<EntityId, Job>,
     harvest_by_source: BTreeMap<WorldCell, EntityId>,
+    excavate_by_cell: BTreeMap<WorldCell, EntityId>,
     eat_by_character: BTreeMap<EntityId, EntityId>,
     eat_by_item: BTreeMap<EntityId, EntityId>,
     sleep_by_character: BTreeMap<EntityId, EntityId>,
@@ -169,6 +173,10 @@ impl JobWorld {
 
     pub(crate) fn harvest_job_for_source(&self, source: WorldCell) -> Option<EntityId> {
         self.harvest_by_source.get(&source).copied()
+    }
+
+    pub(crate) fn excavation_job_at(&self, cell: WorldCell) -> Option<EntityId> {
+        self.excavate_by_cell.get(&cell).copied()
     }
 
     pub(crate) fn eat_job_for_character(&self, character_id: EntityId) -> Option<EntityId> {
@@ -269,6 +277,12 @@ impl JobWorld {
                     return Err(JobWorldError::HarvestSourceAlreadyDesignated(source));
                 }
                 self.harvest_by_source.insert(source, id);
+            }
+            JobKind::ExcavateRock { cell } => {
+                if self.excavate_by_cell.contains_key(&cell) {
+                    return Err(JobWorldError::RockAlreadyDesignated(cell));
+                }
+                self.excavate_by_cell.insert(cell, id);
             }
             JobKind::Eat {
                 character_id,
@@ -529,6 +543,11 @@ impl JobWorld {
                     return Err(JobWorldError::IndexCorruption);
                 }
             }
+            JobKind::ExcavateRock { cell } => {
+                if self.excavate_by_cell.remove(&cell) != Some(job_id) {
+                    return Err(JobWorldError::IndexCorruption);
+                }
+            }
             JobKind::Eat {
                 character_id,
                 item_id,
@@ -653,6 +672,11 @@ impl JobWorld {
                         return false;
                     }
                 }
+                JobKind::ExcavateRock { cell } => {
+                    if self.excavate_by_cell.get(&cell) != Some(id) {
+                        return false;
+                    }
+                }
                 JobKind::Eat {
                     character_id,
                     item_id,
@@ -772,6 +796,12 @@ impl JobWorld {
                         )
                 })
                 .count()
+            && self.excavate_by_cell.len()
+                == self
+                    .jobs
+                    .values()
+                    .filter(|job| matches!(job.kind(), JobKind::ExcavateRock { .. }))
+                    .count()
             && self.eat_by_character.len()
                 == self
                     .jobs
@@ -875,6 +905,7 @@ pub(crate) enum JobWorldError {
     DuplicateJob(EntityId),
     UnknownJob(EntityId),
     HarvestSourceAlreadyDesignated(WorldCell),
+    RockAlreadyDesignated(WorldCell),
     EatCharacterAlreadyDesignated(EntityId),
     EatItemAlreadyReserved(EntityId),
     SleepCharacterAlreadyDesignated(EntityId),
@@ -910,6 +941,23 @@ mod tests {
 
     fn id(value: u64) -> EntityId {
         EntityId::new(value).unwrap()
+    }
+
+    #[test]
+    fn excavation_exclusively_indexes_one_cell_and_cleans_on_removal() {
+        let mut jobs = JobWorld::default();
+        let cell = WorldCell::new(4, -2);
+        jobs.insert(Job::new(id(10), JobKind::ExcavateRock { cell }))
+            .unwrap();
+        assert_eq!(jobs.excavation_job_at(cell), Some(id(10)));
+        assert!(
+            jobs.insert(Job::new(id(11), JobKind::ExcavateRock { cell }))
+                .is_err()
+        );
+        assert!(jobs.indexes_are_consistent());
+        jobs.remove(id(10)).unwrap();
+        assert_eq!(jobs.excavation_job_at(cell), None);
+        assert!(jobs.indexes_are_consistent());
     }
 
     #[test]

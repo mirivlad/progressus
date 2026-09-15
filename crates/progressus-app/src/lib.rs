@@ -50,6 +50,9 @@ pub enum Command {
     DesignateHarvest {
         source: WorldCell,
     },
+    DesignateRockExcavation {
+        cell: WorldCell,
+    },
     CancelJob {
         job_id: EntityId,
     },
@@ -210,6 +213,9 @@ impl Application {
             }
             Command::DesignateHarvest { source } => {
                 self.simulation.designate_harvest(source)?;
+            }
+            Command::DesignateRockExcavation { cell } => {
+                self.simulation.designate_rock_excavation(cell)?;
             }
             Command::CancelJob { job_id } => self.simulation.cancel_job(job_id)?,
             Command::CreateStockpile { cell } => {
@@ -960,6 +966,23 @@ mod tests {
             Some(terrain::ROCK)
         );
         assert_eq!(snapshot.terrain_revision, 1);
+    }
+
+    #[test]
+    fn rock_excavation_command_publishes_detached_job_snapshot() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let cell = WorldCell::new(0, 0);
+        simulation
+            .set_terrain_override(cell, terrain::ROCK)
+            .unwrap();
+        let mut application = Application::from_simulation_for_test(simulation);
+        application
+            .execute(Command::DesignateRockExcavation { cell })
+            .unwrap();
+        let snapshot = application.snapshot(SnapshotQuery::default()).unwrap();
+        assert_eq!(snapshot.terrain_revision, 1);
+        assert_eq!(snapshot.jobs.len(), 1);
+        assert_eq!(snapshot.jobs[0].kind, JobKind::ExcavateRock { cell });
     }
 
     #[test]
