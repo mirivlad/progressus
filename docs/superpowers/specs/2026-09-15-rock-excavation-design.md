@@ -1,6 +1,6 @@
 # Prototype 02 Stage D1 — Physical Rock Excavation
 
-Status: **Design for owner review.** The owner approved the Rock-to-passable-ground and physical-Stone outcome on 2026-09-15; implementation details below remain subject to this written review.
+Status: **Approved by project owner on 2026-09-15; implementation planned, not yet complete.**
 
 ## Purpose and boundary
 
@@ -30,7 +30,7 @@ The existing low-poly terrain cache refreshes on exploration revision, not on an
 
 ## Client workflow
 
-The Orders palette adds a localized rock-excavation designation tool. Area selection targets known effective `Rock` cells; it never probes undiscovered terrain. It shows a pending/working designation marker and the existing Cancel Jobs gesture removes it. Help text states that a mining-capable tool is required and that completion clears the cell and produces physical Stone. A live native check must confirm the click, marker, worker approach, cell remesh and subsequent haul. The client cannot grant a skill point or change terrain on its own.
+The Orders palette adds a localized rock-excavation designation tool. Area selection targets known effective `Rock` cells; it never probes undiscovered terrain. Its drag preview and pending/working designation marker sit above the procedural rock mesh rather than at the hidden ground plane; the existing Cancel Jobs gesture removes the job. Help text states that a mining-capable tool is required and that completion clears the cell and produces physical Stone. A live native check must confirm the click, marker, worker approach, cell remesh and subsequent haul. The client cannot grant a skill point or change terrain on its own.
 
 ## Verification
 
