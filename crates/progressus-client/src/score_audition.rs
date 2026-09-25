@@ -640,6 +640,46 @@ pub fn continuous_wav(seed: u64, seconds: usize) -> Vec<u8> {
     encode_wav(&continuous_pcm(seed, seconds))
 }
 
+/// Listening-only arrangements. Runtime playback keeps the accepted score.
+#[derive(Clone, Copy, Debug)]
+pub enum AuditionArrangement {
+    SparsePiano,
+    SustainedStrings,
+    GentleAlternation,
+}
+
+pub fn audition_wav(seed: u64, seconds: usize, arrangement: AuditionArrangement) -> Vec<u8> {
+    let mut plan = collect_plan(seed, seconds as f32);
+    match arrangement {
+        AuditionArrangement::SparsePiano => {
+            plan.phrases.retain(|phrase| phrase.index.is_multiple_of(2));
+            for phrase in &mut plan.phrases {
+                phrase.timbre = PhraseTimbre::FeltPiano;
+                phrase.effect = PhraseEffect::Dry;
+            }
+        }
+        AuditionArrangement::SustainedStrings => {
+            for phrase in &mut plan.phrases {
+                phrase.timbre = PhraseTimbre::BowedStrings;
+                phrase.effect = PhraseEffect::Dry;
+            }
+        }
+        AuditionArrangement::GentleAlternation => {
+            for phrase in &mut plan.phrases {
+                phrase.effect = match phrase.effect {
+                    PhraseEffect::Delay { .. } => PhraseEffect::Dry,
+                    PhraseEffect::Reverb { send, tail } => PhraseEffect::Reverb {
+                        send: send * 0.5,
+                        tail,
+                    },
+                    PhraseEffect::Dry => PhraseEffect::Dry,
+                };
+            }
+        }
+    }
+    encode_wav(&continuous_pcm_from_plan(seed, &plan, seconds))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
