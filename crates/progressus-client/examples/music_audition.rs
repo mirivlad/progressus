@@ -17,15 +17,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
     fs::create_dir_all(&output)?;
     for (name, arrangement) in [
-        ("01-sparse-piano.wav", AuditionArrangement::SparsePiano),
-        (
-            "02-sustained-strings.wav",
-            AuditionArrangement::SustainedStrings,
-        ),
-        (
-            "03-gentle-alternation.wav",
-            AuditionArrangement::GentleAlternation,
-        ),
+        ("01-flowing.wav", AuditionArrangement::Flowing),
+        ("02-lively.wav", AuditionArrangement::Lively),
+        ("03-call-response.wav", AuditionArrangement::CallAndResponse),
     ] {
         let wav = audition_wav(SEED, SECONDS, arrangement);
         assert_eq!(wav.len(), 44 + SECONDS * SAMPLE_RATE as usize * 4);
