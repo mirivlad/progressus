@@ -215,50 +215,96 @@ pub(crate) fn pose(kind: PoseKind, phase_seconds: f32) -> CharacterPose {
 pub(crate) fn animate_rigs(
     game: Res<AuthoritativeClient>,
     motion: Res<VisualMotion>,
-    rigs: Query<(&Pawn, &CharacterRig)>,
+    mut rigs: Query<(&Pawn, &CharacterRig, &mut Transform)>,
     mut equipped: Query<&mut EquippedVisual>,
-    mut parts: Query<&mut Transform>,
+    mut parts: Query<&mut Transform, Without<Pawn>>,
 ) {
-    for (pawn, rig) in &rigs {
+    for (pawn, rig, mut root) in &mut rigs {
         let Some(m) = motion.characters.get(&pawn.0) else {
             continue;
         };
         let kind = pose_kind(pawn.0, &m.trace, m.elapsed_seconds, &game.snapshot().jobs);
         let pose = pose(kind, m.phase_seconds);
         let sleeping = kind == PoseKind::Sleep;
+        let bed_sleep = game.snapshot().jobs.iter().any(|job| {
+            matches!(job.state, JobState::Working { worker_id, .. } if worker_id == pawn.0)
+                && matches!(
+                    job.kind,
+                    JobKind::Sleep {
+                        bed_id: Some(_),
+                        ..
+                    }
+                )
+        });
+        let sleep_height = if bed_sleep { 0.39 } else { 0.13 };
+        if sleeping {
+            // The bed runs along world X. Keep the presentation rig aligned
+            // with it while the authoritative character stays at cell center.
+            root.rotation = Quat::IDENTITY;
+        }
         if let Ok(mut torso) = parts.get_mut(rig.torso) {
-            torso.translation.y = if sleeping { 0.27 } else { 0.34 } + pose.torso_bob;
-            torso.rotation = Quat::from_rotation_x(if sleeping { -0.18 } else { 0. });
+            torso.translation = if sleeping {
+                Vec3::new(0., sleep_height + pose.torso_bob, 0.)
+            } else {
+                Vec3::new(0., 0.34 + pose.torso_bob, 0.)
+            };
+            torso.rotation = Quat::from_rotation_z(if sleeping {
+                -std::f32::consts::FRAC_PI_2
+            } else {
+                0.
+            });
         }
         if let Ok(mut head) = parts.get_mut(rig.head) {
-            head.translation.y = if sleeping { 0.52 } else { 0.72 } + pose.torso_bob;
-            head.rotation = Quat::from_rotation_x(if sleeping { -0.12 } else { 0. });
+            head.translation = if sleeping {
+                Vec3::new(0.16, sleep_height + pose.torso_bob, 0.)
+            } else {
+                Vec3::new(0., 0.72 + pose.torso_bob, 0.)
+            };
+            head.rotation = Quat::from_rotation_z(if sleeping {
+                -std::f32::consts::FRAC_PI_2
+            } else {
+                0.
+            });
+            head.scale = Vec3::splat(if sleeping { 0.75 } else { 1. });
         }
-        for (entity, angle, height) in [
+        for (entity, angle, standing, lying) in [
             (
                 rig.left_arm,
                 pose.left_arm,
-                if sleeping { 0.50 } else { 0.65 },
+                Vec3::new(-0.15, 0.65, 0.),
+                Vec3::new(0.02, 0.38, -0.13),
             ),
             (
                 rig.right_arm,
                 pose.right_arm,
-                if sleeping { 0.50 } else { 0.65 },
+                Vec3::new(0.15, 0.65, 0.),
+                Vec3::new(0.02, 0.38, 0.13),
             ),
             (
                 rig.left_leg,
                 pose.left_leg,
-                if sleeping { 0.30 } else { 0.37 },
+                Vec3::new(-0.085, 0.37, 0.),
+                Vec3::new(-0.13, 0.38, -0.06),
             ),
             (
                 rig.right_leg,
                 pose.right_leg,
-                if sleeping { 0.30 } else { 0.37 },
+                Vec3::new(0.085, 0.37, 0.),
+                Vec3::new(-0.13, 0.38, 0.06),
             ),
         ] {
             if let Ok(mut part) = parts.get_mut(entity) {
-                part.rotation = Quat::from_rotation_x(angle);
-                part.translation.y = height;
+                part.rotation = if sleeping {
+                    Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)
+                } else {
+                    Quat::from_rotation_x(angle)
+                };
+                part.translation = if sleeping {
+                    Vec3::new(lying.x, sleep_height, lying.z)
+                } else {
+                    standing
+                };
+                part.scale = Vec3::splat(if sleeping { 0.75 } else { 1. });
             }
         }
     }
