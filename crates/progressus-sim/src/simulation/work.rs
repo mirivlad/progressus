@@ -66,9 +66,6 @@ impl Simulation {
         let position = item
             .ground_position()
             .ok_or(SimulationError::ItemNotOnGround(item_id))?;
-        if item.quantity().get() != 1 {
-            return Err(SimulationError::EquipmentStackMustBeSingle(item_id));
-        }
         let slot = item
             .kind()
             .definition()
@@ -574,8 +571,22 @@ impl Simulation {
                     item_position,
                     InteractionRadius::zero(),
                 ) {
-                    // Take it and put it away in one step: a tool never
-                    // travels in the hands, so it never occupies them.
+                    // A ground stack may contain several tools. Reserve the
+                    // original ID for one physical tool and leave the rest
+                    // on the ground before pickup, so neither the equipment
+                    // slot nor the worker's hands inherit the whole stack.
+                    let quantity = self
+                        .item_world
+                        .get(item_id)
+                        .ok_or(SimulationError::UnknownItem(item_id))?
+                        .quantity()
+                        .get();
+                    if quantity > 1 {
+                        let leftover_id = self.id_allocator.allocate()?;
+                        self.item_world
+                            .split_ground_stack(item_id, leftover_id, quantity - 1)
+                            .map_err(|_| SimulationError::JobInvariantViolation)?;
+                    }
                     self.pick_up_within_capacity(worker_id, item_id)?;
                     self.equip_item_for_job(worker_id, item_id)?;
                     self.job_world
@@ -2505,6 +2516,47 @@ mod tests {
                 .count();
             assert!(equip_jobs <= 1, "{equip_jobs} workers chased one pick");
         }
+    }
+
+    #[test]
+    fn fetching_one_tool_from_a_stack_preserves_the_remainder_across_save_load() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        clear_all_items(&mut simulation);
+        let worker = cora();
+        let cell = simulation.characters[&worker].position().containing_cell();
+        let tools = insert_ground_stack(&mut simulation, item::PRIMITIVE_TOOL, 3, cell);
+        let job = simulation.designate_equipment_fetch(worker, tools).unwrap();
+        let bytes = simulation.save_json().unwrap();
+        let mut simulation = Simulation::load_json(&bytes).unwrap();
+
+        for _ in 0..64 {
+            simulation.advance_ticks(1).unwrap();
+            if simulation.equipment(worker) == vec![(slot::TOOL, tools)] {
+                break;
+            }
+        }
+        assert_eq!(simulation.equipment(worker), vec![(slot::TOOL, tools)]);
+        assert_eq!(
+            simulation.item_world.get(tools).unwrap().quantity().get(),
+            1
+        );
+        assert_eq!(total_item_quantity(&simulation, item::PRIMITIVE_TOOL), 3);
+        assert_eq!(
+            simulation
+                .item_world
+                .iter()
+                .filter(|stack| stack.id() != tools
+                    && stack.kind() == item::PRIMITIVE_TOOL
+                    && stack
+                        .ground_position()
+                        .is_some_and(|position| position.containing_cell() == cell))
+                .map(|stack| stack.quantity().get())
+                .sum::<u32>(),
+            2
+        );
+        assert!(simulation.job_world.get(job).is_none());
+        assert!(simulation.item_world.indexes_are_consistent());
+        assert!(simulation.job_world.indexes_are_consistent());
     }
 
     #[test]

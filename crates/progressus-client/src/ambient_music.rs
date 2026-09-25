@@ -135,8 +135,8 @@ fn add_lead(buffer: &mut [f32], origin: f32, bar: usize, notes: &[Note], seed: u
                 break;
             }
         }
-        for side in 0..2 {
-            phase[side] +=
+        for (side, oscillator) in phase.iter_mut().enumerate() {
+            *oscillator +=
                 TAU * freq * if side == 0 { 0.9968 } else { 1.0034 } / SAMPLE_RATE as f32;
         }
         if step < skipped {
@@ -236,7 +236,7 @@ fn effects(lead: &[f32], pad: &[f32], bass: &[f32], answer: &[f32], origin: f32)
             let chorus = (0.018
                 + 0.005
                     * (TAU * 0.33 * (origin + frame as f32 / SAMPLE_RATE as f32)
-                        + side as f32 * 3.14)
+                        + side as f32 * std::f32::consts::PI)
                         .sin())
                 * SAMPLE_RATE as f32;
             let at = frame.saturating_sub(chorus as usize) * 2 + side;
@@ -313,7 +313,7 @@ pub(crate) fn continuous_pcm_window(seed: u64, start_seconds: usize, seconds: us
             line.pop();
         }
         // Later sections vary the sentence order and sparse notes without leaving the harmony.
-        if pass > 0 && hash(seed, bar as u64) % 7 == 0 && line.len() > 2 {
+        if pass > 0 && hash(seed, bar as u64).is_multiple_of(7) && line.len() > 2 {
             line.remove(1);
         }
         add_lead(&mut lead, origin, bar, &line, seed);

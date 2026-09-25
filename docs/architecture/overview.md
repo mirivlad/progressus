@@ -313,6 +313,12 @@ Finished structure occupancy is separate from terrain. `StoneWall` blocks moveme
 
 Construction designation records intent on explored walkable ground even when a natural source, loose physical stack, or character occupies the target. A site-owned `PrepareConstruction` job clears one deterministic obstacle at a time: existing sources are harvested with normal capability requirements, every initial or harvested stack is physically carried outside the footprint with quantity and stable identity preserved, and an available occupying character walks out. Independent reservations are not stolen, missing capacity/routes/destinations leave the project waiting, and final construction rechecks the cell for late occupancy. Preparation projects, targets, transport state, and pre-existing-resource provenance round-trip through save format v1. The detached client snapshot exposes preparation jobs plus deferred Workbench projects; the 3D client renders their designation and the localized job name.
 
+### Current rock-excavation bootstrap
+
+`progressus-sim` owns an exclusive stable-ID `ExcavateRock { cell }` job. Designation accepts only explored effective Rock without a conflicting claim/source. Assignment deterministically chooses an equipped mining-capable worker and a reachable cardinal approach cell; unavailable tools or routes leave the job cancellable and Available. Authoritative work rechecks the Rock, worker, reach and equipped capability on every phase. Completion alone writes a sparse `Grass` override, creates one ground `Stone x1`, removes the job reservation and awards one Mining practice point. Cancellation, target change, tool loss and worker loss create neither output nor credit. The exact job state/remaining ticks, terrain revision/override and physical item round-trip through save v1.
+
+`progressus-app` publishes the detached job and terrain revision and accepts `DesignateRockExcavation`. The Bevy Orders tool derives candidates only from requested `KnownTerrain`, so it cannot probe hidden cells. Terrain revision invalidates the visible chunk mesh while item revision exposes Stone. Preview and pending/working markers use a presentation-only height above the procedural rock maximum; animation and mesh completion never decide gameplay. This flat `Rock -> Grass` slice does not define pits, elevations, ordinary soil excavation or underground simulation.
+
 ## 14. Items and inventories
 
 Prototype 01 should prefer a simple physical item/stack model.

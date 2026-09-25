@@ -10,7 +10,8 @@ use bevy::window::{Monitor, PrimaryMonitor, PrimaryWindow, WindowPosition};
 use bevy::winit::{UpdateMode, WinitSettings};
 use progressus_app::{
     Application, ApplicationError, ChunkCoord, ClientSnapshot, Command, EntityId, JobKind,
-    NewGameOptions, SnapshotQuery, WorldCell, WorldPosition, WorldSeed, structure, workstation,
+    KnownTerrain, NewGameOptions, SnapshotQuery, WorldCell, WorldPosition, WorldSeed, structure,
+    workstation,
 };
 
 use crate::client_diagnostics::{
@@ -566,6 +567,7 @@ fn apply_point_tool(
         | ToolMode::StockpileAdd
         | ToolMode::StockpileRemove
         | ToolMode::Harvest
+        | ToolMode::ExcavateRock
         | ToolMode::Wall
         | ToolMode::CancelJobs => {}
     }
@@ -721,6 +723,33 @@ fn apply_tool_area(
                 }
             }
         }
+        ToolMode::ExcavateRock => {
+            let existing = area_snapshot
+                .jobs
+                .iter()
+                .filter_map(|job| match job.kind {
+                    JobKind::ExcavateRock { cell } => Some(cell),
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>();
+            let selected = cells.into_iter().collect::<BTreeSet<_>>();
+            let known = selected
+                .iter()
+                .copied()
+                .map(|cell| {
+                    let terrain = known_terrain_at(&area_snapshot, cell)
+                        .map_or(KnownTerrain::Unknown, KnownTerrain::Known);
+                    (cell, terrain)
+                })
+                .collect::<Vec<_>>();
+            for cell in excavatable_cells(&selected, &known) {
+                if !existing.contains(&cell) {
+                    authoritative
+                        .application
+                        .execute(Command::DesignateRockExcavation { cell })?;
+                }
+            }
+        }
         ToolMode::Wall => {
             let stockpile_cells = area_snapshot
                 .stockpiles
@@ -783,19 +812,10 @@ fn apply_tool_area(
             let jobs = area_snapshot
                 .jobs
                 .iter()
-                .filter_map(|job| match job.kind {
-                    JobKind::Harvest { source } if selected.contains(&source) => Some(job.id),
-                    JobKind::Harvest { .. }
-                    | JobKind::ExcavateRock { .. }
-                    | JobKind::Eat { .. }
-                    | JobKind::Sleep { .. }
-                    | JobKind::Haul { .. }
-                    | JobKind::SupplyProduction { .. }
-                    | JobKind::Craft { .. }
-                    | JobKind::DeliverConstruction { .. }
-                    | JobKind::Construct { .. }
-                    | JobKind::EquipTool { .. }
-                    | JobKind::PrepareConstruction { .. } => None,
+                .filter_map(|job| {
+                    direct_job_cell(job.kind)
+                        .is_some_and(|cell| selected.contains(&cell))
+                        .then_some(job.id)
                 })
                 .collect::<Vec<_>>();
             for job_id in jobs {
@@ -856,6 +876,28 @@ fn known_terrain_at(
         .iter()
         .find(|chunk| chunk.coordinate == coordinate)?
         .known_terrain_at(local)
+}
+
+fn excavatable_cells(
+    selected: &BTreeSet<WorldCell>,
+    known: &[(WorldCell, KnownTerrain)],
+) -> Vec<WorldCell> {
+    known
+        .iter()
+        .filter_map(|(cell, terrain)| {
+            (selected.contains(cell)
+                && *terrain == KnownTerrain::Known(progressus_app::terrain::ROCK))
+            .then_some(*cell)
+        })
+        .collect()
+}
+
+fn direct_job_cell(kind: JobKind) -> Option<WorldCell> {
+    match kind {
+        JobKind::Harvest { source } => Some(source),
+        JobKind::ExcavateRock { cell } => Some(cell),
+        _ => None,
+    }
 }
 
 fn harvest_job_at(snapshot: &ClientSnapshot, source: WorldCell) -> Option<EntityId> {
@@ -1226,7 +1268,7 @@ pub fn run_with_options(seed: u64, diagnostics_enabled: bool) -> Result<(), Clie
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, VecDeque, btree_map::Entry};
+    use std::collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry};
     use std::time::Duration;
 
     use super::{AuthoritativeClient, advance_authority, rectangle_cells};
@@ -1235,9 +1277,85 @@ mod tests {
     use crate::ui::ToolMode;
     use bevy::prelude::{App, ButtonInput, KeyCode, Time, Update};
     use progressus_app::{
-        CHUNK_SIDE, ChunkCoord, Command, Direction, EntityId, GroundItemSnapshot, MovementState,
-        TerrainId, WorldCell, WorldPosition, item, terrain,
+        CHUNK_SIDE, ChunkCoord, Command, Direction, EntityId, GroundItemSnapshot, JobKind,
+        KnownTerrain, MovementState, SnapshotQuery, TerrainId, WorldCell, WorldPosition, WorldSeed,
+        item, terrain,
     };
+
+    #[test]
+    fn excavation_area_selects_only_known_rock() {
+        assert!(super::cell_selection_allowed(ToolMode::ExcavateRock));
+        let selected = BTreeSet::from([WorldCell::new(1, 0), WorldCell::new(2, 0)]);
+        let known = [
+            (WorldCell::new(1, 0), KnownTerrain::Known(terrain::ROCK)),
+            (WorldCell::new(2, 0), KnownTerrain::Unknown),
+        ];
+        assert_eq!(
+            super::excavatable_cells(&selected, &known),
+            vec![WorldCell::new(1, 0)]
+        );
+        assert_eq!(
+            super::direct_job_cell(JobKind::ExcavateRock {
+                cell: WorldCell::new(1, 0)
+            }),
+            Some(WorldCell::new(1, 0))
+        );
+    }
+
+    #[test]
+    fn excavation_area_command_and_cancel_cross_the_client_boundary() {
+        let (mut client, rock) = (0..64)
+            .find_map(|seed| {
+                let client = AuthoritativeClient::new_with_seed(WorldSeed::new(seed)).unwrap();
+                let snapshot = client
+                    .spatial_snapshot(
+                        vec![ChunkCoord::new(-1, 0), ChunkCoord::new(0, 0)],
+                        true,
+                        false,
+                        false,
+                    )
+                    .unwrap();
+                let rock = snapshot.chunks.iter().find_map(|chunk| {
+                    chunk.cells.iter().enumerate().find_map(|(index, terrain)| {
+                        (*terrain == KnownTerrain::Known(terrain::ROCK)).then(|| {
+                            chunk
+                                .coordinate
+                                .world_cell(progressus_app::LocalCell::new(
+                                    (index % usize::from(chunk.side)) as u16,
+                                    (index / usize::from(chunk.side)) as u16,
+                                ))
+                                .unwrap()
+                        })
+                    })
+                })?;
+                Some((client, rock))
+            })
+            .expect("a deterministic early seed exposes rock near the starting characters");
+
+        super::apply_tool_area(&mut client, ToolMode::ExcavateRock, rock, rock).unwrap();
+        let designated = client
+            .application
+            .snapshot(SnapshotQuery::default())
+            .unwrap();
+        assert!(
+            designated
+                .jobs
+                .iter()
+                .any(|job| matches!(job.kind, JobKind::ExcavateRock { cell } if cell == rock))
+        );
+
+        super::apply_tool_area(&mut client, ToolMode::CancelJobs, rock, rock).unwrap();
+        let cancelled = client
+            .application
+            .snapshot(SnapshotQuery::default())
+            .unwrap();
+        assert!(
+            !cancelled
+                .jobs
+                .iter()
+                .any(|job| matches!(job.kind, JobKind::ExcavateRock { cell } if cell == rock))
+        );
+    }
 
     fn test_app() -> App {
         let mut app = App::new();

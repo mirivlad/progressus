@@ -1,6 +1,6 @@
 # Prototype 02 Stage D1 — Physical Rock Excavation
 
-Status: **Approved by project owner on 2026-09-15; implementation planned, not yet complete.**
+Status: **Implemented with automated headless/application/client evidence on 2026-09-17; native visual acceptance pending.**
 
 ## Purpose and boundary
 

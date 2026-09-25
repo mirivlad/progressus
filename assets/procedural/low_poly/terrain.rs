@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use bevy::{asset::RenderAssetUsages, mesh::PrimitiveTopology, prelude::*};
 use progressus_app::{ChunkSnapshot, KnownTerrain, LocalCell, TerrainId, WorldCell, terrain};
 
+pub(super) const MAX_ROCK_HEIGHT: f32 = 3.1;
+
 pub(super) fn terrain_mesh(chunk: &ChunkSnapshot, known: &BTreeMap<WorldCell, TerrainId>) -> Mesh {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
@@ -192,6 +194,20 @@ mod tests {
     fn mountains_rise_well_above_resource_rocks() {
         let mesh = terrain_mesh(&chunk(KnownTerrain::Known(terrain::ROCK)), &BTreeMap::new());
         assert!(positions(&mesh).iter().any(|p| p[1] >= 2.5));
+    }
+
+    #[test]
+    fn published_rock_height_covers_every_generated_peak() {
+        for y in -20..20 {
+            for x in -20..20 {
+                let cell = WorldCell::new(x, y);
+                let hash = (cell.x() as u64)
+                    .wrapping_mul(731)
+                    .wrapping_add((cell.y() as u64).wrapping_mul(157));
+                let peak = 2.8 + (hash % 7) as f32 * 0.05;
+                assert!(peak <= MAX_ROCK_HEIGHT);
+            }
+        }
     }
 
     #[test]

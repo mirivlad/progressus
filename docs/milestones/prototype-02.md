@@ -71,17 +71,19 @@ Worldgen v3 adds deterministic `BerryBush` sources, including four guaranteed bu
 
 ## 4. Stage B — Sleep and shelter
 
-Status: **Implemented; native interaction acceptance pending**
+Status: **Implemented; native behavior observed, owner aesthetic acceptance pending**
 
 - Each character has persistent authoritative rest (`0..=100`), decaying by one every 48 ticks. At 30 or below, an exclusive autonomous Sleep job can reserve a finished Bed; without a reachable free bed, the character sleeps on the ground. Hunger and direct player orders preempt Sleep and release its reservation.
 - Bed is an ordinary physically delivered `2 Wood` construction, passable and separate from wall connectivity. At Sleep completion, a bounded 256-cell cardinal fill derives whether real walls, doors, or impassable terrain enclose the sleeping cell. An enclosed bed restores rest to 100; an open bed adds 50; ground sleep adds 25. No housing inventory or stored room state exists.
-- Save v1 persists rest, active Sleep and bed ownership, and the most recent shelter verdict. Detached snapshots expose them to the localized inspector and the Bed build tool/low-poly presentation. Headless tier, reservation, save/load and 10,000-tick five-person food/rest tests pass. The native Build palette and bed model were observed, but exact click-to-designate and live sleep-pose acceptance still need a fresh owner-side check. See [`ADR-0020`](../adr/0020-rest-sleep-and-enclosure-shelter.md).
+- Save v1 persists rest, active Sleep and bed ownership, and the most recent shelter verdict. Detached snapshots expose them to the localized inspector and the Bed build tool/low-poly presentation. Headless tier, reservation, save/load and 10,000-tick five-person food/rest tests pass. Native bed designation, completed bed geometry, and a character visibly lying on it during Sleep were observed on 2026-09-26. Owner aesthetic acceptance remains open. See [`ADR-0020`](../adr/0020-rest-sleep-and-enclosure-shelter.md).
 
 ## 5. Stage C — Skills and practical knowledge
 
 Implemented: the typed, stable-name Gathering, Mining and Crafting registry gives each person 0–5 persistent practice. A completed physical Harvest or Craft job awards one point only to its worker; sources requiring the mining capability train Mining, other sources train Gathering. At five points the matching work phase takes one tick less (minimum one), without changing output/input quantities or bypassing tools. Save v1 accepts old characters with no skill field, validates named entries and retains active work ticks; detached snapshots expose localized progress in the character inspector. Native inspector appearance still needs a visual smoke.
 
 ## 6. Stage D — Mining and early metallurgy
+
+Status: **D1 rock excavation implemented; ground excavation and metallurgy remain open**
 
 - a non-renewable ore source distinct from ordinary Stone;
 - physical ore item and extraction work;
@@ -92,6 +94,8 @@ Implemented: the typed, stable-name Gathering, Mining and Crafting registry give
 - no teleporting inputs or outputs.
 
 Current implementation has a non-renewable copper-vein worldgen layer and physical CopperOre output, with mining gated by equipped tool capabilities. A headless regression now proves physical inputs become a tool at the workbench, a named character fetches/equips it, then a revealed copper vein is depleted and all resulting ore is physically hauled to a stockpile. The fixture stages that character near the distant vein; it does not prove long-distance player travel or native UI operation. Furnace, fuel-consuming smelting and a metal product are still missing.
+
+D1 adds exclusive persisted `ExcavateRock` work over explored Rock cells. A worker must physically equip a mining-capable tool and approach from reachable cardinal ground; completion alone changes `Rock -> Grass`, creates exactly physical `Stone x1`, and awards one Mining practice point. The saved terrain revision remeshes the changed visible cell, and the Orders palette filters only known Rock cells while drawing its preview/job marker above raised rock geometry. Headless lifecycle, interruption, path failure, save/load, ordinary Haul, application boundary and client tests pass. Native click/worker/remesh/haul observation remains pending. Ordinary ground excavation, pits/levels, furnace, fuel-consuming smelting and a metal product are not implemented.
 
 ## 7. Stage E — Simple research/capability gating
 
@@ -157,7 +161,7 @@ Prototype 02 does not require:
 
 - [x] nutrition and autonomous physical eating work;
 - [x] renewable physical food can sustain the five-character settlement;
-- [x] sleep and shelter work in authoritative simulation and client plumbing (native interaction acceptance pending);
+- [x] sleep and shelter work in authoritative simulation and client plumbing (native behavior observed; owner aesthetic acceptance pending);
 - [x] at least one practical skill changes work outcomes (Stage C headless/client checks; native inspector smoke pending);
 - [ ] ore extraction works;
 - [ ] one early metallurgy chain works through physical production logistics;

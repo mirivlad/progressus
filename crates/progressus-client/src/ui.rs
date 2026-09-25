@@ -17,6 +17,7 @@ pub(crate) enum ToolMode {
     StockpileAdd,
     StockpileRemove,
     Harvest,
+    ExcavateRock,
     Wall,
     Door,
     Bed,
@@ -31,6 +32,7 @@ impl ToolMode {
             Self::StockpileAdd => TextKey::StockpileAdd,
             Self::StockpileRemove => TextKey::StockpileRemove,
             Self::Harvest => TextKey::Harvest,
+            Self::ExcavateRock => TextKey::ExcavateRock,
             Self::Wall => TextKey::StoneWall,
             Self::Door => TextKey::Door,
             Self::Bed => TextKey::Bed,
@@ -45,6 +47,7 @@ impl ToolMode {
             Self::StockpileAdd
                 | Self::StockpileRemove
                 | Self::Harvest
+                | Self::ExcavateRock
                 | Self::Wall
                 | Self::CancelJobs
         )
@@ -187,7 +190,11 @@ pub(crate) fn setup_toolbar(
         &mut commands,
         HudPalette::Orders,
         54.0,
-        &[(ToolMode::Harvest, "H"), (ToolMode::CancelJobs, "×")],
+        &[
+            (ToolMode::Harvest, "H"),
+            (ToolMode::ExcavateRock, "R"),
+            (ToolMode::CancelJobs, "×"),
+        ],
         &font,
     );
     spawn_palette_panel(
@@ -996,6 +1003,11 @@ fn hud_tooltip_text(
             "Назначить добычу ресурсов в выделенной области.",
             None,
         ),
+        (Language::Ru, HudTooltipKind::Tool(ToolMode::ExcavateRock)) => (
+            "Выемка породы",
+            "Нужен горный инструмент. Скала → Трава; на земле остаётся физический Камень.",
+            None,
+        ),
         (Language::Ru, HudTooltipKind::Tool(ToolMode::CancelJobs)) => (
             "Отмена задач",
             "Отменить задания в выделенной области.",
@@ -1068,6 +1080,11 @@ fn hud_tooltip_text(
         (Language::En, HudTooltipKind::Tool(ToolMode::Harvest)) => (
             "Harvest",
             "Designate resources for harvesting in an area.",
+            None,
+        ),
+        (Language::En, HudTooltipKind::Tool(ToolMode::ExcavateRock)) => (
+            "Excavate rock",
+            "Requires a mining tool. Rock → Grass; physical Stone remains on the ground.",
             None,
         ),
         (Language::En, HudTooltipKind::Tool(ToolMode::CancelJobs)) => {
@@ -1146,9 +1163,35 @@ pub(crate) fn update_ui_capture(
 
 #[cfg(test)]
 mod tests {
-    use super::{ToolMode, skill_practice_lines};
+    use super::{HudTooltipKind, ToolMode, hud_tooltip_text, skill_practice_lines};
     use crate::i18n::{Language, Locale, TextKey};
     use progressus_app::{Application, NewGameOptions, SnapshotQuery, WorldSeed};
+
+    #[test]
+    fn excavation_help_explains_tool_terrain_and_physical_output() {
+        let ru = hud_tooltip_text(
+            Locale {
+                language: Language::Ru,
+            },
+            HudTooltipKind::Tool(ToolMode::ExcavateRock),
+            false,
+            true,
+        );
+        assert!(ru.contains("инструмент"));
+        assert!(ru.contains("Скала → Трава"));
+        assert!(ru.contains("Камень"));
+        let en = hud_tooltip_text(
+            Locale {
+                language: Language::En,
+            },
+            HudTooltipKind::Tool(ToolMode::ExcavateRock),
+            false,
+            true,
+        );
+        assert!(en.contains("tool"));
+        assert!(en.contains("Rock → Grass"));
+        assert!(en.contains("Stone"));
+    }
 
     #[test]
     fn inspector_skill_rows_are_localized_and_show_mastery_progress() {

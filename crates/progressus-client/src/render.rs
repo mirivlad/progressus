@@ -5,26 +5,42 @@ pub(crate) use crate::low_poly::scene::{
 };
 pub(crate) use crate::low_poly::{animate as interpolate_character_visuals, setup as setup_camera};
 use crate::{
-    low_poly::{Pawn, View, space},
+    low_poly::{Pawn, ROCK_MARKER_HEIGHT, View, space},
     navigation::SelectedCharacter,
     runtime::AuthoritativeClient,
     ui::{SelectedStockpile, ToolMode, ToolState, ZoneVisibility},
 };
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use progressus_app::{EntityId, JobKind, JobState, WorldCell, WorldPosition};
+use progressus_app::{EntityId, JobKind, JobState, WorldCell, WorldPosition, terrain};
 
 #[derive(Resource, Default)]
 pub(crate) struct NavigationDebug(pub(crate) bool);
 fn plane(p: Vec3) -> Isometry3d {
+    plane_at(p, 0.045)
+}
+fn plane_at(p: Vec3, height: f32) -> Isometry3d {
     Isometry3d::new(
-        p + Vec3::Y * 0.045,
+        p + Vec3::Y * height,
         Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
     )
 }
 fn cell_rect(gizmos: &mut Gizmos, cell: WorldCell, origin: WorldCell, color: Color) {
     gizmos.rect(
         plane(space::cell_local(cell, origin)),
+        Vec2::splat(0.98),
+        color,
+    );
+}
+fn cell_rect_at(
+    gizmos: &mut Gizmos,
+    cell: WorldCell,
+    origin: WorldCell,
+    color: Color,
+    height: f32,
+) {
+    gizmos.rect(
+        plane_at(space::cell_local(cell, origin), height),
         Vec2::splat(0.98),
         color,
     );
@@ -70,6 +86,7 @@ pub(crate) fn draw_selected_navigation(
 pub(crate) fn draw_tool_drag(
     tool: Res<ToolState>,
     view: Res<View>,
+    cache: Res<PresentationCache>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
     mut gizmos: Gizmos,
@@ -97,12 +114,19 @@ pub(crate) fn draw_tool_drag(
     }
     for y in first.y().min(last.y())..=first.y().max(last.y()) {
         for x in first.x().min(last.x())..=first.x().max(last.x()) {
-            cell_rect(
-                &mut gizmos,
-                WorldCell::new(x, y),
-                view.origin,
-                Color::srgb(1., 0.78, 0.2),
-            );
+            let cell = WorldCell::new(x, y);
+            let color = Color::srgb(1., 0.78, 0.2);
+            if tool.mode == ToolMode::ExcavateRock {
+                let (chunk, local) = cell.split();
+                if !cache.terrain.get(&chunk).is_some_and(|entry| {
+                    entry.source.known_terrain_at(local) == Some(terrain::ROCK)
+                }) {
+                    continue;
+                }
+                cell_rect_at(&mut gizmos, cell, view.origin, color, ROCK_MARKER_HEIGHT);
+            } else {
+                cell_rect(&mut gizmos, cell, view.origin, color);
+            }
         }
     }
 }
@@ -183,7 +207,7 @@ pub(crate) fn draw_job_designations(
     for job in &snapshot.jobs {
         let cell = match job.kind {
             JobKind::Harvest { source } => Some(source),
-            JobKind::ExcavateRock { .. } => None,
+            JobKind::ExcavateRock { cell } => Some(cell),
             JobKind::EquipTool { item_id, .. } => cache
                 .items
                 .iter()
@@ -231,7 +255,12 @@ pub(crate) fn draw_job_designations(
             JobState::Working { .. } => Color::srgb(1., 0.35, 0.1),
             _ => Color::srgb(0.3, 0.85, 1.),
         };
-        gizmos.circle(plane(space::cell_local(cell, view.origin)), 0.4, color);
+        let marker = if matches!(job.kind, JobKind::ExcavateRock { .. }) {
+            plane_at(space::cell_local(cell, view.origin), ROCK_MARKER_HEIGHT)
+        } else {
+            plane(space::cell_local(cell, view.origin))
+        };
+        gizmos.circle(marker, 0.4, color);
     }
 }
 

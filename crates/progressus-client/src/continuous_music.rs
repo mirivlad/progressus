@@ -1,6 +1,6 @@
 use crate::{
-    audio::{AudioChannel, AudioSettings},
     ambient_music::{SAMPLE_RATE, continuous_pcm_window},
+    audio::{AudioChannel, AudioSettings},
 };
 use bevy::{
     audio::{AddAudioSource, AudioSink, AudioSinkPlayback, Decodable, Source, Volume},

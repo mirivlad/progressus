@@ -7,6 +7,8 @@ pub(crate) mod scene;
 pub(crate) mod space;
 #[path = "../../../../assets/procedural/low_poly/terrain.rs"]
 mod terrain;
+pub(crate) const ROCK_MARKER_HEIGHT: f32 = terrain::MAX_ROCK_HEIGHT + 0.15;
+const _: () = assert!(ROCK_MARKER_HEIGHT > terrain::MAX_ROCK_HEIGHT);
 use crate::interaction::TickScheduler;
 use crate::navigation::{VisualMotion, interpolate_trace};
 use bevy::{camera::ScalingMode, prelude::*};
