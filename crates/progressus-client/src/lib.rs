@@ -25,6 +25,8 @@ pub use runtime::{ClientError, run, run_with_options, run_with_seed};
 
 mod low_poly;
 
+mod ambient_music;
+mod ambient_score;
 pub(crate) mod continuous_music;
 // This source also contains the offline timbre comparison/export entry points.
 #[allow(dead_code)]

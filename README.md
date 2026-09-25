@@ -128,7 +128,7 @@ Run the native low-poly 3D client (requires a local display and graphics driver)
 
 On Linux the launcher checks `pkg-config` for ALSA and installs missing audio development packages through apt, dnf, pacman or zypper. It uses `sudo` when necessary; the system may ask for your password. Installed dependencies are reused. Rust/Cargo and a working desktop graphics driver must already be available. Direct `cargo run -p progressus-client` is also supported once dependencies are installed; Cargo itself does not manage system packages.
 
-The 3D client is now the only client. See [the client guide](docs/client.md) for controls and supported workflows. Continuous neutral piano/strings music and work sound effects are presentation-only.
+The 3D client is now the only client. See [the client guide](docs/client.md) for controls and supported workflows. Continuous procedural ambient music with evolving chords and phrases, plus work sound effects, is presentation-only.
 
 For an on-machine performance trace without changing authoritative behavior:
 
