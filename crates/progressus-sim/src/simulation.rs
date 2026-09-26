@@ -30,6 +30,8 @@ mod work;
 mod workstations;
 
 #[cfg(test)]
+mod prototype_02_smoke;
+#[cfg(test)]
 mod test_support;
 
 pub use error::SimulationError;

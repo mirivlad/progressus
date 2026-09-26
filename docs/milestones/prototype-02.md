@@ -144,6 +144,8 @@ Add a `prototype-02` activity scenario that exercises at least food, sleep, skil
 - save/load can occur while a need job is active;
 - the settlement can reach a stable repeating loop under sufficient resources.
 
+The 2026-09-26 10,000-tick headless acceptance test covers five characters, a physically built bed, active bed sleep, food consumption, practical crafting, physical ore study and smelting, exact non-food material totals, canonical save/load during Sleep, stable-ID validation and bounded raw chunk residency. Seed 0 completed with at most 16 resident chunks, minimum satiety 46 and minimum rest 28. Same-host Prototype 01 versus Prototype 02 benchmark measurements are in [`../performance/prototype-02-impact.md`](../performance/prototype-02-impact.md); idle throughput is substantially lower, and population scaling still needs profiling before it can be claimed.
+
 ## 12. Non-goals
 
 Prototype 02 does not require:
@@ -168,7 +170,7 @@ Prototype 02 does not require:
 - [x] ore extraction works in the headless simulation (native acceptance pending);
 - [x] one early metallurgy chain uses physical production ports (native acceptance pending);
 - [x] knowledge/research gates metallurgy without replacing physical prerequisites;
-- [ ] all Prototype 02 authoritative state round-trips through persistence;
-- [ ] long-run Prototype 02 activity smoke passes;
-- [ ] performance impact is measured against the Prototype 01 baseline;
-- [ ] architecture and gameplay documentation match the implementation.
+- [x] all implemented Prototype 02 authoritative state round-trips through persistence;
+- [x] long-run Prototype 02 activity smoke passes;
+- [x] performance impact is measured against the Prototype 01 baseline on the same host;
+- [x] architecture and gameplay documentation match the implemented scope.
