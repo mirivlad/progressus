@@ -103,6 +103,8 @@ Research is a prerequisite, not a magic production currency.
 
 Prototype 02 needs only enough research/knowledge to prove that a capability can require both knowledge and physical prerequisites. Unlocking metallurgy must not itself create ore, fuel, furnaces, tools, or products.
 
+The Workbench offers a one-time `Study copper ore` order. A worker reserves one physical CopperOre at an Input port, spends 32 base work ticks studying it, and returns one CopperOre at an Output port. Completion records persistent settlement knowledge of metallurgy. Before that, a furnace smelting order is rejected and its recipe is marked locked in the localized workstation window. Knowledge does not supply the two ore, one wood fuel, furnace, worker, or free output port required by each smelt. Save v1 defaults missing knowledge to unknown and rejects unknown or duplicate knowledge names.
+
 ## 8. Cross-cutting client usability pass
 
 Status: **Complete**
@@ -165,7 +167,7 @@ Prototype 02 does not require:
 - [x] at least one practical skill changes work outcomes (Stage C headless/client checks; native inspector smoke pending);
 - [x] ore extraction works in the headless simulation (native acceptance pending);
 - [x] one early metallurgy chain uses physical production ports (native acceptance pending);
-- [ ] knowledge/research gates a capability without replacing physical prerequisites;
+- [x] knowledge/research gates metallurgy without replacing physical prerequisites;
 - [ ] all Prototype 02 authoritative state round-trips through persistence;
 - [ ] long-run Prototype 02 activity smoke passes;
 - [ ] performance impact is measured against the Prototype 01 baseline;

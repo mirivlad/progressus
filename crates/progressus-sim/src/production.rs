@@ -104,6 +104,7 @@ impl ProductionWorld {
             .filter_map(|id| self.orders.get(id))
     }
 
+    #[cfg(test)]
     pub(crate) fn first_pending_for_workstation(
         &self,
         workstation_id: EntityId,

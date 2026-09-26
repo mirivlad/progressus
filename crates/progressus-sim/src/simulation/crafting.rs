@@ -302,7 +302,19 @@ impl Simulation {
         }
         let Some(order) = self
             .production_world
-            .first_pending_for_workstation(workstation_id)
+            .orders_for_workstation(workstation_id)
+            .find(|order| {
+                if !order.is_pending() {
+                    return false;
+                }
+                let recipe = order.recipe_id().definition();
+                !recipe
+                    .requires_knowledge
+                    .is_some_and(|topic| !self.knows(topic))
+                    && !recipe
+                        .teaches_knowledge
+                        .is_some_and(|topic| self.knows(topic))
+            })
             .copied()
         else {
             return Ok(());
@@ -395,6 +407,12 @@ impl Simulation {
             return Ok(());
         };
         let recipe = recipe_id.definition();
+        if recipe
+            .requires_knowledge
+            .is_some_and(|topic| !self.knows(topic))
+        {
+            return Ok(());
+        }
         if workstation.kind() != recipe.workstation || !self.is_walkable(workstation.cell())? {
             self.cancel_job(job_id)?;
             return Ok(());
@@ -622,6 +640,12 @@ impl Simulation {
         self.production_world
             .complete_one(order_id)
             .map_err(SimulationError::from_production_world)?;
+        if let Some(topic) = recipe.teaches_knowledge {
+            self.knowledge.insert(topic);
+            self.production_world
+                .set_target(order_id, ProductionTarget::finite(0))
+                .map_err(SimulationError::from_production_world)?;
+        }
         self.job_world
             .remove(job_id)
             .map_err(SimulationError::from_job_world)?;
@@ -637,12 +661,13 @@ impl Simulation {
 mod tests {
     use super::*;
     use crate::simulation::test_support::*;
-    use progressus_content::{item, recipe, skill, terrain, workstation};
+    use progressus_content::{item, knowledge, recipe, skill, terrain, workstation};
 
     #[test]
     fn furnace_consumes_physical_ore_and_wood_before_creating_an_ingot() {
         let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
         clear_all_items(&mut simulation);
+        let workbench = place_clear_workbench(&mut simulation);
         let cell = (-5..=5)
             .flat_map(|y| (-7..=7).map(move |x| WorldCell::new(x, y)))
             .find(|cell| {
@@ -660,13 +685,33 @@ mod tests {
         let output = production_zone_cells(&simulation, furnace, ProductionZoneKind::Output)[0];
         let ore = insert_ground_stack(&mut simulation, item::COPPER_ORE, 3, inputs[0]);
         let fuel = insert_ground_stack(&mut simulation, item::WOOD, 2, inputs[1]);
+        assert_eq!(
+            simulation.designate_craft(furnace, recipe::COPPER_INGOT),
+            Err(SimulationError::KnowledgeRequired(knowledge::METALLURGY))
+        );
+        let sample_cell =
+            production_zone_cells(&simulation, workbench, ProductionZoneKind::Input)[0];
+        insert_ground_stack(&mut simulation, item::COPPER_ORE, 1, sample_cell);
         simulation
-            .designate_craft(furnace, recipe::COPPER_INGOT)
+            .designate_craft(workbench, recipe::STUDY_METALLURGY)
             .unwrap();
         simulation.advance_ticks(1).unwrap();
         let saved = simulation.save_json().unwrap();
         let mut restored = Simulation::load_json(&saved).unwrap();
         assert_eq!(restored.save_json().unwrap(), saved);
+
+        for _ in 0..256 {
+            restored.advance_ticks(1).unwrap();
+            if restored.knows(knowledge::METALLURGY) {
+                break;
+            }
+        }
+        assert!(restored.knows(knowledge::METALLURGY));
+        assert_eq!(total_item_quantity(&restored, item::COPPER_INGOT), 0);
+        assert_eq!(total_item_quantity(&restored, item::COPPER_ORE), 4);
+        restored
+            .designate_craft(furnace, recipe::COPPER_INGOT)
+            .unwrap();
 
         for _ in 0..256 {
             restored.advance_ticks(1).unwrap();
@@ -682,6 +727,10 @@ mod tests {
             .find(|stack| stack.kind() == item::COPPER_INGOT)
             .unwrap();
         assert_eq!(ingot.ground_position().unwrap().containing_cell(), output);
+        let saved = restored.save_json().unwrap();
+        let reloaded = Simulation::load_json(&saved).unwrap();
+        assert!(reloaded.knows(knowledge::METALLURGY));
+        assert_eq!(reloaded.save_json().unwrap(), saved);
     }
 
     #[test]

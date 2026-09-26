@@ -35,6 +35,7 @@ pub struct ClientSnapshot {
     pub stockpiles: Vec<StockpileSnapshot>,
     pub workstations: Vec<WorkstationSnapshot>,
     pub production_orders: Vec<ProductionOrderSnapshot>,
+    pub known_knowledge: Vec<crate::KnowledgeId>,
     pub production_logistics: Vec<ProductionLogisticsSnapshot>,
     pub construction_sites: Vec<ConstructionSiteSnapshot>,
     pub workstation_construction_sites: Vec<WorkstationConstructionSiteSnapshot>,

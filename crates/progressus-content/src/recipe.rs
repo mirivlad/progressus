@@ -1,6 +1,7 @@
 //! Production recipes: exact physical inputs converted to exact outputs.
 
 use crate::item::{self, ItemId};
+use crate::knowledge::{self, KnowledgeId};
 use crate::registry::content_handle;
 use crate::workstation::{self, WorkstationId};
 
@@ -19,6 +20,8 @@ pub struct RecipeDefinition {
     pub output_quantity: u32,
     pub workstation: WorkstationId,
     pub work_ticks: u32,
+    pub requires_knowledge: Option<KnowledgeId>,
+    pub teaches_knowledge: Option<KnowledgeId>,
 }
 
 static PRIMITIVE_TOOL_INPUTS: &[RecipeInput] = &[
@@ -54,6 +57,11 @@ static COPPER_INGOT_INPUTS: &[RecipeInput] = &[
     },
 ];
 
+static METALLURGY_STUDY_INPUTS: &[RecipeInput] = &[RecipeInput {
+    item: item::COPPER_ORE,
+    quantity: 1,
+}];
+
 /// Append-only: registry order is part of deterministic simulation outcomes.
 pub static RECIPES: &[RecipeDefinition] = &[
     RecipeDefinition {
@@ -63,6 +71,8 @@ pub static RECIPES: &[RecipeDefinition] = &[
         output_quantity: 1,
         workstation: workstation::WORKBENCH,
         work_ticks: 6,
+        requires_knowledge: None,
+        teaches_knowledge: None,
     },
     RecipeDefinition {
         name: "cart",
@@ -71,6 +81,8 @@ pub static RECIPES: &[RecipeDefinition] = &[
         output_quantity: 1,
         workstation: workstation::WORKBENCH,
         work_ticks: 16,
+        requires_knowledge: None,
+        teaches_knowledge: None,
     },
     RecipeDefinition {
         name: "copper_ingot",
@@ -79,6 +91,18 @@ pub static RECIPES: &[RecipeDefinition] = &[
         output_quantity: 1,
         workstation: workstation::FURNACE,
         work_ticks: 24,
+        requires_knowledge: Some(knowledge::METALLURGY),
+        teaches_knowledge: None,
+    },
+    RecipeDefinition {
+        name: "study_metallurgy",
+        inputs: METALLURGY_STUDY_INPUTS,
+        output: item::COPPER_ORE,
+        output_quantity: 1,
+        workstation: workstation::WORKBENCH,
+        work_ticks: 32,
+        requires_knowledge: None,
+        teaches_knowledge: Some(knowledge::METALLURGY),
     },
 ];
 
@@ -94,6 +118,7 @@ impl RecipeId {
 pub const PRIMITIVE_TOOL: RecipeId = recipe("primitive_tool");
 pub const CART: RecipeId = recipe("cart");
 pub const COPPER_INGOT: RecipeId = recipe("copper_ingot");
+pub const STUDY_METALLURGY: RecipeId = recipe("study_metallurgy");
 
 #[cfg(test)]
 mod tests {
@@ -161,7 +186,7 @@ mod tests {
     fn recipes_are_reachable_through_their_workstation() {
         assert_eq!(
             RecipeId::for_workstation(workstation::WORKBENCH).collect::<Vec<_>>(),
-            vec![PRIMITIVE_TOOL, CART]
+            vec![PRIMITIVE_TOOL, CART, STUDY_METALLURGY]
         );
         assert_eq!(
             RecipeId::for_workstation(workstation::FURNACE).collect::<Vec<_>>(),

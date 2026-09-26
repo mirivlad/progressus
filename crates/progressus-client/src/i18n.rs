@@ -1,6 +1,7 @@
 use bevy::prelude::Resource;
 use progressus_app::{
-    Direction, ItemCategory, ItemId, JobKind, JobState, MovementState, RecipeId, WorkstationId,
+    Direction, ItemCategory, ItemId, JobKind, JobState, KnowledgeId, MovementState, RecipeId,
+    WorkstationId,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Resource)]
@@ -43,6 +44,8 @@ pub(crate) enum TextKey {
     Mode,
     Orders,
     Recipes,
+    RequiresKnowledge,
+    AlreadyKnown,
     Remaining,
     AddOrder,
     Delete,
@@ -86,6 +89,7 @@ const CONTENT_NAMES: &[(&str, &str, &str, &str)] = &[
     ("skill", "gathering", "Собирательство", "Gathering"),
     ("skill", "mining", "Горное дело", "Mining"),
     ("skill", "crafting", "Ремесло", "Crafting"),
+    ("knowledge", "metallurgy", "Металлургия", "Metallurgy"),
     ("item", "wood", "Дерево", "Wood"),
     ("item", "stone", "Камень", "Stone"),
     (
@@ -111,6 +115,12 @@ const CONTENT_NAMES: &[(&str, &str, &str, &str)] = &[
     ),
     ("recipe", "cart", "Тележка", "Cart"),
     ("recipe", "copper_ingot", "Медный слиток", "Copper ingot"),
+    (
+        "recipe",
+        "study_metallurgy",
+        "Изучить медную руду",
+        "Study copper ore",
+    ),
     ("terrain", "grass", "Трава", "Grass"),
     ("terrain", "water", "Вода", "Water"),
     ("terrain", "rock", "Скала", "Rock"),
@@ -155,6 +165,8 @@ impl Locale {
             (Language::Ru, TextKey::Mode) => "Режим",
             (Language::Ru, TextKey::Orders) => "Задания",
             (Language::Ru, TextKey::Recipes) => "Рецепты",
+            (Language::Ru, TextKey::RequiresKnowledge) => "Нужно знание",
+            (Language::Ru, TextKey::AlreadyKnown) => "Изучено",
             (Language::Ru, TextKey::Remaining) => "Осталось",
             (Language::Ru, TextKey::AddOrder) => "Добавить",
             (Language::Ru, TextKey::Delete) => "Удалить",
@@ -206,6 +218,8 @@ impl Locale {
             (Language::En, TextKey::Mode) => "Mode",
             (Language::En, TextKey::Orders) => "Orders",
             (Language::En, TextKey::Recipes) => "Recipes",
+            (Language::En, TextKey::RequiresKnowledge) => "Requires knowledge",
+            (Language::En, TextKey::AlreadyKnown) => "Known",
             (Language::En, TextKey::Remaining) => "Remaining",
             (Language::En, TextKey::AddOrder) => "Add",
             (Language::En, TextKey::Delete) => "Delete",
@@ -245,6 +259,10 @@ impl Locale {
 
     pub(crate) fn recipe_name(self, recipe_id: RecipeId) -> &'static str {
         self.content_name("recipe", recipe_id.name())
+    }
+
+    pub(crate) fn knowledge_name(self, topic: KnowledgeId) -> &'static str {
+        self.content_name("knowledge", topic.name())
     }
 
     pub(crate) fn skill_name(self, skill_id: progressus_app::SkillId) -> &'static str {
@@ -367,7 +385,7 @@ impl Locale {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use progressus_app::{NaturalResourceId, SkillId, StructureId, TerrainId, item};
+    use progressus_app::{KnowledgeId, NaturalResourceId, SkillId, StructureId, TerrainId, item};
 
     /// The compiler can no longer demand a translation for new content, so this
     /// test does. See ADR-0021.
@@ -381,6 +399,7 @@ mod tests {
             .chain(TerrainId::all().map(|id| ("terrain", id.name())))
             .chain(NaturalResourceId::all().map(|id| ("natural_resource", id.name())))
             .chain(SkillId::all().map(|id| ("skill", id.name())))
+            .chain(KnowledgeId::all().map(|id| ("knowledge", id.name())))
             .collect();
         for (kind, name) in entries {
             let row = CONTENT_NAMES

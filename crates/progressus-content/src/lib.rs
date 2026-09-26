@@ -23,6 +23,7 @@ mod registry;
 
 pub mod capability;
 pub mod item;
+pub mod knowledge;
 pub mod natural_resource;
 pub mod recipe;
 pub mod skill;
@@ -33,6 +34,7 @@ pub mod workstation;
 
 pub use capability::{CapabilityDefinition, CapabilityId};
 pub use item::{HAND_LOAD_UNITS, ItemCategory, ItemDefinition, ItemId, MAX_STACK_QUANTITY};
+pub use knowledge::{KnowledgeDefinition, KnowledgeId};
 pub use natural_resource::{NaturalResourceDefinition, NaturalResourceId};
 pub use recipe::{RecipeDefinition, RecipeId, RecipeInput};
 pub use skill::{SkillDefinition, SkillId};
@@ -57,6 +59,10 @@ mod tests {
             assert_eq!(sorted.len(), before, "{kind} names collide: {names:?}");
         }
         unique("item", ItemId::all().map(ItemId::name).collect());
+        unique(
+            "knowledge",
+            KnowledgeId::all().map(KnowledgeId::name).collect(),
+        );
         unique("terrain", TerrainId::all().map(TerrainId::name).collect());
         unique(
             "natural resource",
@@ -153,6 +159,12 @@ mod tests {
         }
         for id in RecipeId::all() {
             let definition = id.definition();
+            for topic in [definition.requires_knowledge, definition.teaches_knowledge]
+                .into_iter()
+                .flatten()
+            {
+                assert_eq!(KnowledgeId::from_name(topic.name()), Some(topic));
+            }
             assert_eq!(
                 ItemId::from_name(definition.output.name()),
                 Some(definition.output)

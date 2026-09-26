@@ -130,6 +130,8 @@ struct SaveV1 {
     stockpiles: Vec<StockpileSave>,
     workstations: Vec<WorkstationSave>,
     production_orders: Vec<ProductionOrderSave>,
+    #[serde(default)]
+    knowledge: Vec<KnowledgeSave>,
     production_logistics: Vec<ProductionLogisticsSave>,
     construction_sites: Vec<ConstructionSiteSave>,
     #[serde(default)]
@@ -209,6 +211,10 @@ impl SaveV1 {
                 .iter()
                 .map(ProductionOrderSave::from_order)
                 .collect(),
+            knowledge: simulation
+                .known_knowledge()
+                .map(KnowledgeSave::from)
+                .collect(),
             production_logistics: simulation
                 .production_logistics_world
                 .iter()
@@ -263,6 +269,13 @@ impl SaveV1 {
         let workstation_world = restore_workstations(self.workstations)?;
         let production_world =
             restore_production_orders(&workstation_world, self.production_orders)?;
+        let mut knowledge = BTreeSet::new();
+        for saved in self.knowledge {
+            let topic = saved.id()?;
+            if !knowledge.insert(topic) {
+                return invalid("save contains duplicate knowledge");
+            }
+        }
         let production_logistics_world = restore_production_logistics(
             &workstation_world,
             &stockpile_world,
@@ -318,6 +331,7 @@ impl SaveV1 {
             item_world,
             job_world,
             production_world,
+            knowledge,
             production_logistics_world,
             stockpile_world,
             workstation_world,
@@ -511,6 +525,7 @@ content_name_save!(ItemKindSave, ItemId, "item");
 content_name_save!(StructureKindSave, StructureId, "structure");
 content_name_save!(WorkstationKindSave, WorkstationId, "workstation");
 content_name_save!(RecipeIdSave, RecipeId, "recipe");
+content_name_save!(KnowledgeSave, KnowledgeId, "knowledge");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2687,8 +2702,22 @@ fn validate_restored_job_state(simulation: &Simulation, job: &Job) -> Result<(),
 #[cfg(test)]
 mod tests {
     use progressus_content::{
-        item, natural_resource, recipe, skill, slot, structure, terrain, workstation,
+        item, knowledge, natural_resource, recipe, skill, slot, structure, terrain, workstation,
     };
+
+    #[test]
+    fn knowledge_defaults_for_old_saves_and_rejects_unknown_or_duplicate_names() {
+        let simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        let mut json: Value = serde_json::from_slice(&simulation.save_json().unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("knowledge");
+        let restored = Simulation::load_json(&serde_json::to_vec(&json).unwrap()).unwrap();
+        assert!(!restored.knows(knowledge::METALLURGY));
+
+        json["knowledge"] = serde_json::json!(["unknown"]);
+        assert!(Simulation::load_json(&serde_json::to_vec(&json).unwrap()).is_err());
+        json["knowledge"] = serde_json::json!(["metallurgy", "metallurgy"]);
+        assert!(Simulation::load_json(&serde_json::to_vec(&json).unwrap()).is_err());
+    }
 
     #[test]
     fn loaded_excavation_rejects_hidden_or_non_rock_target() {

@@ -831,7 +831,14 @@ fn spawn_workstation_modal(
                         font,
                         &workbench_image,
                     );
-                    spawn_recipe_rows(panel, workstation_id, workstation_kind, locale, font);
+                    spawn_recipe_rows(
+                        panel,
+                        snapshot,
+                        workstation_id,
+                        workstation_kind,
+                        locale,
+                        font,
+                    );
                     spawn_orders(panel, &orders, locale, font);
                     spawn_footer(panel, workstation_id, locale, font);
                 });
@@ -1041,6 +1048,7 @@ fn workstation_recipes(kind: WorkstationId) -> Vec<RecipeId> {
 
 fn spawn_recipe_rows(
     panel: &mut ChildSpawnerCommands,
+    snapshot: &ClientSnapshot,
     workstation_id: EntityId,
     workstation_kind: WorkstationId,
     locale: Locale,
@@ -1048,6 +1056,19 @@ fn spawn_recipe_rows(
 ) {
     panel.spawn(text_bundle(locale.tr(TextKey::Recipes), font, 16.0, MUTED));
     for recipe_id in workstation_recipes(workstation_kind) {
+        let recipe = recipe_id.definition();
+        let locked = recipe
+            .requires_knowledge
+            .filter(|topic| !snapshot.known_knowledge.contains(topic));
+        let already_known = recipe
+            .teaches_knowledge
+            .is_some_and(|topic| snapshot.known_knowledge.contains(&topic));
+        let inputs = recipe
+            .inputs
+            .iter()
+            .map(|input| format!("{} {}", input.quantity, locale.item_name(input.item)))
+            .collect::<Vec<_>>()
+            .join(" + ");
         panel
             .spawn((
                 Node {
@@ -1060,7 +1081,37 @@ fn spawn_recipe_rows(
                 BackgroundColor(ROW),
             ))
             .with_children(|row| {
-                row.spawn(text_bundle(locale.recipe_name(recipe_id), font, 16.0, TEXT));
+                row.spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(2),
+                    ..default()
+                })
+                .with_children(|details| {
+                    details.spawn(text_bundle(locale.recipe_name(recipe_id), font, 16.0, TEXT));
+                    details.spawn(text_bundle(inputs, font, 12.0, MUTED));
+                });
+                if let Some(topic) = locked {
+                    row.spawn(text_bundle(
+                        format!(
+                            "{}: {}",
+                            locale.tr(TextKey::RequiresKnowledge),
+                            locale.knowledge_name(topic)
+                        ),
+                        font,
+                        12.0,
+                        MUTED,
+                    ));
+                    return;
+                }
+                if already_known {
+                    row.spawn(text_bundle(
+                        locale.tr(TextKey::AlreadyKnown),
+                        font,
+                        12.0,
+                        MUTED,
+                    ));
+                    return;
+                }
                 row.spawn(Node {
                     column_gap: px(7),
                     align_items: AlignItems::Center,
@@ -1650,7 +1701,9 @@ fn spawn_sound_modal(
 mod tests {
     use super::*;
     use bevy::ecs::world::CommandQueue;
-    use progressus_app::{recipe, workstation};
+    use progressus_app::{
+        Application, NewGameOptions, SnapshotQuery, WorldSeed, knowledge, recipe, workstation,
+    };
 
     /// The workbench screen used to name one recipe outright, so a cart could
     /// be built by the simulation and never ordered by a player. What the
@@ -1661,11 +1714,18 @@ mod tests {
         let mut world = World::new();
         let mut queue = CommandQueue::default();
         let workstation_id = EntityId::new(1).unwrap();
+        let snapshot = Application::new_game(NewGameOptions {
+            seed: WorldSeed::new(0),
+        })
+        .unwrap()
+        .snapshot(SnapshotQuery::default())
+        .unwrap();
         {
             let mut commands = Commands::new(&mut queue, &world);
             commands.spawn(Node::default()).with_children(|panel| {
                 spawn_recipe_rows(
                     panel,
+                    &snapshot,
                     workstation_id,
                     workstation::WORKBENCH,
                     Locale::default(),
@@ -1693,5 +1753,37 @@ mod tests {
             offered.contains(&recipe::CART),
             "a cart can be built by the simulation but not ordered in the game"
         );
+    }
+
+    #[test]
+    fn furnace_order_buttons_appear_only_after_metallurgy_is_known() {
+        let mut snapshot = Application::new_game(NewGameOptions {
+            seed: WorldSeed::new(0),
+        })
+        .unwrap()
+        .snapshot(SnapshotQuery::default())
+        .unwrap();
+        let offered = |snapshot: &ClientSnapshot| {
+            let mut world = World::new();
+            let mut queue = CommandQueue::default();
+            {
+                let mut commands = Commands::new(&mut queue, &world);
+                commands.spawn(Node::default()).with_children(|panel| {
+                    spawn_recipe_rows(
+                        panel,
+                        snapshot,
+                        EntityId::new(1).unwrap(),
+                        workstation::FURNACE,
+                        Locale::default(),
+                        &UiFont(Handle::default()),
+                    );
+                });
+            }
+            queue.apply(&mut world);
+            world.query::<&AddOrderButton>().iter(&world).count()
+        };
+        assert_eq!(offered(&snapshot), 0);
+        snapshot.known_knowledge.push(knowledge::METALLURGY);
+        assert_eq!(offered(&snapshot), 1);
     }
 }

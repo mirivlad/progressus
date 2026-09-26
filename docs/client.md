@@ -12,6 +12,7 @@ Run `./scripts/run-client.sh` from the repository. On Linux this checks and inst
 - Stockpile inspector and configuration retain item/category filters and priority. Double-click a stockpile to configure it. Zones can be hidden.
 - Workstation modal manages finite/infinite production orders, order quantity/cancellation and independent input/output port rotation. Port cells are marked red/yellow in the world.
 - A furnace order consumes two physical CopperOre and one Wood as fuel, then places one physical CopperIngot on an output port for ordinary hauling.
+- A Workbench study order physically returns its CopperOre sample and records metallurgy knowledge; the furnace window shows the missing knowledge before smelting is unlocked.
 - Saves has three slots with seed/tick metadata. Loading resets disposable presentation while preserving the pause setting.
 - Sound settings control music and effects separately. Working, gathering, construction and physical item transfers generate bounded on-screen sound cues.
 - Ground and carried stacks display their quantities. Walls, doors and scaffolds share cardinal connectivity; door axes follow neighboring walls. Rocky terrain is raised presentation geometry, not a new vertical simulation layer.

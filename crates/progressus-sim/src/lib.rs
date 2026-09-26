@@ -38,10 +38,11 @@ pub use production::{MAX_PRODUCTION_ORDER_RUNS, ProductionOrder, ProductionTarge
 pub use production_logistics::{ProductionLogistics, ProductionZoneKind};
 pub use progressus_content::{
     CapabilityDefinition, CapabilityId, HAND_LOAD_UNITS, ItemCategory, ItemDefinition, ItemId,
-    MAX_STACK_QUANTITY, NaturalResourceDefinition, NaturalResourceId, RecipeDefinition, RecipeId,
-    RecipeInput, SkillDefinition, SkillId, SlotDefinition, SlotId, StructureDefinition,
-    StructureId, TerrainDefinition, TerrainId, WorkstationDefinition, WorkstationId, capability,
-    item, natural_resource, recipe, skill, slot, structure, terrain, workstation,
+    KnowledgeDefinition, KnowledgeId, MAX_STACK_QUANTITY, NaturalResourceDefinition,
+    NaturalResourceId, RecipeDefinition, RecipeId, RecipeInput, SkillDefinition, SkillId,
+    SlotDefinition, SlotId, StructureDefinition, StructureId, TerrainDefinition, TerrainId,
+    WorkstationDefinition, WorkstationId, capability, item, knowledge, natural_resource, recipe,
+    skill, slot, structure, terrain, workstation,
 };
 pub use progressus_worldgen::{
     CHUNK_SIDE, CURRENT_WORLDGEN_VERSION, ChunkCoord, GeneratedChunk, LocalCell,

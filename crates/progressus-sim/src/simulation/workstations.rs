@@ -206,6 +206,17 @@ impl Simulation {
                 recipe_id,
             });
         }
+        let recipe = recipe_id.definition();
+        if let Some(topic) = recipe.requires_knowledge
+            && !self.knows(topic)
+        {
+            return Err(SimulationError::KnowledgeRequired(topic));
+        }
+        if let Some(topic) = recipe.teaches_knowledge
+            && self.knows(topic)
+        {
+            return Err(SimulationError::KnowledgeAlreadyKnown(topic));
+        }
         let id = self.id_allocator.allocate()?;
         self.production_world
             .insert(ProductionOrder::new(id, workstation_id, recipe_id, target))

@@ -55,11 +55,12 @@ use crate::{
     ConstructionMaterialState, ConstructionPreparationTarget, ConstructionSite, Direction,
     EAT_WORK_TICKS, EffectiveChunk, EntityId, GeneratedChunk, HAND_LOAD_UNITS, HARVEST_WORK_TICKS,
     InteractionRadius, ItemId, ItemLocation, ItemQuantity, ItemStack, Job, JobKind, JobState,
-    LocalCell, MAX_STACK_QUANTITY, MovementState, NaturalResource, ProductionLogistics,
-    ProductionOrder, ProductionTarget, ProductionZoneKind, REST_DECAY_INTERVAL_TICKS, RecipeId,
-    SATIETY_DECAY_INTERVAL_TICKS, SLEEP_WORK_TICKS, SimulationTick, SlotId, Stockpile, Structure,
-    StructureId, TerrainId, Workstation, WorkstationConstructionSite, WorkstationId, WorldCell,
-    WorldPosition, WorldPositionError, WorldSeed, WorldgenVersion, within_interaction_range,
+    KnowledgeId, LocalCell, MAX_STACK_QUANTITY, MovementState, NaturalResource,
+    ProductionLogistics, ProductionOrder, ProductionTarget, ProductionZoneKind,
+    REST_DECAY_INTERVAL_TICKS, RecipeId, SATIETY_DECAY_INTERVAL_TICKS, SLEEP_WORK_TICKS,
+    SimulationTick, SlotId, Stockpile, Structure, StructureId, TerrainId, Workstation,
+    WorkstationConstructionSite, WorkstationId, WorldCell, WorldPosition, WorldPositionError,
+    WorldSeed, WorldgenVersion, within_interaction_range,
 };
 
 const BOOTSTRAP_BERRIES: u32 = 10;
@@ -89,6 +90,7 @@ pub struct Simulation {
     item_world: ItemWorld,
     job_world: JobWorld,
     production_world: ProductionWorld,
+    knowledge: BTreeSet<KnowledgeId>,
     production_logistics_world: ProductionLogisticsWorld,
     stockpile_world: StockpileWorld,
     workstation_world: WorkstationWorld,
@@ -205,6 +207,7 @@ impl Simulation {
             item_world,
             job_world: JobWorld::default(),
             production_world: ProductionWorld::default(),
+            knowledge: BTreeSet::new(),
             production_logistics_world: ProductionLogisticsWorld::default(),
             stockpile_world: StockpileWorld::default(),
             workstation_world: WorkstationWorld::default(),
@@ -222,6 +225,14 @@ impl Simulation {
 
     pub const fn tick(&self) -> SimulationTick {
         self.clock.tick()
+    }
+
+    pub fn knows(&self, topic: KnowledgeId) -> bool {
+        self.knowledge.contains(&topic)
+    }
+
+    pub fn known_knowledge(&self) -> impl Iterator<Item = KnowledgeId> + '_ {
+        self.knowledge.iter().copied()
     }
 
     pub const fn worldgen_version(&self) -> WorldgenVersion {

@@ -40,6 +40,8 @@ pub enum SimulationError {
         workstation_id: EntityId,
         recipe_id: RecipeId,
     },
+    KnowledgeRequired(KnowledgeId),
+    KnowledgeAlreadyKnown(KnowledgeId),
     CraftAlreadyDesignated(EntityId),
     UnknownProductionOrder(EntityId),
     ProductionOrderQuantityTooLarge(u32),
@@ -359,6 +361,12 @@ impl Display for SimulationError {
                 recipe_id,
                 workstation_id.value()
             ),
+            Self::KnowledgeRequired(topic) => {
+                write!(formatter, "knowledge {} is required", topic.name())
+            }
+            Self::KnowledgeAlreadyKnown(topic) => {
+                write!(formatter, "knowledge {} is already known", topic.name())
+            }
             Self::CraftAlreadyDesignated(workstation_id) => write!(
                 formatter,
                 "workstation ID {} already has a craft designation",
