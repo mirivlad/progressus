@@ -640,6 +640,51 @@ mod tests {
     use progressus_content::{item, recipe, skill, terrain, workstation};
 
     #[test]
+    fn furnace_consumes_physical_ore_and_wood_before_creating_an_ingot() {
+        let mut simulation = Simulation::new(WorldSeed::new(0)).unwrap();
+        clear_all_items(&mut simulation);
+        let cell = (-5..=5)
+            .flat_map(|y| (-7..=7).map(move |x| WorldCell::new(x, y)))
+            .find(|cell| {
+                simulation.validate_workstation_cell(*cell).is_ok()
+                    && simulation
+                        .construction_cell_has_removable_occupant(*cell)
+                        .is_ok_and(|occupied| !occupied)
+                    && simulation.default_production_ports(*cell).is_ok()
+            })
+            .unwrap();
+        let furnace = simulation
+            .place_workstation(workstation::FURNACE, cell)
+            .unwrap();
+        let inputs = production_zone_cells(&simulation, furnace, ProductionZoneKind::Input);
+        let output = production_zone_cells(&simulation, furnace, ProductionZoneKind::Output)[0];
+        let ore = insert_ground_stack(&mut simulation, item::COPPER_ORE, 3, inputs[0]);
+        let fuel = insert_ground_stack(&mut simulation, item::WOOD, 2, inputs[1]);
+        simulation
+            .designate_craft(furnace, recipe::COPPER_INGOT)
+            .unwrap();
+        simulation.advance_ticks(1).unwrap();
+        let saved = simulation.save_json().unwrap();
+        let mut restored = Simulation::load_json(&saved).unwrap();
+        assert_eq!(restored.save_json().unwrap(), saved);
+
+        for _ in 0..256 {
+            restored.advance_ticks(1).unwrap();
+            if total_item_quantity(&restored, item::COPPER_INGOT) == 1 {
+                break;
+            }
+        }
+        assert_eq!(total_item_quantity(&restored, item::COPPER_INGOT), 1);
+        assert_eq!(restored.item_world.get(ore).unwrap().quantity().get(), 1);
+        assert_eq!(restored.item_world.get(fuel).unwrap().quantity().get(), 1);
+        let ingot = restored
+            .items()
+            .find(|stack| stack.kind() == item::COPPER_INGOT)
+            .unwrap();
+        assert_eq!(ingot.ground_position().unwrap().containing_cell(), output);
+    }
+
+    #[test]
     fn mastered_crafter_starts_real_order_with_shorter_work_phase() {
         fn first_work_ticks(simulation: &mut Simulation, workstation: EntityId) -> u32 {
             let job = simulation

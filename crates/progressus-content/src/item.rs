@@ -127,6 +127,15 @@ pub static ITEMS: &[ItemDefinition] = &[
         provides: &[],
         capacity: Some(4),
     },
+    ItemDefinition {
+        name: "copper_ingot",
+        category: ItemCategory::Products,
+        nutrition: 0,
+        hand_load: 4,
+        equip_slot: None,
+        provides: &[],
+        capacity: None,
+    },
 ];
 
 content_handle!(ItemId, ItemDefinition, ITEMS, item);
@@ -161,6 +170,7 @@ pub const PRIMITIVE_TOOL: ItemId = item("primitive_tool");
 pub const BERRIES: ItemId = item("berries");
 pub const COPPER_ORE: ItemId = item("copper_ore");
 pub const CART: ItemId = item("cart");
+pub const COPPER_INGOT: ItemId = item("copper_ingot");
 
 #[cfg(test)]
 mod tests {

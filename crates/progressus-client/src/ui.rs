@@ -22,6 +22,7 @@ pub(crate) enum ToolMode {
     Door,
     Bed,
     Workbench,
+    Furnace,
     CancelJobs,
 }
 
@@ -37,6 +38,7 @@ impl ToolMode {
             Self::Door => TextKey::Door,
             Self::Bed => TextKey::Bed,
             Self::Workbench => TextKey::Workbench,
+            Self::Furnace => TextKey::Furnace,
             Self::CancelJobs => TextKey::CancelJobs,
         }
     }
@@ -216,6 +218,7 @@ pub(crate) fn setup_toolbar(
             (ToolMode::Door, "D"),
             (ToolMode::Bed, "B"),
             (ToolMode::Workbench, "T"),
+            (ToolMode::Furnace, "F"),
         ],
         &font,
     );
@@ -1039,6 +1042,11 @@ fn hud_tooltip_text(
         (Language::Ru, HudTooltipKind::Tool(ToolMode::Workbench)) => {
             ("Верстак", "Поставить производственный верстак.", None)
         }
+        (Language::Ru, HudTooltipKind::Tool(ToolMode::Furnace)) => (
+            "Печь",
+            "Плавить медную руду с расходом дерева на топливо.",
+            None,
+        ),
         (Language::Ru, HudTooltipKind::Palette(HudPalette::Orders)) => (
             "Задания",
             "Открыть инструменты приказов и отмены работ.",
@@ -1114,6 +1122,11 @@ fn hud_tooltip_text(
         (Language::En, HudTooltipKind::Tool(ToolMode::Workbench)) => {
             ("Workbench", "Place a production workbench.", None)
         }
+        (Language::En, HudTooltipKind::Tool(ToolMode::Furnace)) => (
+            "Furnace",
+            "Smelt copper ore while consuming wood as fuel.",
+            None,
+        ),
         (Language::En, HudTooltipKind::Palette(HudPalette::Orders)) => {
             ("Orders", "Open work-order and cancellation tools.", None)
         }

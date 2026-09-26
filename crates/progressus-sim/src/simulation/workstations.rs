@@ -16,13 +16,16 @@ impl Simulation {
             .workstation_world
             .get(workstation_id)
             .ok_or(SimulationError::UnknownWorkstation(workstation_id))?;
-        if workstation.kind() == workstation::WORKBENCH {
+        if matches!(
+            workstation.kind(),
+            workstation::WORKBENCH | workstation::FURNACE
+        ) {
             return match kind {
                 ProductionZoneKind::Input => {
-                    Err(SimulationError::WorkbenchInputPortsFixed(workstation_id))
+                    Err(SimulationError::WorkstationInputPortsFixed(workstation_id))
                 }
                 ProductionZoneKind::Output => {
-                    Err(SimulationError::WorkbenchOutputPortsFixed(workstation_id))
+                    Err(SimulationError::WorkstationOutputPortsFixed(workstation_id))
                 }
             };
         }
@@ -557,7 +560,7 @@ mod tests {
                 inputs[0],
                 false,
             ),
-            Err(SimulationError::WorkbenchInputPortsFixed(workstation_id))
+            Err(SimulationError::WorkstationInputPortsFixed(workstation_id))
         );
         assert_eq!(
             simulation.set_production_zone_cell(
@@ -566,7 +569,7 @@ mod tests {
                 outputs[0],
                 false,
             ),
-            Err(SimulationError::WorkbenchOutputPortsFixed(workstation_id))
+            Err(SimulationError::WorkstationOutputPortsFixed(workstation_id))
         );
         assert!(matches!(
             simulation.create_stockpile(inputs[0]),

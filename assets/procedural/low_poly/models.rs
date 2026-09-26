@@ -16,6 +16,8 @@ pub enum ModelKind {
     #[allow(dead_code)]
     Character,
     Workbench,
+    Furnace,
+    ConstructionFurnace,
     Wall,
     Door,
     OpenDoor,
@@ -29,6 +31,7 @@ pub enum ModelKind {
     Berries,
     CopperVein,
     CopperOre,
+    CopperIngot,
     Cart,
     /// Stands in for content this build has no authored model for, so a new
     /// definition is visible in the world instead of invisible. See ADR-0021.
@@ -143,12 +146,14 @@ impl ModelKind {
     /// Every kind, so tests cover a new model without being edited. Nothing in
     /// the running client needs to enumerate kinds.
     #[cfg(test)]
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 23] = [
         Self::Tree,
         Self::StoneOutcrop,
         Self::BerryBush,
         Self::Character,
         Self::Workbench,
+        Self::Furnace,
+        Self::ConstructionFurnace,
         Self::Wall,
         Self::Door,
         Self::OpenDoor,
@@ -162,6 +167,7 @@ impl ModelKind {
         Self::Berries,
         Self::CopperVein,
         Self::CopperOre,
+        Self::CopperIngot,
         Self::Placeholder,
         Self::Cart,
     ];
@@ -175,7 +181,12 @@ impl ModelKind {
             Self::BerryBush | Self::StoneOutcrop | Self::CopperVein => 5,
             Self::Character => 4,
             Self::Wood | Self::Stone | Self::Berries | Self::CopperOre => 3,
-            Self::PrimitiveTool | Self::Workbench | Self::Placeholder | Self::Cart => 2,
+            Self::PrimitiveTool | Self::Cart => 2,
+            Self::Workbench
+            | Self::Placeholder
+            | Self::Furnace
+            | Self::ConstructionFurnace
+            | Self::CopperIngot => 1,
             Self::Bed | Self::ConstructionBed => 1,
             // Structure variants are connectivity masks, not shapes.
             Self::Wall
@@ -205,6 +216,8 @@ pub fn model_mesh(kind: ModelKind, variant: u8) -> Mesh {
         ModelKind::BerryBush => berry_bush(&mut geometry, variant),
         ModelKind::Character => character(&mut geometry, variant),
         ModelKind::Workbench => workbench(&mut geometry, variant),
+        ModelKind::Furnace => furnace(&mut geometry),
+        ModelKind::ConstructionFurnace => construction_furnace(&mut geometry),
         ModelKind::Wall => wall(&mut geometry, 10),
         ModelKind::Door => door(&mut geometry, false),
         ModelKind::OpenDoor => door(&mut geometry, true),
@@ -218,6 +231,7 @@ pub fn model_mesh(kind: ModelKind, variant: u8) -> Mesh {
         ModelKind::Berries => berries(&mut geometry, variant),
         ModelKind::CopperVein => copper_vein(&mut geometry, variant),
         ModelKind::CopperOre => copper_ore(&mut geometry, variant),
+        ModelKind::CopperIngot => copper_ingot(&mut geometry),
         ModelKind::Cart => cart(&mut geometry, variant),
         ModelKind::Placeholder => placeholder(&mut geometry, variant),
     }
@@ -812,6 +826,48 @@ fn workbench(g: &mut Geometry, variant: u8) {
     );
 }
 
+fn furnace(g: &mut Geometry) {
+    g.cuboid(Vec3::new(0., 0.09, 0.), Vec3::new(0.78, 0.18, 0.70), STONE);
+    g.cuboid(Vec3::new(0., 0.41, 0.), Vec3::new(0.68, 0.55, 0.62), MORTAR);
+    g.cuboid(
+        Vec3::new(0., 0.47, 0.32),
+        Vec3::new(0.38, 0.26, 0.035),
+        [0.13, 0.11, 0.10, 1.],
+    );
+    g.cuboid(
+        Vec3::new(0., 0.37, 0.345),
+        Vec3::new(0.26, 0.07, 0.025),
+        COPPER,
+    );
+    g.cuboid(
+        Vec3::new(0., 0.76, -0.15),
+        Vec3::new(0.22, 0.22, 0.22),
+        STONE,
+    );
+}
+
+fn construction_furnace(g: &mut Geometry) {
+    g.cuboid(
+        Vec3::new(0., 0.04, 0.),
+        Vec3::new(0.78, 0.08, 0.70),
+        BLUEPRINT,
+    );
+    for x in [-0.30, 0.30] {
+        for z in [-0.26, 0.26] {
+            g.cuboid(
+                Vec3::new(x, 0.30, z),
+                Vec3::new(0.06, 0.52, 0.06),
+                BLUEPRINT,
+            );
+        }
+    }
+    g.cuboid(
+        Vec3::new(0., 0.57, 0.),
+        Vec3::new(0.68, 0.05, 0.62),
+        BLUEPRINT,
+    );
+}
+
 fn wall(g: &mut Geometry, connections: u8) {
     let connections = if connections == 0 { 10 } else { connections };
     // Center pier and arms meet without gaps at both junctions and cell edges.
@@ -1024,6 +1080,19 @@ fn copper_ore(g: &mut Geometry, variant: u8) {
     );
 }
 
+fn copper_ingot(g: &mut Geometry) {
+    g.cuboid(
+        Vec3::new(0., 0.055, 0.),
+        Vec3::new(0.24, 0.11, 0.14),
+        COPPER,
+    );
+    g.cuboid(
+        Vec3::new(0., 0.112, 0.),
+        Vec3::new(0.18, 0.02, 0.10),
+        shade(COPPER, 1.15),
+    );
+}
+
 fn loose_stone(g: &mut Geometry, variant: u8) {
     let s = 0.10 + variant as f32 * 0.008;
     g.gem(
@@ -1227,8 +1296,11 @@ mod tests {
                         | ModelKind::Stone
                         | ModelKind::Berries
                         | ModelKind::CopperOre
+                        | ModelKind::CopperIngot
                         | ModelKind::PrimitiveTool
                         | ModelKind::Workbench
+                        | ModelKind::Furnace
+                        | ModelKind::ConstructionFurnace
                         | ModelKind::Bed
                         | ModelKind::ConstructionBed
                         | ModelKind::Character

@@ -83,7 +83,7 @@ Implemented: the typed, stable-name Gathering, Mining and Crafting registry give
 
 ## 6. Stage D — Mining and early metallurgy
 
-Status: **D1 rock excavation implemented; ground excavation and metallurgy remain open**
+Status: **Rock excavation and a basic furnace recipe implemented; ground excavation remains open**
 
 - a non-renewable ore source distinct from ordinary Stone;
 - physical ore item and extraction work;
@@ -93,9 +93,9 @@ Status: **D1 rock excavation implemented; ground excavation and metallurgy remai
 - one metal intermediate/product;
 - no teleporting inputs or outputs.
 
-Current implementation has a non-renewable copper-vein worldgen layer and physical CopperOre output, with mining gated by equipped tool capabilities. A headless regression now proves physical inputs become a tool at the workbench, a named character fetches/equips it, then a revealed copper vein is depleted and all resulting ore is physically hauled to a stockpile. The fixture stages that character near the distant vein; it does not prove long-distance player travel or native UI operation. Furnace, fuel-consuming smelting and a metal product are still missing.
+The non-renewable copper-vein worldgen layer yields physical CopperOre, with mining gated by equipped tool capabilities. A headless regression proves physical inputs become a tool at the workbench, a named character fetches/equips it, then a revealed copper vein is depleted and all resulting ore is physically hauled to a stockpile. The fixture stages that character near the distant vein; it does not prove long-distance player travel or native UI operation. The furnace uses the existing fixed physical input/output ports and production orders: two CopperOre plus one Wood consumed as fuel produce one CopperIngot on an output port. The new content has its own low-poly models and localized Build/production UI. Native inspection on 2026-09-26 confirmed the placed furnace model, separate furnace icon, localized recipe, order and port controls; the ingot model and end-to-end smelting still need native observation.
 
-D1 adds exclusive persisted `ExcavateRock` work over explored Rock cells. A worker must physically equip a mining-capable tool and approach from reachable cardinal ground; completion alone changes `Rock -> Grass`, creates exactly physical `Stone x1`, and awards one Mining practice point. The saved terrain revision remeshes the changed visible cell, and the Orders palette filters only known Rock cells while drawing its preview/job marker above raised rock geometry. Headless lifecycle, interruption, path failure, save/load, ordinary Haul, application boundary and client tests pass. Native click/worker/remesh/haul observation remains pending. Ordinary ground excavation, pits/levels, furnace, fuel-consuming smelting and a metal product are not implemented.
+D1 adds exclusive persisted `ExcavateRock` work over explored Rock cells. A worker must physically equip a mining-capable tool and approach from reachable cardinal ground; completion alone changes `Rock -> Grass`, creates exactly physical `Stone x1`, and awards one Mining practice point. The saved terrain revision remeshes the changed visible cell, and the Orders palette filters only known Rock cells while drawing its preview/job marker above raised rock geometry. Headless lifecycle, interruption, path failure, save/load, ordinary Haul, application boundary and client tests pass. Native click/worker/remesh/haul observation remains pending. Ordinary ground excavation and pits/levels are not implemented.
 
 ## 7. Stage E — Simple research/capability gating
 
@@ -163,8 +163,8 @@ Prototype 02 does not require:
 - [x] renewable physical food can sustain the five-character settlement;
 - [x] sleep and shelter work in authoritative simulation and client plumbing (native behavior observed; owner aesthetic acceptance pending);
 - [x] at least one practical skill changes work outcomes (Stage C headless/client checks; native inspector smoke pending);
-- [ ] ore extraction works;
-- [ ] one early metallurgy chain works through physical production logistics;
+- [x] ore extraction works in the headless simulation (native acceptance pending);
+- [x] one early metallurgy chain uses physical production ports (native acceptance pending);
 - [ ] knowledge/research gates a capability without replacing physical prerequisites;
 - [ ] all Prototype 02 authoritative state round-trips through persistence;
 - [ ] long-run Prototype 02 activity smoke passes;

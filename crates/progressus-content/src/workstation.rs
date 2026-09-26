@@ -13,11 +13,18 @@ pub struct WorkstationDefinition {
 }
 
 /// Append-only: registry order is part of deterministic simulation outcomes.
-pub static WORKSTATIONS: &[WorkstationDefinition] = &[WorkstationDefinition {
-    name: "workbench",
-    input_ports: 2,
-    output_ports: 2,
-}];
+pub static WORKSTATIONS: &[WorkstationDefinition] = &[
+    WorkstationDefinition {
+        name: "workbench",
+        input_ports: 2,
+        output_ports: 2,
+    },
+    WorkstationDefinition {
+        name: "furnace",
+        input_ports: 2,
+        output_ports: 2,
+    },
+];
 
 content_handle!(
     WorkstationId,
@@ -27,6 +34,7 @@ content_handle!(
 );
 
 pub const WORKBENCH: WorkstationId = workstation("workbench");
+pub const FURNACE: WorkstationId = workstation("furnace");
 
 #[cfg(test)]
 mod tests {
@@ -36,6 +44,7 @@ mod tests {
     fn named_constants_address_their_own_definitions() {
         assert_eq!(WORKBENCH.name(), "workbench");
         assert_eq!(WorkstationId::from_name("workbench"), Some(WORKBENCH));
+        assert_eq!(WorkstationId::from_name("furnace"), Some(FURNACE));
     }
 
     #[test]
@@ -57,6 +66,6 @@ mod tests {
 
     #[test]
     fn unknown_names_resolve_to_nothing_rather_than_a_substitute() {
-        assert_eq!(WorkstationId::from_name("furnace"), None);
+        assert_eq!(WorkstationId::from_name("unknown"), None);
     }
 }

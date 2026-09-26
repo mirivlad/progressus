@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 enum ObjectKey {
     Resource(WorldCell),
     Item(EntityId),
-    Workbench(EntityId),
+    Workstation(EntityId),
     Structure(EntityId),
     Site(EntityId),
     Carried(EntityId),
@@ -82,6 +82,7 @@ fn item_model(kind: ItemId) -> ModelKind {
         "primitive_tool" => ModelKind::PrimitiveTool,
         "berries" => ModelKind::Berries,
         "copper_ore" => ModelKind::CopperOre,
+        "copper_ingot" => ModelKind::CopperIngot,
         "cart" => ModelKind::Cart,
         _ => ModelKind::Placeholder,
     }
@@ -359,7 +360,12 @@ pub(crate) fn sync(
         insert(ObjectKey::Resource(r.cell), kind, r.cell, 0);
     }
     for w in &game.snapshot().workstations {
-        insert(ObjectKey::Workbench(w.id), ModelKind::Workbench, w.cell, 0);
+        let kind = if w.kind == progressus_app::workstation::FURNACE {
+            ModelKind::Furnace
+        } else {
+            ModelKind::Workbench
+        };
+        insert(ObjectKey::Workstation(w.id), kind, w.cell, 0);
     }
     let building_cells = game
         .snapshot()
@@ -412,7 +418,12 @@ pub(crate) fn sync(
         );
     }
     for s in &game.snapshot().workstation_construction_sites {
-        insert(ObjectKey::Site(s.id), ModelKind::Workbench, s.cell, 0);
+        let kind = if s.kind == progressus_app::workstation::FURNACE {
+            ModelKind::ConstructionFurnace
+        } else {
+            ModelKind::Workbench
+        };
+        insert(ObjectKey::Site(s.id), kind, s.cell, 0);
     }
     for item in &cache.items {
         objects.insert(

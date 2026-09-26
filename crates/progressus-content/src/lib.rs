@@ -93,7 +93,8 @@ mod tests {
                 "primitive_tool",
                 "berries",
                 "copper_ore",
-                "cart"
+                "cart",
+                "copper_ingot"
             ]
         );
     }

@@ -20,3 +20,15 @@ pub(super) fn workbench(canvas: &mut Canvas, variant: u8) {
     canvas.line(6, 4, 8, 2, OUTLINE);
     canvas.line(6, 4, 8, 3, METAL);
 }
+
+pub(super) fn furnace(canvas: &mut Canvas) {
+    const STONE: Rgba8 = Rgba8::rgb(113, 113, 108);
+    const MORTAR: Rgba8 = Rgba8::rgb(164, 159, 145);
+    const FIRE: Rgba8 = Rgba8::rgb(221, 104, 39);
+    canvas.ellipse(8, 14, 6, 2, Rgba8::rgba(8, 8, 8, 105));
+    canvas.rect(2, 5, 12, 9, STONE);
+    canvas.rect(3, 6, 10, 7, MORTAR);
+    canvas.rect(9, 1, 4, 5, STONE);
+    canvas.rect(5, 9, 6, 4, Rgba8::rgb(43, 40, 36));
+    canvas.rect(7, 10, 2, 2, FIRE);
+}

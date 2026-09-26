@@ -45,8 +45,8 @@ pub enum SimulationError {
     ProductionOrderQuantityTooLarge(u32),
     ProductionRevisionOverflow,
     ProductionInvariantViolation,
-    WorkbenchInputPortsFixed(EntityId),
-    WorkbenchOutputPortsFixed(EntityId),
+    WorkstationInputPortsFixed(EntityId),
+    WorkstationOutputPortsFixed(EntityId),
     ProductionZoneCellOutOfRange {
         workstation_id: EntityId,
         workstation_cell: WorldCell,
@@ -375,14 +375,14 @@ impl Display for SimulationError {
             Self::ProductionInvariantViolation => {
                 formatter.write_str("production order invariant violated")
             }
-            Self::WorkbenchInputPortsFixed(workstation_id) => write!(
+            Self::WorkstationInputPortsFixed(workstation_id) => write!(
                 formatter,
-                "workbench ID {} has two fixed cardinal input ports; rotate them instead of editing input cells directly",
+                "workstation ID {} has two fixed cardinal input ports; rotate them instead of editing input cells directly",
                 workstation_id.value()
             ),
-            Self::WorkbenchOutputPortsFixed(workstation_id) => write!(
+            Self::WorkstationOutputPortsFixed(workstation_id) => write!(
                 formatter,
-                "workbench ID {} has two fixed diagonal output ports; rotate them instead of editing output cells directly",
+                "workstation ID {} has two fixed diagonal output ports; rotate them instead of editing output cells directly",
                 workstation_id.value()
             ),
             Self::ProductionZoneCellOutOfRange {

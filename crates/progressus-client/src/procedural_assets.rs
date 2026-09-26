@@ -7,7 +7,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::image::ImageSampler;
 use bevy::prelude::{Assets, Handle, Image, ResMut, Resource};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use progressus_app::{EntityId, WorkstationId};
+use progressus_app::{EntityId, WorkstationId, workstation};
 
 const ART_PIXELS: u32 = 16;
 const VARIANT_COUNT: u8 = 8;
@@ -17,6 +17,7 @@ mod workstation_icons;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct ProceduralAssetKey {
+    kind: WorkstationId,
     variant: u8,
 }
 
@@ -52,9 +53,14 @@ impl ProceduralAssetRegistry {
     }
 }
 
-pub(crate) fn workstation_asset(_kind: WorkstationId, id: EntityId) -> ProceduralAssetKey {
+pub(crate) fn workstation_asset(kind: WorkstationId, id: EntityId) -> ProceduralAssetKey {
     ProceduralAssetKey {
-        variant: mix64(id.value()) as u8 % VARIANT_COUNT,
+        kind,
+        variant: if kind == workstation::FURNACE {
+            0
+        } else {
+            mix64(id.value()) as u8 % VARIANT_COUNT
+        },
     }
 }
 
@@ -66,7 +72,11 @@ pub(crate) fn mix64(mut value: u64) -> u64 {
 
 fn render_image(key: ProceduralAssetKey) -> Image {
     let mut canvas = Canvas::new(ART_PIXELS, ART_PIXELS);
-    workstation_icons::workbench(&mut canvas, key.variant);
+    if key.kind == workstation::FURNACE {
+        workstation_icons::furnace(&mut canvas);
+    } else {
+        workstation_icons::workbench(&mut canvas, key.variant);
+    }
     canvas.into_image()
 }
 
@@ -190,7 +200,10 @@ mod tests {
     fn workstation_icon_preserves_original_pixels() {
         // Captured from the original renderer before removing world sprites.
         for variant in 0..VARIANT_COUNT {
-            let image = render_image(ProceduralAssetKey { variant });
+            let image = render_image(ProceduralAssetKey {
+                kind: workstation::WORKBENCH,
+                variant,
+            });
             let hash = image
                 .data
                 .as_deref()

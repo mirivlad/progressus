@@ -547,7 +547,7 @@ fn apply_point_tool(
                     cell,
                 })?;
         }
-        ToolMode::Workbench => {
+        ToolMode::Workbench | ToolMode::Furnace => {
             if workstation_at(authoritative.snapshot(), cell).is_none()
                 && !authoritative
                     .snapshot()
@@ -558,7 +558,11 @@ fn apply_point_tool(
                 authoritative
                     .application
                     .execute(Command::PlaceWorkstation {
-                        kind: workstation::WORKBENCH,
+                        kind: if mode == ToolMode::Furnace {
+                            workstation::FURNACE
+                        } else {
+                            workstation::WORKBENCH
+                        },
                         cell,
                     })?;
             }
@@ -806,7 +810,7 @@ fn apply_tool_area(
                     })?;
             }
         }
-        ToolMode::Door | ToolMode::Bed | ToolMode::Workbench => {}
+        ToolMode::Door | ToolMode::Bed | ToolMode::Workbench | ToolMode::Furnace => {}
         ToolMode::CancelJobs => {
             let selected = cells.into_iter().collect::<BTreeSet<_>>();
             let jobs = area_snapshot
@@ -996,7 +1000,7 @@ const fn cell_selection_target(
 const fn cell_selection_allowed(mode: ToolMode) -> bool {
     !matches!(
         mode,
-        ToolMode::Wall | ToolMode::Door | ToolMode::Bed | ToolMode::Workbench
+        ToolMode::Wall | ToolMode::Door | ToolMode::Bed | ToolMode::Workbench | ToolMode::Furnace
     )
 }
 
@@ -1674,6 +1678,7 @@ mod tests {
         assert!(!super::cell_selection_allowed(ToolMode::Door));
         assert!(!super::cell_selection_allowed(ToolMode::Bed));
         assert!(!super::cell_selection_allowed(ToolMode::Workbench));
+        assert!(!super::cell_selection_allowed(ToolMode::Furnace));
         assert!(super::cell_selection_allowed(ToolMode::Select));
         assert!(super::cell_selection_allowed(ToolMode::Harvest));
     }
@@ -1694,6 +1699,26 @@ mod tests {
                 .construction_sites
                 .iter()
                 .any(|site| { site.cell == cell && site.kind == progressus_app::structure::BED })
+        );
+    }
+
+    #[test]
+    fn furnace_point_tool_places_the_correct_workstation() {
+        let mut client = AuthoritativeClient::new().unwrap();
+        let cell = (-5..=5)
+            .flat_map(|y| (-5..=5).map(move |x| WorldCell::new(x, y)))
+            .find(|cell| super::apply_point_tool(&mut client, ToolMode::Furnace, *cell).is_ok())
+            .expect("starter region has a furnace cell");
+        let snapshot = client
+            .application
+            .snapshot(progressus_app::SnapshotQuery::default())
+            .unwrap();
+        assert!(
+            snapshot.workstations.iter().any(|station| {
+                station.cell == cell && station.kind == progressus_app::workstation::FURNACE
+            }) || snapshot.workstation_construction_sites.iter().any(|site| {
+                site.cell == cell && site.kind == progressus_app::workstation::FURNACE
+            })
         );
     }
 

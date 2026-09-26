@@ -43,6 +43,17 @@ static CART_INPUTS: &[RecipeInput] = &[
     },
 ];
 
+static COPPER_INGOT_INPUTS: &[RecipeInput] = &[
+    RecipeInput {
+        item: item::COPPER_ORE,
+        quantity: 2,
+    },
+    RecipeInput {
+        item: item::WOOD,
+        quantity: 1,
+    },
+];
+
 /// Append-only: registry order is part of deterministic simulation outcomes.
 pub static RECIPES: &[RecipeDefinition] = &[
     RecipeDefinition {
@@ -61,6 +72,14 @@ pub static RECIPES: &[RecipeDefinition] = &[
         workstation: workstation::WORKBENCH,
         work_ticks: 16,
     },
+    RecipeDefinition {
+        name: "copper_ingot",
+        inputs: COPPER_INGOT_INPUTS,
+        output: item::COPPER_INGOT,
+        output_quantity: 1,
+        workstation: workstation::FURNACE,
+        work_ticks: 24,
+    },
 ];
 
 content_handle!(RecipeId, RecipeDefinition, RECIPES, recipe);
@@ -74,6 +93,7 @@ impl RecipeId {
 
 pub const PRIMITIVE_TOOL: RecipeId = recipe("primitive_tool");
 pub const CART: RecipeId = recipe("cart");
+pub const COPPER_INGOT: RecipeId = recipe("copper_ingot");
 
 #[cfg(test)]
 mod tests {
@@ -83,6 +103,7 @@ mod tests {
     fn named_constants_address_their_own_definitions() {
         assert_eq!(PRIMITIVE_TOOL.name(), "primitive_tool");
         assert_eq!(RecipeId::from_name("primitive_tool"), Some(PRIMITIVE_TOOL));
+        assert_eq!(RecipeId::from_name("copper_ingot"), Some(COPPER_INGOT));
     }
 
     #[test]
@@ -142,6 +163,10 @@ mod tests {
             RecipeId::for_workstation(workstation::WORKBENCH).collect::<Vec<_>>(),
             vec![PRIMITIVE_TOOL, CART]
         );
+        assert_eq!(
+            RecipeId::for_workstation(workstation::FURNACE).collect::<Vec<_>>(),
+            vec![COPPER_INGOT]
+        );
         for id in RecipeId::all() {
             assert!(
                 RecipeId::for_workstation(id.definition().workstation).any(|other| other == id)
@@ -151,6 +176,6 @@ mod tests {
 
     #[test]
     fn unknown_names_resolve_to_nothing_rather_than_a_substitute() {
-        assert_eq!(RecipeId::from_name("copper_ingot"), None);
+        assert_eq!(RecipeId::from_name("unknown"), None);
     }
 }
