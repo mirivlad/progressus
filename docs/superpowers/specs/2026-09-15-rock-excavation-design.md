@@ -1,6 +1,6 @@
 # Prototype 02 Stage D1 — Physical Rock Excavation
 
-Status: **Implemented with automated headless/application/client evidence on 2026-09-17; native visual acceptance pending.**
+Status: **Implemented with automated headless/application/client evidence; native worker/remesh/output observed 2026-09-26, click and haul observation pending.**
 
 ## Purpose and boundary
 
